@@ -18,7 +18,10 @@ class PortfolioTracker:
         self.benchmarks = {
             'SPY': 'S&P 500',
             'AGG': 'US Bonds',
-            'GLD': 'Gold'
+            'GLD': 'Gold',
+            'XIU.TO': 'S&P/TSX 60',
+            'XBB.TO': 'Canadian Bonds',
+            'XGD.TO': 'Canadian Gold'
         }
     
     def add_investment(self, symbol, name, asset_type, amount, date=None, price=None):

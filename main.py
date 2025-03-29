@@ -2,7 +2,7 @@
 # main.py - Entry point for the application
 
 import dash
-from dash import dcc, html, callback, Input, Output, State
+from dash import dcc, html, callback, Input, Output, State,  ctx
 import dash_bootstrap_components as dbc
 import pandas as pd
 import numpy as np
@@ -11,7 +11,10 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import sys
 import os
-
+from dash.exceptions import PreventUpdate
+import json
+import os
+from datetime import datetime
 # Add the parent directory to sys.path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -21,10 +24,12 @@ from modules.market_analyzer import MarketAnalyzer
 from modules.news_analyzer import NewsAnalyzer
 from modules.recommendation_engine import RecommendationEngine
 from modules.portfolio_tracker import PortfolioTracker
+from components.asset_tracker import create_asset_tracker_component, load_tracked_assets, create_tracked_assets_table
+from components.user_profile import create_user_profile_component
 
 
 # Initialize the Dash app with a Bootstrap theme
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
 server = app.server  # For production deployment
 
 # Initialize system components
@@ -42,74 +47,31 @@ app.layout = dbc.Container([
             html.P("Advanced investment strategies powered by AI market analysis")
         ], width=12)
     ]),
-    
+    # Add Asset Tracker component
     dbc.Row([
         dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("User Profile"),
-                dbc.CardBody([
-                    dbc.Form([
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Label("Risk Tolerance"),
-                                dcc.Slider(
-                                    id="risk-slider",
-                                    min=1,
-                                    max=10,
-                                    step=1,
-                                    marks={i: str(i) for i in range(1, 11)},
-                                    value=5
-                                )
-                            ], width=12)
-                        ]),
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Label("Investment Horizon"),
-                                dcc.Dropdown(
-                                    id="investment-horizon",
-                                    options=[
-                                        {"label": "Short Term (< 1 year)", "value": "short"},
-                                        {"label": "Medium Term (1-5 years)", "value": "medium"},
-                                        {"label": "Long Term (> 5 years)", "value": "long"}
-                                    ],
-                                    value="medium"
-                                )
-                            ], width=12)
-                        ]),
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Label("Initial Investment"),
-                                dbc.Input(
-                                    id="initial-investment",
-                                    type="number",
-                                    placeholder="Enter amount",
-                                    value=10000
-                                )
-                            ], width=12)
-                        ]),
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Button("Update Profile", id="update-profile-button", color="primary", className="mt-3")
-                            ], width=12)
-                        ])
-                    ])
-                ])
-            ], className="mb-4")
+            create_asset_tracker_component()
+        ], width=12)
+    ], className="mb-4"),
+    dbc.Row([
+        dbc.Col([
+            create_user_profile_component()
         ], width=4),
         
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Market Overview"),
-                dbc.CardBody([
-                    dcc.Graph(id="market-overview-graph"),
-                    dcc.Interval(
-                        id="market-interval",
-                        interval=300000,  # 5 minutes in milliseconds
-                        n_intervals=0
-                    )
-                ])
-            ], className="mb-4")
-        ], width=8)
+        dbc.Row([
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader("Market Overview - Tracked Assets"),
+                    dbc.CardBody([
+                        dcc.Graph(id="market-overview-graph"),
+                        dcc.Interval(
+                            id="market-interval",
+                            interval=300000,  # 5 minutes in milliseconds
+                            n_intervals=0
+                        )
+                    ])
+                ], className="mb-4")
+            ], width=8)
     ]),
     
     dbc.Row([
@@ -140,29 +102,170 @@ app.layout = dbc.Container([
         ], width=12)
     ]),
     
-    dbc.Row([
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Portfolio Performance"),
-                dbc.CardBody([
-                    dcc.Graph(id="portfolio-performance-graph"),
-                    dbc.Row([
-                        dbc.Col(
-                            dbc.Button("Track New Investment", id="track-investment-button", color="info", className="mt-3"),
-                            width="auto"
-                        ),
-                        dbc.Col(
-                            dbc.Button("Export Performance Report", id="export-report-button", color="secondary", className="mt-3"),
-                            width="auto"
-                        )
+        dbc.Row([
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader("Portfolio Performance"),
+                    dbc.CardBody([
+                        dcc.Graph(id="portfolio-performance-graph"),
+                        dbc.Row([
+                            dbc.Col(
+                                dbc.Button("Track New Investment", id="track-investment-button", color="info", className="mt-3"),
+                                width="auto"
+                            ),
+                            dbc.Col(
+                                dbc.Button("Export Performance Report", id="export-report-button", color="secondary", className="mt-3"),
+                                width="auto"
+                            )
+                        ])
                     ])
-                ])
-            ], className="mb-4")
-        ], width=12)
+                ], className="mb-4")
+            ], width=12)
+        ])
     ])
 ])
 
 # Callbacks
+# Callback to load and display tracked assets on application startup
+@app.callback(
+    Output("tracked-assets-table", "children"),
+    Input("add-asset-button", "n_clicks"),
+    prevent_initial_call=False
+)
+def load_assets_table(n_clicks):
+    """
+    Load and display the tracked assets table when the app starts
+    """
+    from components.asset_tracker import load_tracked_assets, create_tracked_assets_table
+    
+    # Load current assets
+    assets = load_tracked_assets()
+    
+    # Create and return the table
+    return create_tracked_assets_table(assets)
+
+# Callback to add new asset
+@app.callback(
+    [Output("add-asset-feedback", "children"),
+     Output("tracked-assets-table", "children", allow_duplicate=True),
+     Output("asset-symbol-input", "value"),
+     Output("asset-name-input", "value")],
+    Input("add-asset-button", "n_clicks"),
+    [State("asset-symbol-input", "value"),
+     State("asset-name-input", "value"),
+     State("asset-type-select", "value")],
+    prevent_initial_call=True
+)
+def add_new_asset(n_clicks, symbol, name, asset_type):
+    """
+    Add a new asset to tracked assets when the Add button is clicked
+    """
+    from components.asset_tracker import load_tracked_assets, save_tracked_assets, create_tracked_assets_table
+    
+    if n_clicks is None:
+        raise PreventUpdate
+    
+    if not symbol or not name:
+        return dbc.Alert("Symbol and name are required", color="warning"), dash.no_update, dash.no_update, dash.no_update
+    
+    # Standardize symbol format
+    symbol = symbol.upper().strip()
+    
+    # Load current assets
+    assets = load_tracked_assets()
+    
+    # Check if symbol already exists
+    if symbol in assets:
+        return dbc.Alert(f"Symbol {symbol} is already being tracked", color="warning"), dash.no_update, dash.no_update, dash.no_update
+    
+    # Add new asset
+    assets[symbol] = {
+        "name": name,
+        "type": asset_type,
+        "added_date": datetime.now().strftime("%Y-%m-%d")
+    }
+    
+    # Save updated assets
+    if save_tracked_assets(assets):
+        # Create updated table
+        updated_table = create_tracked_assets_table(assets)
+        
+        # Return success message, updated table, and clear input fields
+        return dbc.Alert(f"Successfully added {symbol}", color="success"), updated_table, "", ""
+    else:
+        return dbc.Alert("Failed to add asset", color="danger"), dash.no_update, dash.no_update, dash.no_update
+
+@app.callback(
+    Output("profile-update-status", "children"),
+    Input("update-profile-button", "n_clicks"),
+    [State("risk-slider", "value"),
+     State("investment-horizon", "value"),
+     State("initial-investment", "value")],
+    prevent_initial_call=True
+)
+def update_user_profile(n_clicks, risk_level, investment_horizon, initial_investment):
+    """
+    Save user profile when the Update Profile button is clicked
+    """
+    from components.user_profile import save_user_profile
+    from datetime import datetime
+    
+    if n_clicks is None:
+        raise dash.exceptions.PreventUpdate
+    
+    # Create profile object
+    profile = {
+        "risk_level": risk_level,
+        "investment_horizon": investment_horizon,
+        "initial_investment": initial_investment,
+        "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+# Callback to remove asset
+@app.callback(
+    Output("tracked-assets-table", "children", allow_duplicate=True),
+    Input({"type": "remove-asset-button", "index": dash.ALL}, "n_clicks"),
+    prevent_initial_call=True
+)
+def remove_asset(n_clicks_list):
+    """
+    Remove an asset when its remove button is clicked
+    """
+    from components.asset_tracker import load_tracked_assets, save_tracked_assets, create_tracked_assets_table
+    
+    if not n_clicks_list or not any(n_clicks_list):
+        raise PreventUpdate
+    
+    # Find which button was clicked
+    if not ctx.triggered:
+        raise PreventUpdate
+    
+    # Get the clicked button ID
+    button_id = ctx.triggered[0]["prop_id"].split(".")[0]
+    
+    try:
+        # Extract the symbol from the button ID (it's in JSON format)
+        button_id_dict = json.loads(button_id)
+        symbol_to_remove = button_id_dict.get("index")
+        
+        if symbol_to_remove:
+            # Load current assets
+            assets = load_tracked_assets()
+            
+            # Remove the asset
+            if symbol_to_remove in assets:
+                del assets[symbol_to_remove]
+                
+                # Save updated assets
+                save_tracked_assets(assets)
+                
+                # Return updated table
+                return create_tracked_assets_table(assets)
+    except Exception as e:
+        print(f"Error removing asset: {e}")
+    
+    # If something went wrong, just refresh the current table
+    return create_tracked_assets_table(load_tracked_assets())
+
 @app.callback(
     Output("market-overview-graph", "figure"),
     Input("market-interval", "n_intervals")
