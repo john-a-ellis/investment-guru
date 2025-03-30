@@ -2,7 +2,7 @@
 # main.py - Entry point for the application
 
 import dash
-from dash import dcc, html, callback, Input, Output, State,  ctx
+from dash import dcc, html, callback, Input, Output, State, ctx
 import dash_bootstrap_components as dbc
 import pandas as pd
 import numpy as np
@@ -19,6 +19,8 @@ from datetime import datetime
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Custom modules
+from modules.currency_utils import get_usd_to_cad_rate, format_currency, get_combined_value_cad
+
 from modules.data_collector import DataCollector
 from modules.market_analyzer import MarketAnalyzer
 from modules.news_analyzer import NewsAnalyzer
@@ -27,6 +29,19 @@ from modules.portfolio_tracker import PortfolioTracker
 from components.asset_tracker import create_asset_tracker_component, load_tracked_assets, create_tracked_assets_table
 from components.user_profile import create_user_profile_component
 
+# New imports for portfolio tracking
+from components.portfolio_management import create_portfolio_management_component
+from components.portfolio_visualizer import create_portfolio_visualizer_component, create_performance_graph, create_summary_stats
+from modules.portfolio_data_updater import update_portfolio_data, add_investment, remove_investment, load_portfolio
+from components.portfolio_analysis import (
+    create_portfolio_analysis_component, 
+    create_allocation_chart,
+    create_sector_chart, 
+    create_correlation_chart,
+    create_allocation_details,
+    create_sector_details,
+    create_correlation_analysis
+)
 
 # Initialize the Dash app with a Bootstrap theme
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
@@ -45,8 +60,12 @@ app.layout = dbc.Container([
         dbc.Col([
             html.H1("AI Investment Recommendation System", className="text-primary my-4"),
             html.P("Advanced investment strategies powered by AI market analysis")
-        ], width=12)
-    ]),
+        ], width=8),
+        dbc.Col([
+            html.Img(src="assets/NearNorthClean.png", height="100px", className="float-end")
+        ], width=4)
+    ], className="mb-4"),
+
     # Add Asset Tracker component
     dbc.Row([
         dbc.Col([
@@ -58,21 +77,20 @@ app.layout = dbc.Container([
             create_user_profile_component()
         ], width=4),
         
-        dbc.Row([
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader("Market Overview - Tracked Assets"),
-                    dbc.CardBody([
-                        dcc.Graph(id="market-overview-graph"),
-                        dcc.Interval(
-                            id="market-interval",
-                            interval=300000,  # 5 minutes in milliseconds
-                            n_intervals=0
-                        )
-                    ])
-                ], className="mb-4")
-            ], width=8)
-    ]),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Market Overview - Tracked Assets"),
+                dbc.CardBody([
+                    dcc.Graph(id="market-overview-graph"),
+                    dcc.Interval(
+                        id="market-interval",
+                        interval=300000,  # 5 minutes in milliseconds
+                        n_intervals=0
+                    )
+                ])
+            ], className="mb-4")
+        ], width=8)
+    ], className="mb-4"),
     
     dbc.Row([
         dbc.Col([
@@ -89,7 +107,11 @@ app.layout = dbc.Container([
             ], className="mb-4")
         ], width=12)
     ]),
-    
+    dbc.Row([
+        dbc.Col([
+            create_portfolio_analysis_component()
+        ], width=12)
+    ], className="mb-4"),
     dbc.Row([
         dbc.Col([
             dbc.Card([
@@ -102,27 +124,19 @@ app.layout = dbc.Container([
         ], width=12)
     ]),
     
-        dbc.Row([
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader("Portfolio Performance"),
-                    dbc.CardBody([
-                        dcc.Graph(id="portfolio-performance-graph"),
-                        dbc.Row([
-                            dbc.Col(
-                                dbc.Button("Track New Investment", id="track-investment-button", color="info", className="mt-3"),
-                                width="auto"
-                            ),
-                            dbc.Col(
-                                dbc.Button("Export Performance Report", id="export-report-button", color="secondary", className="mt-3"),
-                                width="auto"
-                            )
-                        ])
-                    ])
-                ], className="mb-4")
-            ], width=12)
-        ])
-    ])
+    # Portfolio Management Component - NEW
+    dbc.Row([
+        dbc.Col([
+            create_portfolio_management_component()
+        ], width=12)
+    ], className="mb-4"),
+
+    # Portfolio Visualizer Component - NEW
+    dbc.Row([
+        dbc.Col([
+            create_portfolio_visualizer_component()
+        ], width=12)
+    ], className="mb-4"),
 ])
 
 # Callbacks
@@ -220,6 +234,13 @@ def update_user_profile(n_clicks, risk_level, investment_horizon, initial_invest
         "initial_investment": initial_investment,
         "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
+    
+    # Save profile
+    if save_user_profile(profile):
+        return dbc.Alert("Profile updated successfully", color="success")
+    else:
+        return dbc.Alert("Error updating profile", color="danger")
+
 # Callback to remove asset
 @app.callback(
     Output("tracked-assets-table", "children", allow_duplicate=True),
@@ -367,31 +388,220 @@ def generate_recommendations(n_clicks, risk_level, investment_horizon, initial_i
     
     return recommendation_cards
 
+# NEW CALLBACKS FOR PORTFOLIO TRACKING
+
+@app.callback(
+    Output("portfolio-table", "children"),
+    [Input("add-investment-button", "n_clicks"),
+     Input("portfolio-update-interval", "n_intervals")],
+    prevent_initial_call=False
+)
+def load_portfolio_table(n_clicks, n_intervals):
+    """
+    Load and display the portfolio table when the app starts or updates
+    """
+    # Update portfolio data with current market prices
+    portfolio = update_portfolio_data()
+    
+    # Create and return the table
+    from components.portfolio_management import create_portfolio_table
+    return create_portfolio_table(portfolio)
+
+@app.callback(
+    [Output("add-investment-feedback", "children"),
+     Output("portfolio-table", "children", allow_duplicate=True),
+     Output("investment-symbol-input", "value"),
+     Output("investment-shares-input", "value"),
+     Output("investment-price-input", "value")],
+    Input("add-investment-button", "n_clicks"),
+    [State("investment-symbol-input", "value"),
+     State("investment-shares-input", "value"),
+     State("investment-price-input", "value"),
+     State("investment-date-input", "value")],
+    prevent_initial_call=True
+)
+def add_new_investment(n_clicks, symbol, shares, price, date):
+    """
+    Add a new investment to the portfolio when the Add button is clicked
+    """
+    from components.portfolio_management import create_portfolio_table
+    
+    if n_clicks is None:
+        raise dash.exceptions.PreventUpdate
+    
+    if not symbol or not shares or not price:
+        return dbc.Alert("Symbol, shares, and price are required", color="warning"), dash.no_update, dash.no_update, dash.no_update, dash.no_update
+    
+    # Standardize symbol format
+    symbol = symbol.upper().strip()
+    
+    # Add investment
+    success = add_investment(symbol, shares, price, date)
+    
+    if success:
+        # Update portfolio
+        portfolio = update_portfolio_data()
+        
+        # Create updated table
+        updated_table = create_portfolio_table(portfolio)
+        
+        # Return success message, updated table, and clear input fields
+        return dbc.Alert(f"Successfully added {symbol}", color="success"), updated_table, "", None, None
+    else:
+        return dbc.Alert("Failed to add investment", color="danger"), dash.no_update, dash.no_update, dash.no_update, dash.no_update
+
+@app.callback(
+    Output("portfolio-table", "children", allow_duplicate=True),
+    Input({"type": "remove-investment-button", "index": dash.ALL}, "n_clicks"),
+    prevent_initial_call=True
+)
+def remove_portfolio_investment(n_clicks_list):
+    """
+    Remove an investment when its remove button is clicked
+    """
+    from components.portfolio_management import create_portfolio_table
+    
+    if not n_clicks_list or not any(n_clicks_list):
+        raise dash.exceptions.PreventUpdate
+    
+    # Find which button was clicked
+    if not dash.callback_context.triggered:
+        raise dash.exceptions.PreventUpdate
+    
+    # Get the clicked button ID
+    button_id = dash.callback_context.triggered[0]["prop_id"].split(".")[0]
+    
+    try:
+        # Extract the investment ID from the button ID (it's in JSON format)
+        button_id_dict = json.loads(button_id)
+        investment_id = button_id_dict.get("index")
+        
+        if investment_id:
+            # Remove the investment
+            remove_investment(investment_id)
+            
+            # Load updated portfolio
+            portfolio = load_portfolio()
+            
+            # Return updated table
+            return create_portfolio_table(portfolio)
+    except Exception as e:
+        print(f"Error removing investment: {e}")
+    
+    # If something went wrong, just refresh the current table
+    return create_portfolio_table(load_portfolio())
+
 @app.callback(
     Output("portfolio-performance-graph", "figure"),
-    Input("track-investment-button", "n_clicks")
+    [Input("portfolio-update-interval", "n_intervals"),
+     Input("performance-period-selector", "value")]
 )
-def update_portfolio_performance(n_clicks):
-    # Get portfolio performance data
-    portfolio_data = portfolio_tracker.get_performance()
+def update_portfolio_graph(n_intervals, period):
+    """
+    Update the portfolio performance graph
+    """
+    # Load portfolio data
+    portfolio = load_portfolio()
     
-    # Sample portfolio data - in the real implementation, this would track actual investments
-    dates = pd.date_range(start=datetime.now() - timedelta(days=180), end=datetime.now(), freq='D')
-    portfolio_value = np.cumsum(np.random.randn(len(dates)) * 0.5) + 10000
-    benchmark_value = np.cumsum(np.random.randn(len(dates)) * 0.4) + 10000
+    # Create and return graph
+    return create_performance_graph(portfolio, period)
+
+@app.callback(
+    Output("portfolio-summary-stats", "children"),
+    Input("portfolio-update-interval", "n_intervals")
+)
+def update_portfolio_stats(n_intervals):
+    """
+    Update the portfolio summary statistics
+    """
+    # Load portfolio data
+    portfolio = load_portfolio()
     
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=dates, y=portfolio_value, mode='lines', name='Your Portfolio'))
-    fig.add_trace(go.Scatter(x=dates, y=benchmark_value, mode='lines', name='Benchmark (S&P 500)', line=dict(dash='dash')))
+    # Create and return summary stats
+    return create_summary_stats(portfolio)
+@app.callback(
+    Output("portfolio-allocation-chart", "figure"),
+    Input("analysis-update-interval", "n_intervals")
+)
+def update_allocation_chart(n):
+    """
+    Update the portfolio allocation chart
+    """
+    # Load portfolio data
+    portfolio = load_portfolio()
     
-    fig.update_layout(
-        title="Portfolio Performance",
-        xaxis_title="Date",
-        yaxis_title="Value ($)",
-        template="plotly_white"
-    )
+    # Create and return chart
+    return create_allocation_chart(portfolio)
+
+@app.callback(
+    Output("portfolio-sector-chart", "figure"),
+    Input("analysis-update-interval", "n_intervals")
+)
+def update_sector_chart(n):
+    """
+    Update the portfolio sector breakdown chart
+    """
+    # Load portfolio data
+    portfolio = load_portfolio()
     
-    return fig
+    # Create and return chart
+    return create_sector_chart(portfolio)
+
+@app.callback(
+    Output("portfolio-correlation-chart", "figure"),
+    Input("analysis-update-interval", "n_intervals")
+)
+def update_correlation_chart(n):
+    """
+    Update the portfolio correlation chart
+    """
+    # Load portfolio data
+    portfolio = load_portfolio()
+    
+    # Create and return chart
+    return create_correlation_chart(portfolio)
+
+@app.callback(
+    Output("allocation-details", "children"),
+    Input("analysis-update-interval", "n_intervals")
+)
+def update_allocation_details(n):
+    """
+    Update the allocation details
+    """
+    # Load portfolio data
+    portfolio = load_portfolio()
+    
+    # Create and return details
+    return create_allocation_details(portfolio)
+
+@app.callback(
+    Output("sector-details", "children"),
+    Input("analysis-update-interval", "n_intervals")
+)
+def update_sector_details(n):
+    """
+    Update the sector details
+    """
+    # Load portfolio data
+    portfolio = load_portfolio()
+    
+    # Create and return details
+    return create_sector_details(portfolio)
+
+@app.callback(
+    Output("correlation-analysis", "children"),
+    Input("analysis-update-interval", "n_intervals")
+)
+def update_correlation_analysis(n):
+    """
+    Update the correlation analysis
+    """
+    # Load portfolio data
+    portfolio = load_portfolio()
+    
+    # Create and return analysis
+    return create_correlation_analysis(portfolio)
 
 if __name__ == "__main__":
     app.run(debug=True)
