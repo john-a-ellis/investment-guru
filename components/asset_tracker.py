@@ -1,5 +1,4 @@
 # components/asset_tracker.py
-# components/asset_tracker.py
 import dash
 from dash import dcc, html, callback, Input, Output, State
 import dash_bootstrap_components as dbc
@@ -90,7 +89,7 @@ def save_tracked_assets(assets):
 
 def create_tracked_assets_table(assets):
     """
-    Create a table to display tracked assets
+    Create a table to display tracked assets with consistent IDs for pattern-matching callbacks
     """
     if not assets:
         return html.Div("No assets currently tracked.")
@@ -127,10 +126,13 @@ def create_tracked_assets_table(assets):
                 html.Td(
                     dbc.Button(
                         "Remove", 
-                        # Use a simpler ID format that won't have issues with special characters
-                        id={"type": "remove-asset-button", "index": row["symbol"].replace(".", "-")},
+                        id={
+                            "type": "remove-asset-button", 
+                            "index": row["symbol"]
+                        },
                         color="danger",
-                        size="sm"
+                        size="sm",
+                        n_clicks=0  # Initialize n_clicks to ensure it's tracking
                     )
                 )
             ]) for _, row in df.iterrows()

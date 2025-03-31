@@ -2,7 +2,7 @@
 # main.py - Entry point for the application
 
 import dash
-from dash import dcc, html, callback, Input, Output, State, ctx
+from dash import dcc, html, callback, Input, Output, State, ctx, no_update, ALL
 import dash_bootstrap_components as dbc
 import pandas as pd
 import numpy as np
@@ -28,7 +28,7 @@ from modules.market_analyzer import MarketAnalyzer
 from modules.news_analyzer import NewsAnalyzer
 from modules.recommendation_engine import RecommendationEngine
 from modules.portfolio_tracker import PortfolioTracker
-from components.asset_tracker import create_asset_tracker_component, load_tracked_assets, create_tracked_assets_table
+from components.asset_tracker import create_asset_tracker_component, load_tracked_assets, create_tracked_assets_table,  save_tracked_assets
 from components.user_profile import create_user_profile_component
 
 # New imports for portfolio tracking
@@ -130,7 +130,7 @@ app.layout = dbc.Container([
             create_transaction_recorder_component()
         ], width=12)
     ], className="mb-4"),
-    
+
     # Portfolio Management Component - NEW
     dbc.Row([
         dbc.Col([
@@ -157,7 +157,6 @@ def load_assets_table(n_clicks):
     """
     Load and display the tracked assets table when the app starts
     """
-    from components.asset_tracker import load_tracked_assets, create_tracked_assets_table
     
     # Load current assets
     assets = load_tracked_assets()
@@ -181,7 +180,7 @@ def add_new_asset(n_clicks, symbol, name, asset_type):
     """
     Add a new asset to tracked assets when the Add button is clicked
     """
-    from components.asset_tracker import load_tracked_assets, save_tracked_assets, create_tracked_assets_table
+    # from components.asset_tracker import load_tracked_assets, save_tracked_assets, create_tracked_assets_table
     
     if n_clicks is None:
         raise PreventUpdate
@@ -251,45 +250,43 @@ def update_user_profile(n_clicks, risk_level, investment_horizon, initial_invest
 # Callback to remove asset
 @app.callback(
     Output("tracked-assets-table", "children", allow_duplicate=True),
-    Input({"type": "remove-asset-button", "index": dash.ALL}, "n_clicks"),
+    Input({"type": "remove-asset-button", "index": ALL}, "n_clicks"),
     prevent_initial_call=True
 )
 def remove_asset(n_clicks_list):
     """
     Remove an asset when its remove button is clicked
     """
-    from components.asset_tracker import load_tracked_assets, save_tracked_assets, create_tracked_assets_table
+    # Print debug information
+    print(f"Callback triggered with clicks: {n_clicks_list}")
     
-    if not n_clicks_list or not any(n_clicks_list):
+    if not ctx.triggered_id:
+        print("No trigger detected")
         raise PreventUpdate
     
-    # Find which button was clicked
-    if not ctx.triggered:
-        raise PreventUpdate
+    # Get the clicked button pattern-matching ID directly from ctx.triggered_id
+    clicked_id = ctx.triggered_id
+    print(f"Clicked button ID: {clicked_id}")
     
-    # Get the clicked button ID
-    button_id = ctx.triggered[0]["prop_id"].split(".")[0]
-    
-    try:
-        # Extract the symbol from the button ID (it's in JSON format)
-        button_id_dict = json.loads(button_id)
-        symbol_to_remove = button_id_dict.get("index")
+    if clicked_id and 'index' in clicked_id:
+        symbol_to_remove = clicked_id['index']
+        print(f"Symbol to remove: {symbol_to_remove}")
         
-        if symbol_to_remove:
-            # Load current assets
-            assets = load_tracked_assets()
+        # Load current assets
+        assets = load_tracked_assets()
+        print(f"Current assets: {list(assets.keys())}")
+        
+        # Remove the asset
+        if symbol_to_remove in assets:
+            print(f"Removing {symbol_to_remove}")
+            del assets[symbol_to_remove]
             
-            # Remove the asset
-            if symbol_to_remove in assets:
-                del assets[symbol_to_remove]
-                
-                # Save updated assets
-                save_tracked_assets(assets)
-                
-                # Return updated table
-                return create_tracked_assets_table(assets)
-    except Exception as e:
-        print(f"Error removing asset: {e}")
+            # Save updated assets
+            save_success = save_tracked_assets(assets)
+            print(f"Save success: {save_success}")
+            
+        # Return updated table
+        return create_tracked_assets_table(assets)
     
     # If something went wrong, just refresh the current table
     return create_tracked_assets_table(load_tracked_assets())
@@ -299,23 +296,90 @@ def remove_asset(n_clicks_list):
     Input("market-interval", "n_intervals")
 )
 def update_market_overview(n):
-    # Get market data from the data collector
-    market_data = data_collector.get_market_data()
+    """
+    Update the market overview graph with actual historical data for tracked assets
+    """
+    from components.asset_tracker import load_tracked_assets
+    import yfinance as yf
+    from datetime import datetime, timedelta
     
-    # Create a figure using Plotly
+    # Load tracked assets
+    tracked_assets = load_tracked_assets()
+    
+    if not tracked_assets:
+        # Return empty figure if no assets are tracked
+        fig = go.Figure()
+        fig.update_layout(
+            title="Market Overview - No Assets Tracked",
+            xaxis_title="Date",
+            yaxis_title="Value",
+            template="plotly_white"
+        )
+        return fig
+    
+    # Define time period (30 days by default)
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=30)
+    
+    # Create a figure
     fig = go.Figure()
     
-    # Sample data - in the real implementation, this would use actual market data
-    dates = pd.date_range(start=datetime.now() - timedelta(days=30), end=datetime.now(), freq='D')
-    values = np.cumsum(np.random.randn(len(dates))) + 1000
+    # Add data for each tracked asset
+    for symbol, details in tracked_assets.items():
+        try:
+            # Get historical data from yfinance
+            ticker = yf.Ticker(symbol)
+            hist = ticker.history(start=start_date, end=end_date)
+            
+            if not hist.empty:
+                # Normalize values to start at 100 for better comparison
+                normalized = hist['Close'] / hist['Close'].iloc[0] * 100
+                
+                # Add to chart
+                fig.add_trace(go.Scatter(
+                    x=hist.index,
+                    y=normalized,
+                    mode='lines',
+                    name=f"{symbol} - {details.get('name', '')}"
+                ))
+        except Exception as e:
+            print(f"Error getting data for {symbol}: {e}")
     
-    fig.add_trace(go.Scatter(x=dates, y=values, mode='lines', name='S&P 500'))
+    # Add a benchmark index (S&P/TSX Composite for Canadian focus)
+    try:
+        tsx = yf.Ticker("^GSPTSE")
+        tsx_hist = tsx.history(start=start_date, end=end_date)
+        
+        if not tsx_hist.empty:
+            # Normalize TSX values
+            tsx_normalized = tsx_hist['Close'] / tsx_hist['Close'].iloc[0] * 100
+            
+            # Add to chart with dashed line
+            fig.add_trace(go.Scatter(
+                x=tsx_hist.index,
+                y=tsx_normalized,
+                mode='lines',
+                name="S&P/TSX Composite",
+                line=dict(dash='dash', width=3)
+            ))
+    except Exception as e:
+        print(f"Error getting TSX data: {e}")
     
+    # Update layout
     fig.update_layout(
-        title="Market Trends - Last 30 Days",
+        title="Market Performance - Last 30 Days (Normalized to 100)",
         xaxis_title="Date",
-        yaxis_title="Index Value",
-        template="plotly_white"
+        yaxis_title="Value (Normalized)",
+        template="plotly_white",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        ),
+        margin=dict(l=20, r=20, t=60, b=20),
+        hovermode="x unified"
     )
     
     return fig
@@ -325,33 +389,184 @@ def update_market_overview(n):
     Input("news-interval", "n_intervals")
 )
 def update_news_analysis(n):
-    # Get news and events from the news analyzer
-    news_analysis = news_analyzer.analyze_recent_news()
+    """
+    Update news analysis with relevant stories about tracked assets and portfolio holdings
+    """
+    from components.asset_tracker import load_tracked_assets
+    from modules.portfolio_data_updater import load_portfolio
+    import requests
+    from datetime import datetime, timedelta
+    import os
+    from dotenv import load_dotenv
+
+    # Load environment variables for API keys
+    load_dotenv()
     
-    # Sample news - in the real implementation, this would use actual news data
-    news_items = [
-        {"title": "Fed Raises Interest Rates by 0.25%", "impact": "negative", "relevance": 0.85},
-        {"title": "New Tech Regulations Announced", "impact": "neutral", "relevance": 0.65},
-        {"title": "Strong Earnings Reports from Tech Sector", "impact": "positive", "relevance": 0.9}
+    # Get API key from environment variable
+    news_api_key = os.getenv("NEWS_API_KEY")
+    if not news_api_key:
+        return [
+            dbc.Alert(
+                "News API key not found in environment. Please add NEWS_API_KEY to your .env file.",
+                color="warning"
+            )
+        ]
+    
+    # Load tracked assets and portfolio
+    tracked_assets = load_tracked_assets()
+    portfolio = load_portfolio()
+    
+    if not tracked_assets and not portfolio:
+        return [
+            dbc.Alert(
+                "Add assets to your tracking list or portfolio to see relevant news.",
+                color="info"
+            )
+        ]
+    
+    # Collect all symbols from both tracked assets and portfolio
+    all_symbols = set(tracked_assets.keys()) | set(inv.get("symbol", "") for inv in portfolio.values())
+    
+    # Create search terms for companies
+    search_terms = []
+    company_names = {}
+    
+    for symbol in all_symbols:
+        # Add the symbol itself
+        search_terms.append(symbol)
+        
+        # Add the company name if available
+        if symbol in tracked_assets:
+            name = tracked_assets[symbol].get("name", "")
+            if name:
+                # Extract the main company name without suffixes
+                main_name = name.split(" ")[0]
+                if len(main_name) > 3:  # Avoid short names that might cause too many false matches
+                    search_terms.append(main_name)
+                    company_names[symbol] = name
+    
+    # Default news items if API call fails
+    fallback_news = [
+        {"title": "Market Update: TSX Gains on Energy Rally", "url": "#", "publishedAt": datetime.now().strftime("%Y-%m-%d"), "source": {"name": "Sample Source"}},
+        {"title": "Bank of Canada Holds Interest Rates Steady", "url": "#", "publishedAt": datetime.now().strftime("%Y-%m-%d"), "source": {"name": "Sample Source"}},
+        {"title": "Tech Stocks Lead Market Recovery", "url": "#", "publishedAt": datetime.now().strftime("%Y-%m-%d"), "source": {"name": "Sample Source"}}
     ]
     
-    news_cards = []
-    for item in news_items:
-        if item["impact"] == "positive":
-            color = "success"
-        elif item["impact"] == "negative":
-            color = "danger"
-        else:
-            color = "warning"
+    try:
+        # Calculate date for news search (7 days ago)
+        from_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        
+        # Prepare for API call
+        news_articles = []
+        
+        # Call News API for each search term (with rate limiting)
+        for term in search_terms[:10]:  # Limit to 10 terms to avoid excessive API calls
+            url = f"https://newsapi.org/v2/everything"
+            params = {
+                "q": term,
+                "from": from_date,
+                "sortBy": "relevancy",
+                "language": "en",
+                "apiKey": news_api_key,
+                "pageSize": 5  # Limit to 5 articles per term
+            }
             
+            try:
+                response = requests.get(url, params=params)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("status") == "ok" and data.get("articles"):
+                        # Add relevant articles
+                        news_articles.extend(data["articles"])
+            except Exception as e:
+                print(f"Error retrieving news for {term}: {e}")
+        
+        # Deduplicate articles
+        unique_articles = {}
+        for article in news_articles:
+            title = article.get("title", "")
+            if title and title not in unique_articles:
+                unique_articles[title] = article
+        
+        # Use deduplicated articles
+        if unique_articles:
+            news_articles = list(unique_articles.values())
+        else:
+            news_articles = fallback_news
+            
+    except Exception as e:
+        print(f"Error retrieving news: {e}")
+        news_articles = fallback_news
+    
+    # Sort by date
+    news_articles = sorted(news_articles, key=lambda x: x.get("publishedAt", ""), reverse=True)
+    
+    # Find relevant symbols in each article
+    for article in news_articles:
+        article["relevant_symbols"] = []
+        article_title = article.get("title", "") or ""
+        article_description = article.get("description", "") or ""
+        
+        for symbol in all_symbols:
+            if symbol in article_title or symbol in article_description:
+                article["relevant_symbols"].append(symbol)
+            # Check company name
+            elif symbol in company_names and company_names[symbol] in article_title:
+                article["relevant_symbols"].append(symbol)
+    
+    # Filter out articles with no relevant symbols and limit to top 10
+    relevant_articles = [a for a in news_articles if a.get("relevant_symbols")][:10]
+    
+    # Use relevant articles if we found any, otherwise use fallback
+    if not relevant_articles:
+        news_articles = fallback_news
+    else:
+        news_articles = relevant_articles
+    
+    # Create news cards
+    news_cards = []
+    for article in news_articles:
+        # Create tags for relevant symbols
+        symbol_badges = []
+        for symbol in article.get("relevant_symbols", []):
+            symbol_badges.append(
+                dbc.Badge(symbol, color="info", className="me-1")
+            )
+        
+        # Format date
+        published_date = article.get("publishedAt", "")
+        if published_date:
+            try:
+                date_obj = datetime.strptime(published_date, "%Y-%m-%dT%H:%M:%SZ")
+                formatted_date = date_obj.strftime("%Y-%m-%d %H:%M")
+            except:
+                formatted_date = published_date
+        else:
+            formatted_date = "Unknown date"
+        
+        # Get source name safely
+        source_name = article.get("source", {})
+        if isinstance(source_name, dict):
+            source_name = source_name.get("name", "Unknown source")
+        
+        # Get description safely and truncate if needed
+        description = article.get("description", "No description") or "No description"
+        if len(description) > 200:
+            description = description[:200] + "..."
+        
+        # Create card
         news_cards.append(
             dbc.Card([
-                dbc.CardHeader(f"Relevance: {item['relevance']:.2f}"),
+                dbc.CardHeader([
+                    html.Div(symbol_badges, className="mb-1") if symbol_badges else "",
+                    html.Small(f"{source_name} - {formatted_date}", className="text-muted")
+                ]),
                 dbc.CardBody([
-                    html.H5(item["title"], className="card-title"),
-                    html.P(f"Market Impact: {item['impact'].capitalize()}", className=f"text-{color}")
+                    html.H5(article.get("title", "No title"), className="card-title"),
+                    html.P(description),
+                    html.A("Read more", href=article.get("url", "#"), target="_blank", className="btn btn-sm btn-outline-primary")
                 ])
-            ], className="mb-2")
+            ], className="mb-3")
         )
     
     return news_cards

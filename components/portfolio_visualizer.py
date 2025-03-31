@@ -64,16 +64,23 @@ def get_portfolio_historical_data(portfolio, period="3m"):
     Returns:
         DataFrame: Historical portfolio data
     """
+    if not portfolio:
+        return pd.DataFrame()
+        
     # Determine start date based on period
     end_date = datetime.now()
     if period == "1m":
         start_date = end_date - timedelta(days=30)
+        resample_freq = 'D'  # Daily for shorter periods
     elif period == "3m":
         start_date = end_date - timedelta(days=90)
+        resample_freq = 'D'  # Daily
     elif period == "6m":
         start_date = end_date - timedelta(days=180)
+        resample_freq = 'D'  # Daily
     elif period == "1y":
         start_date = end_date - timedelta(days=365)
+        resample_freq = 'D'  # Daily
     else:  # "all"
         # Find earliest purchase date
         earliest_date = end_date
@@ -84,66 +91,72 @@ def get_portfolio_historical_data(portfolio, period="3m"):
         
         # Go back at least 1 day before earliest purchase
         start_date = earliest_date - timedelta(days=1)
+        
+        # Use weekly frequency for "all" time to avoid overcrowding the chart
+        if (end_date - start_date).days > 365:
+            resample_freq = 'W'  # Weekly
+        else:
+            resample_freq = 'D'  # Daily
     
     # Get historical data for each symbol
     symbol_data = {}
-    symbols = set(inv["symbol"] for inv in portfolio.values())
+    symbols = [inv["symbol"] for inv in portfolio.values()]
     
-    for symbol in symbols:
-        try:
-            ticker = yf.Ticker(symbol)
-            hist = ticker.history(start=start_date, end=end_date)
-            if not hist.empty:
+    # Use a batch request if possible to minimize API calls
+    try:
+        ticker_data = yf.download(symbols, start=start_date, end=end_date, group_by='ticker')
+        
+        # Process each symbol
+        for symbol in symbols:
+            if symbol in ticker_data.columns:
+                hist = ticker_data[symbol]
                 symbol_data[symbol] = hist['Close']
-        except Exception as e:
-            print(f"Error getting historical data for {symbol}: {e}")
+    except:
+        # Fallback to individual requests if batch fails
+        for symbol in symbols:
+            try:
+                ticker = yf.Ticker(symbol)
+                hist = ticker.history(start=start_date, end=end_date)
+                if not hist.empty:
+                    symbol_data[symbol] = hist['Close']
+            except Exception as e:
+                print(f"Error getting historical data for {symbol}: {e}")
     
     if not symbol_data:
         return pd.DataFrame()
     
-    # Get historical USD to CAD exchange rates
-    usd_to_cad_rates = get_historical_usd_to_cad_rates(start_date, end_date)
-    
     # Combine all price data
     price_df = pd.DataFrame(symbol_data)
     
-    # Calculate portfolio value for each day
-    portfolio_values = pd.DataFrame(index=price_df.index)
-    portfolio_values['Total_CAD'] = 0
-    portfolio_values['Total_USD'] = 0
+    # Fill missing days with forward fill method
+    price_df = price_df.fillna(method='ffill')
     
-    # Calculate total value based on shares and currency
+    # Calculate portfolio value for each day for each investment
+    portfolio_values = pd.DataFrame(index=price_df.index)
+    portfolio_values['Total'] = 0
+    
+    # Create a separate column for each investment to show individual performance
     for investment_id, investment in portfolio.items():
         symbol = investment["symbol"]
         shares = investment["shares"]
-        currency = investment.get("currency", "USD")
         
         if symbol in price_df.columns:
-            # Calculate value in the original currency
-            value_series = price_df[symbol] * shares
+            # Skip investments before their purchase date
+            purchase_date = datetime.strptime(investment.get("purchase_date", start_date.strftime("%Y-%m-%d")), "%Y-%m-%d")
             
-            # Add to the appropriate currency total
-            if currency == "CAD":
-                portfolio_values[f"{symbol}_CAD"] = value_series
-                portfolio_values['Total_CAD'] += value_series
-            else:  # USD
-                portfolio_values[f"{symbol}_USD"] = value_series
-                portfolio_values['Total_USD'] += value_series
+            # Calculate value for each day
+            investment_value = price_df[symbol] * shares
+            
+            # Zero out values before purchase date
+            investment_value.loc[investment_value.index < purchase_date] = 0
+            
+            # Add to portfolio total and store individual value
+            portfolio_values[f"{symbol}_{investment_id[-6:]}"] = investment_value
+            portfolio_values['Total'] += investment_value
     
-    # Convert USD to CAD and calculate total
-    if 'Total_USD' in portfolio_values.columns and not portfolio_values['Total_USD'].empty:
-        # Convert USD values to CAD
-        portfolio_values['USD_in_CAD'] = portfolio_values['Total_USD'] * usd_to_cad_rates
-        
-        # Fill any NaN values with the last valid rate
-        if 'USD_in_CAD' in portfolio_values.columns:
-            portfolio_values['USD_in_CAD'] = portfolio_values['USD_in_CAD'].fillna(method='ffill')
-        
-        # Calculate total in CAD
-        portfolio_values['Total'] = portfolio_values['Total_CAD'] + portfolio_values.get('USD_in_CAD', 0)
-    else:
-        # If no USD values, total is just the CAD total
-        portfolio_values['Total'] = portfolio_values['Total_CAD']
+    # Resample data to the chosen frequency
+    if resample_freq != 'D':
+        portfolio_values = portfolio_values.resample(resample_freq).last()
     
     # Get benchmark data - S&P/TSX Composite
     try:
@@ -152,10 +165,15 @@ def get_portfolio_historical_data(portfolio, period="3m"):
         tsx_hist = tsx.history(start=start_date, end=end_date)
         
         if not tsx_hist.empty:
+            # Resample TSX data if needed
+            if resample_freq != 'D':
+                tsx_hist = tsx_hist.resample(resample_freq).last()
+                
             # Normalize to match starting portfolio value
-            initial_value = portfolio_values['Total'].iloc[0] if not portfolio_values.empty and 'Total' in portfolio_values.columns else 1000
-            tsx_normalized = tsx_hist['Close'] / tsx_hist['Close'].iloc[0] * initial_value
-            portfolio_values['TSX'] = tsx_normalized
+            if not portfolio_values.empty and portfolio_values['Total'].iloc[0] > 0:
+                initial_value = portfolio_values['Total'].iloc[0]
+                tsx_normalized = tsx_hist['Close'] / tsx_hist['Close'].iloc[0] * initial_value
+                portfolio_values['TSX'] = tsx_normalized
     except Exception as e:
         print(f"Error getting TSX data: {e}")
     
@@ -194,12 +212,37 @@ def create_performance_graph(portfolio, period="3m"):
         x=historical_data.index,
         y=historical_data['Total'],
         mode='lines',
-        name='Portfolio (CAD)',
+        name='Portfolio Total',
         line=dict(color='#2C3E50', width=3)
     ))
     
+    # Add individual investment lines
+    investment_columns = [col for col in historical_data.columns if col not in ['Total', 'TSX']]
+    
+    # Limit to top 5 investments by final value to avoid cluttering the chart
+    if investment_columns:
+        final_values = {col: historical_data[col].iloc[-1] for col in investment_columns if not historical_data[col].empty}
+        top_investments = sorted(final_values.items(), key=lambda x: x[1], reverse=True)[:5]
+        
+        for col, _ in top_investments:
+            # Skip if all values are zero
+            if historical_data[col].sum() == 0:
+                continue
+                
+            # Extract the symbol from the column name
+            symbol = col.split('_')[0]
+            
+            fig.add_trace(go.Scatter(
+                x=historical_data.index,
+                y=historical_data[col],
+                mode='lines',
+                name=f"{symbol}",
+                line=dict(width=1.5),
+                visible='legendonly'  # Hidden by default
+            ))
+    
     # Add benchmark line if available
-    if 'TSX' in historical_data.columns:
+    if 'TSX' in historical_data.columns and not historical_data['TSX'].empty:
         fig.add_trace(go.Scatter(
             x=historical_data.index,
             y=historical_data['TSX'],
@@ -212,33 +255,47 @@ def create_performance_graph(portfolio, period="3m"):
     if len(historical_data) > 1:
         initial_value = historical_data['Total'].iloc[0]
         final_value = historical_data['Total'].iloc[-1]
-        performance_pct = ((final_value / initial_value) - 1) * 100
         
-        # Add performance annotation
-        fig.add_annotation(
-            x=0.02,
-            y=0.98,
-            xref="paper",
-            yref="paper",
-            text=f"Performance: {performance_pct:.2f}%",
-            showarrow=False,
-            font=dict(
-                size=14,
-                color="white"
-            ),
-            align="left",
-            bgcolor="#2C3E50",
-            bordercolor="#1ABC9C",
-            borderwidth=2,
-            borderpad=4,
-            opacity=0.8
-        )
+        # Skip if initial value is zero (to avoid division by zero)
+        if initial_value > 0:
+            performance_pct = ((final_value / initial_value) - 1) * 100
+            
+            # Add performance annotation
+            fig.add_annotation(
+                x=0.02,
+                y=0.98,
+                xref="paper",
+                yref="paper",
+                text=f"Performance: {performance_pct:.2f}%",
+                showarrow=False,
+                font=dict(
+                    size=14,
+                    color="white"
+                ),
+                align="left",
+                bgcolor="#2C3E50",
+                bordercolor="#1ABC9C",
+                borderwidth=2,
+                borderpad=4,
+                opacity=0.8
+            )
+    
+    # Format date on x-axis based on period
+    dtick = None
+    if period == "1m":
+        dtick = "7D"  # Weekly ticks for 1 month view
+    elif period == "3m":
+        dtick = "14D"  # Bi-weekly ticks for 3 month view
+    elif period == "6m":
+        dtick = "1M"  # Monthly ticks for 6 month view
+    elif period == "1y":
+        dtick = "2M"  # Bi-monthly ticks for 1 year view
     
     # Update layout
     fig.update_layout(
-        title=f"Portfolio Performance - {period.upper() if period != 'all' else 'All Time'} (CAD)",
+        title=f"Portfolio Performance - {period.upper() if period != 'all' else 'All Time'}",
         xaxis_title="Date",
-        yaxis_title="Value (CAD $)",
+        yaxis_title="Value ($)",
         template="plotly_white",
         legend=dict(
             orientation="h",
@@ -250,6 +307,10 @@ def create_performance_graph(portfolio, period="3m"):
         margin=dict(l=20, r=20, t=60, b=20),
         hovermode="x unified"
     )
+    
+    # Apply date formatting if specified
+    if dtick:
+        fig.update_xaxes(dtick=dtick)
     
     return fig
 
