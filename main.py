@@ -19,6 +19,8 @@ from datetime import datetime
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Custom modules
+from components.transaction_recorder import create_transaction_recorder_component, create_transaction_history_table
+from modules.transaction_tracker import record_transaction
 from modules.currency_utils import get_usd_to_cad_rate, format_currency, get_combined_value_cad
 
 from modules.data_collector import DataCollector
@@ -123,6 +125,11 @@ app.layout = dbc.Container([
             ], className="mb-4")
         ], width=12)
     ]),
+    dbc.Row([
+        dbc.Col([
+            create_transaction_recorder_component()
+        ], width=12)
+    ], className="mb-4"),
     
     # Portfolio Management Component - NEW
     dbc.Row([
