@@ -23,7 +23,7 @@ def create_transaction_recorder_component():
                             ], width=3),
                             dbc.Col([
                                 dbc.Label("Shares"),
-                                dbc.Input(id="buy-shares-input", type="number", placeholder="Number of shares")
+                                dbc.Input(id="buy-shares-input", type="number", placeholder="Number of shares", step="0.001")
                             ], width=2),
                             dbc.Col([
                                 dbc.Label("Price"),
@@ -51,7 +51,7 @@ def create_transaction_recorder_component():
                             ], width=3),
                             dbc.Col([
                                 dbc.Label("Shares"),
-                                dbc.Input(id="sell-shares-input", type="number", placeholder="Number of shares")
+                                dbc.Input(id="sell-shares-input", type="number", placeholder="Number of shares", step="0.001")
                             ], width=2),
                             dbc.Col([
                                 dbc.Label("Price"),
@@ -120,7 +120,7 @@ def create_transaction_history_table():
                 html.Td(row["date"]),
                 html.Td(row["type"], style={"color": "green" if row["type"] == "Buy" else "red"}),
                 html.Td(row["symbol"]),
-                html.Td(f"{row['shares']:.2f}"),
+                html.Td(f"{row['shares']:.3f}"),
                 html.Td(f"${row['price']:.2f}"),
                 html.Td(f"${row['total']:.2f}"),
                 html.Td(row["currency"])

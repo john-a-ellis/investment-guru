@@ -114,7 +114,7 @@ def create_portfolio_table(portfolio):
         html.Tbody([
             html.Tr([
                 html.Td(row["symbol"]),
-                html.Td(f"{row['shares']:.2f}"),
+                html.Td(f"{row['shares']:.3f}"),
                 html.Td(f"${row['purchase_price']:.2f} {row['currency']}"),
                 html.Td(row["purchase_date"]),
                 html.Td(f"${row['current_price']:.2f} {row['currency']}"),
