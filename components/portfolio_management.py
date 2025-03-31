@@ -69,72 +69,174 @@ def save_portfolio(portfolio):
         print(f"Error saving portfolio: {e}")
         return False
 
+# Update in components/portfolio_management.py
+
 def create_portfolio_table(portfolio):
     """
-    Create a table to display current portfolio investments
+    Create a table to display current portfolio investments grouped by ticker
     """
     if not portfolio:
         return html.Div("No investments currently tracked.")
     
-    # Convert to DataFrame for easier table creation
-    investments_list = []
+    # Group investments by symbol
+    grouped_investments = {}
     for investment_id, details in portfolio.items():
-        currency = details.get("currency", "USD")
+        symbol = details.get("symbol", "")
+        if symbol not in grouped_investments:
+            grouped_investments[symbol] = {
+                "investments": [],
+                "total_shares": 0,
+                "total_book_value": 0,
+                "total_current_value": 0,
+                "total_gain_loss": 0,
+                "name": details.get("name", symbol),
+                "currency": details.get("currency", "USD")
+            }
         
-        investments_list.append({
+        # Add to group totals
+        grouped_investments[symbol]["investments"].append({
             "id": investment_id,
-            "symbol": details.get("symbol", ""),
-            "shares": details.get("shares", 0),
-            "purchase_price": details.get("purchase_price", 0),
-            "purchase_date": details.get("purchase_date", ""),
-            "current_price": details.get("current_price", 0),
-            "current_value": details.get("current_value", 0),
-            "gain_loss": details.get("gain_loss", 0),
-            "gain_loss_percent": details.get("gain_loss_percent", 0),
-            "currency": currency
+            **details
         })
+        
+        grouped_investments[symbol]["total_shares"] += details.get("shares", 0)
+        grouped_investments[symbol]["total_book_value"] += details.get("shares", 0) * details.get("purchase_price", 0)
+        grouped_investments[symbol]["total_current_value"] += details.get("current_value", 0)
+        grouped_investments[symbol]["total_gain_loss"] += details.get("gain_loss", 0)
     
-    df = pd.DataFrame(investments_list)
+    # Calculate gain/loss percentage for each group
+    for symbol, group in grouped_investments.items():
+        if group["total_book_value"] > 0:
+            group["total_gain_loss_percent"] = (group["total_gain_loss"] / group["total_book_value"]) * 100
+        else:
+            group["total_gain_loss_percent"] = 0
     
-    # Create table
-    return dbc.Table([
-        html.Thead(
-            html.Tr([
-                html.Th("Symbol"),
-                html.Th("Shares"),
-                html.Th("Purchase Price"),
-                html.Th("Purchase Date"),
-                html.Th("Current Price"),
-                html.Th("Current Value"),
-                html.Th("Gain/Loss"),
-                html.Th("Gain/Loss (%)"),
-                html.Th("Actions")
-            ])
-        ),
-        html.Tbody([
-            html.Tr([
-                html.Td(row["symbol"]),
-                html.Td(f"{row['shares']:.3f}"),
-                html.Td(f"${row['purchase_price']:.2f} {row['currency']}"),
-                html.Td(row["purchase_date"]),
-                html.Td(f"${row['current_price']:.2f} {row['currency']}"),
-                html.Td(f"${row['current_value']:.2f} {row['currency']}"),
-                html.Td(
-                    f"${row['gain_loss']:.2f} {row['currency']}", 
-                    style={"color": "green" if row['gain_loss'] >= 0 else "red"}
+    # Create accordion items for each symbol
+    accordion_items = []
+    total_portfolio_value = 0
+    total_portfolio_book = 0
+    total_portfolio_gain_loss = 0
+    
+    for symbol, group in grouped_investments.items():
+        currency = group["currency"]
+        total_portfolio_value += group["total_current_value"]
+        total_portfolio_book += group["total_book_value"]
+        total_portfolio_gain_loss += group["total_gain_loss"]
+        
+        # Create the header row with consistent alignment
+        header = html.Div([
+            dbc.Row([
+                dbc.Col(symbol, width=2),
+                dbc.Col(f"{group['total_shares']:.3f}", width=1, className="text-center"),
+                dbc.Col(f"${group['total_book_value']:.2f} {currency}", width=2, className="text-center"),
+                dbc.Col(f"${group['total_current_value']:.2f} {currency}", width=2, className="text-center"),
+                dbc.Col(
+                    f"${group['total_gain_loss']:.2f} {currency}", 
+                    style={"color": "green" if group['total_gain_loss'] >= 0 else "red"},
+                    width=2, className="text-center"
                 ),
-                html.Td(
-                    f"{row['gain_loss_percent']:.2f}%", 
-                    style={"color": "green" if row['gain_loss_percent'] >= 0 else "red"}
-                ),
-                html.Td(
-                    dbc.Button(
-                        "Remove", 
-                        id={"type": "remove-investment-button", "index": row["id"]},
-                        color="danger",
-                        size="sm"
-                    )
+                dbc.Col(
+                    f"{group['total_gain_loss_percent']:.2f}%", 
+                    style={"color": "green" if group['total_gain_loss_percent'] >= 0 else "red"},
+                    width=2, className="text-center"
                 )
-            ]) for _, row in df.iterrows()
+            ])
         ])
-    ], striped=True, bordered=True, hover=True, responsive=True)
+        
+        # Create detailed transactions table
+        transactions_table = dbc.Table([
+            html.Thead(
+                html.Tr([
+                    html.Th("Purchase Date"),
+                    html.Th("Shares"),
+                    html.Th("Purchase Price"),
+                    html.Th("Book Value"),
+                    html.Th("Current Value"),
+                    html.Th("Gain/Loss"),
+                    html.Th("Gain/Loss (%)"),
+                    html.Th("Actions")
+                ])
+            ),
+            html.Tbody([
+                html.Tr([
+                    html.Td(inv["purchase_date"]),
+                    html.Td(f"{inv['shares']:.3f}"),
+                    html.Td(f"${inv['purchase_price']:.2f}"),
+                    html.Td(f"${inv['shares'] * inv['purchase_price']:.2f}"),
+                    html.Td(f"${inv['current_value']:.2f}"),
+                    html.Td(
+                        f"${inv['gain_loss']:.2f}", 
+                        style={"color": "green" if inv['gain_loss'] >= 0 else "red"}
+                    ),
+                    html.Td(
+                        f"{inv['gain_loss_percent']:.2f}%", 
+                        style={"color": "green" if inv['gain_loss_percent'] >= 0 else "red"}
+                    ),
+                    html.Td(
+                        dbc.Button(
+                            "Remove", 
+                            id={"type": "remove-investment-button", "index": inv["id"]},
+                            color="danger",
+                            size="sm"
+                        )
+                    )
+                ]) for inv in group["investments"]
+            ])
+        ], striped=True, bordered=True, hover=True, size="sm")
+        
+        # Add to accordion
+        accordion_items.append(
+            dbc.AccordionItem(
+                transactions_table,
+                title=header,
+                item_id=symbol
+            )
+        )
+    
+    # Create portfolio totals row
+    portfolio_total = html.Div([
+        dbc.Row([
+            dbc.Col(html.B("PORTFOLIO TOTAL"), width=2),
+            dbc.Col("", width=1),
+            dbc.Col(html.B(f"${total_portfolio_book:.2f}"), width=2, className="text-center"),
+            dbc.Col(html.B(f"${total_portfolio_value:.2f}"), width=2, className="text-center"),
+            dbc.Col(
+                html.B(f"${total_portfolio_gain_loss:.2f}"), 
+                style={"color": "green" if total_portfolio_gain_loss >= 0 else "red"},
+                width=2, className="text-center"
+            ),
+            dbc.Col(
+                html.B(f"{(total_portfolio_gain_loss / total_portfolio_book * 100) if total_portfolio_book > 0 else 0:.2f}%"), 
+                style={"color": "green" if total_portfolio_gain_loss >= 0 else "red"},
+                width=2, className="text-center"
+            )
+        ], className="bg-light p-2 mb-3 rounded")
+    ])
+    
+    # Create column headers with exact same widths as accordion content
+    headers = dbc.Row([
+        dbc.Col(html.B("Symbol"), width=2, className="ps-3"),  # Add left padding to match accordion
+        dbc.Col(html.B("Shares"), width=1, className="text-center"),
+        dbc.Col(html.B("Book Value"), width=2, className="text-center"),
+        dbc.Col(html.B("Current Value"), width=2, className="text-center"),
+        dbc.Col(html.B("Gain/Loss"), width=2, className="text-center"),
+        dbc.Col(html.B("Gain/Loss (%)"), width=2, className="text-center"),
+        dbc.Col("", width=1)  # Empty space for the accordion arrow
+    ], className="mb-2 fw-bold")
+    
+    # Apply container styles to ensure alignment
+    return html.Div([
+        portfolio_total,
+        # Wrap headers in a container that matches accordion styling
+        html.Div(
+            headers,
+            className="border-bottom"  # Match accordion styling
+        ),
+        dbc.Accordion(
+            accordion_items,
+            start_collapsed=True,
+            flush=True,
+            id="portfolio-accordion",
+            className="accordion-alignment"  # Custom class for additional styling
+        )
+    ], className="portfolio-container")  # Container to group everything

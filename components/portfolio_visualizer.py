@@ -293,15 +293,31 @@ def create_summary_stats(portfolio):
     total_gain_loss = total_value - total_investment
     total_gain_loss_pct = (total_value / total_investment - 1) * 100 if total_investment > 0 else 0
     
-    # Find best and worst performing investments
-    investments_list = []
+    # Group investments by ticker symbol to consolidate multiple purchases of the same security
+    consolidated_investments = {}
     for inv_id, inv in portfolio.items():
-        gain_loss_pct = inv.get("gain_loss_percent", 0)
-        investments_list.append({
-            "symbol": inv.get("symbol", ""),
-            "gain_loss_pct": gain_loss_pct,
-            "currency": inv.get("currency", "USD")
-        })
+        symbol = inv.get("symbol", "")
+        if symbol not in consolidated_investments:
+            consolidated_investments[symbol] = {
+                "symbol": symbol,
+                "currency": inv.get("currency", "USD"),
+                "total_shares": 0,
+                "total_investment": 0,
+                "total_current_value": 0
+            }
+        
+        # Add shares and values to the consolidated investment
+        consolidated_investments[symbol]["total_shares"] += inv.get("shares", 0)
+        consolidated_investments[symbol]["total_investment"] += inv.get("shares", 0) * inv.get("purchase_price", 0)
+        consolidated_investments[symbol]["total_current_value"] += inv.get("current_value", 0)
+    
+    # Calculate consolidated gain/loss percentages
+    investments_list = []
+    for symbol, inv in consolidated_investments.items():
+        if inv["total_investment"] > 0:
+            gain_loss_pct = (inv["total_current_value"] / inv["total_investment"] - 1) * 100
+            inv["gain_loss_pct"] = gain_loss_pct
+            investments_list.append(inv)
     
     if investments_list:
         best_investment = max(investments_list, key=lambda x: x["gain_loss_pct"])
