@@ -11,6 +11,7 @@ import uuid
 def create_portfolio_management_component():
     """
     Creates a component for tracking actual investments with performance data
+    and integrated transaction recording
     """
     return dbc.Card([
         dbc.CardHeader("Portfolio Management"),
@@ -25,7 +26,7 @@ def create_portfolio_management_component():
                         dbc.Input(id="investment-date-input", type="date", 
                                  value=datetime.now().strftime("%Y-%m-%d")),
                         dbc.Select(
-                            id="investment-type-select",  # This ID must match what's used in the callback
+                            id="investment-type-select",
                             options=[
                                 {"label": "Stock", "value": "stock"},
                                 {"label": "ETF", "value": "etf"},
@@ -42,6 +43,30 @@ def create_portfolio_management_component():
                     html.Div(id="add-investment-feedback", className="mt-2")
                 ], width=12)
             ]),
+            
+            # Quick transaction row
+            dbc.Row([
+                dbc.Col([
+                    html.H5("Quick Transaction Recording", className="mt-3"),
+                    dbc.InputGroup([
+                        dbc.Select(
+                            id="quick-transaction-type",
+                            options=[
+                                {"label": "Buy", "value": "buy"},
+                                {"label": "Sell", "value": "sell"}
+                            ],
+                            value="buy",
+                            style={"width": "80px"}
+                        ),
+                        dbc.Input(id="quick-transaction-symbol", placeholder="Symbol", style={"width": "100px"}),
+                        dbc.Input(id="quick-transaction-shares", type="number", placeholder="Shares", step="0.001", style={"width": "100px"}),
+                        dbc.Input(id="quick-transaction-price", type="number", placeholder="Price", style={"width": "100px"}),
+                        dbc.Input(id="quick-transaction-date", type="date", value=datetime.now().strftime("%Y-%m-%d"), style={"width": "150px"}),
+                        dbc.Button("Record Transaction", id="record-quick-transaction", color="primary")
+                    ]),
+                    html.Div(id="quick-transaction-feedback", className="mt-2")
+                ], width=12)
+            ], className="mb-3"),
             
             html.Hr(),
             
@@ -82,10 +107,6 @@ def save_portfolio(portfolio):
         print(f"Error saving portfolio: {e}")
         return False
 
-# Update in components/portfolio_management.py
-
-# In components/portfolio_management.py
-
 def load_transactions():
     """
     Load transaction records from storage file
@@ -104,19 +125,14 @@ def load_transactions():
         print(f"Error loading transactions: {e}")
         return {}
 
-# Update the create_portfolio_table function in portfolio_management.py
-# Replace the existing function with this one
-
 def create_portfolio_table(portfolio):
     """
     Create a table to display current portfolio investments with accordion components
-    grouped by asset symbol, integrated with transaction history
+    grouped by asset symbol, integrated with transaction history and transaction forms
     """
-    print(f"Creating portfolio table with {len(portfolio)} investments")
-    
     # Load transactions to enhance the portfolio view
+    from modules.transaction_tracker import load_transactions
     transactions = load_transactions()
-    print(f"Loaded {len(transactions)} transactions")
     
     if not portfolio:
         return html.Div("No investments currently tracked.")
@@ -124,8 +140,6 @@ def create_portfolio_table(portfolio):
     # Convert to DataFrame for easier processing
     investments_list = []
     for investment_id, details in portfolio.items():
-        print(f"Processing investment {investment_id}: {details}")
-        
         currency = details.get("currency", "USD")
         
         investments_list.append({
@@ -143,7 +157,6 @@ def create_portfolio_table(portfolio):
         })
     
     df = pd.DataFrame(investments_list)
-    print(f"Created DataFrame with {len(df)} rows")
     
     # Group investments by symbol
     grouped_investments = {}
@@ -156,7 +169,7 @@ def create_portfolio_table(portfolio):
                 "total_shares": 0,
                 "total_book_value": 0,
                 "total_current_value": 0,
-                "current_price": row["current_price"],  # Use the most recent price
+                "current_price": row["current_price"],
                 "currency": row["currency"],
                 "asset_type": row["asset_type"]
             }
@@ -171,11 +184,16 @@ def create_portfolio_table(portfolio):
     
     # Add transactions to each symbol group
     for transaction_id, transaction in transactions.items():
-        symbol = transaction.get("symbol")
+        symbol = transaction.get("symbol", "").upper().strip()
         if symbol in grouped_investments:
             grouped_investments[symbol]["transactions"].append({
                 "id": transaction_id,
-                **transaction  # Include all transaction details
+                "date": transaction.get("date", ""),
+                "type": transaction.get("type", ""),
+                "shares": transaction.get("shares", 0),
+                "price": transaction.get("price", 0),
+                "amount": transaction.get("amount", 0),
+                "notes": transaction.get("notes", "")
             })
     
     # Calculate group gain/loss
@@ -187,10 +205,10 @@ def create_portfolio_table(portfolio):
             group["total_gain_loss_percent"] = 0
         
         # Sort transactions by date (newest first)
-        if "transactions" in group:
+        if group["transactions"]:
             group["transactions"] = sorted(
                 group["transactions"], 
-                key=lambda x: x.get("transaction_date", ""), 
+                key=lambda x: x.get("date", ""), 
                 reverse=True
             )
     
@@ -201,7 +219,7 @@ def create_portfolio_table(portfolio):
     sorted_groups = sorted(grouped_investments.items(), key=lambda x: x[1]["total_current_value"], reverse=True)
     
     for symbol, group in sorted_groups:
-        # Create the header with summary information - FIXED LAYOUT
+        # Create the header with summary information
         header = html.Div([
             dbc.Row([
                 dbc.Col(html.Strong(symbol), width=2),
@@ -221,12 +239,106 @@ def create_portfolio_table(portfolio):
                     width=1
                 ),
                 dbc.Col(group["currency"], width=1)
-            ], className="g-0 w-100")  # Added w-100 class to ensure full width
-        ], className="w-100 portfolio-accordion-header")  # Added custom class for styling
+            ], className="g-0 w-100")
+        ], className="w-100 portfolio-accordion-header")
         
-        # Create detailed view with tabs for Positions and Transactions
+        # Create transaction forms for this symbol
+        transaction_forms = dbc.Row([
+            dbc.Col([
+                # Buy Form
+                dbc.Card([
+                    dbc.CardHeader("Record Buy Transaction"),
+                    dbc.CardBody([
+                        dbc.Form([
+                            dbc.Row([
+                                dbc.Col([
+                                    dbc.Label("Shares"),
+                                    dbc.Input(
+                                        id={"type": "buy-shares-input", "symbol": symbol},
+                                        type="number", 
+                                        placeholder="Shares",
+                                        step="0.001"
+                                    )
+                                ], width=4),
+                                dbc.Col([
+                                    dbc.Label("Price"),
+                                    dbc.Input(
+                                        id={"type": "buy-price-input", "symbol": symbol},
+                                        type="number", 
+                                        placeholder="Price",
+                                        value=group["current_price"]
+                                    )
+                                ], width=4),
+                                dbc.Col([
+                                    dbc.Label("Date"),
+                                    dbc.Input(
+                                        id={"type": "buy-date-input", "symbol": symbol},
+                                        type="date", 
+                                        value=datetime.now().strftime("%Y-%m-%d")
+                                    )
+                                ], width=4)
+                            ]),
+                            dbc.Button(
+                                "Buy", 
+                                id={"type": "record-buy-button", "symbol": symbol},
+                                color="success", 
+                                className="mt-3"
+                            ),
+                            html.Div(id={"type": "buy-feedback", "symbol": symbol}, className="mt-2")
+                        ])
+                    ])
+                ])
+            ], width=6),
+            dbc.Col([
+                # Sell Form
+                dbc.Card([
+                    dbc.CardHeader("Record Sell Transaction"),
+                    dbc.CardBody([
+                        dbc.Form([
+                            dbc.Row([
+                                dbc.Col([
+                                    dbc.Label("Shares"),
+                                    dbc.Input(
+                                        id={"type": "sell-shares-input", "symbol": symbol},
+                                        type="number", 
+                                        placeholder="Shares",
+                                        step="0.001"
+                                    )
+                                ], width=4),
+                                dbc.Col([
+                                    dbc.Label("Price"),
+                                    dbc.Input(
+                                        id={"type": "sell-price-input", "symbol": symbol},
+                                        type="number", 
+                                        placeholder="Price",
+                                        value=group["current_price"]
+                                    )
+                                ], width=4),
+                                dbc.Col([
+                                    dbc.Label("Date"),
+                                    dbc.Input(
+                                        id={"type": "sell-date-input", "symbol": symbol},
+                                        type="date", 
+                                        value=datetime.now().strftime("%Y-%m-%d")
+                                    )
+                                ], width=4)
+                            ]),
+                            dbc.Button(
+                                "Sell", 
+                                id={"type": "record-sell-button", "symbol": symbol},
+                                color="danger", 
+                                className="mt-3"
+                            ),
+                            html.Div(id={"type": "sell-feedback", "symbol": symbol}, className="mt-2")
+                        ])
+                    ])
+                ])
+            ], width=6)
+        ], className="mt-3")
+        
+        # Create transaction table if available
         transaction_table = None
-        if group.get("transactions"):
+        if group["transactions"]:
             transaction_table = dbc.Table([
                 html.Thead(
                     html.Tr([
@@ -235,26 +347,25 @@ def create_portfolio_table(portfolio):
                         html.Th("Shares"),
                         html.Th("Price"),
                         html.Th("Total Amount"),
-                        html.Th("Currency"),
                         html.Th("Notes")
                     ])
                 ),
                 html.Tbody([
                     html.Tr([
-                        html.Td(tx.get("transaction_date", "")),
-                        html.Td(tx.get("transaction_type", "").capitalize()),
+                        html.Td(tx.get("date", "")),
+                        html.Td(tx.get("type", "").capitalize(), 
+                               style={"color": "green" if tx.get("type") == "buy" else "red"}),
                         html.Td(f"{tx.get('shares', 0):.4f}"),
                         html.Td(f"${tx.get('price', 0):.2f}"),
-                        html.Td(f"${tx.get('total_amount', 0):.2f}"),
-                        html.Td(tx.get("currency", "")),
+                        html.Td(f"${tx.get('amount', 0):.2f}"),
                         html.Td(tx.get("notes", ""))
                     ]) for tx in group["transactions"]
                 ])
-            ], bordered=True, hover=True, size="sm", className="mt-2")
+            ], bordered=True, hover=True, size="sm", className="mt-3")
         else:
             transaction_table = html.P("No transaction records found for this asset.")
         
-        # Create table of individual positions
+        # Create positions table (investment lots)
         positions_table = dbc.Table([
             html.Thead(
                 html.Tr([
@@ -293,15 +404,16 @@ def create_portfolio_table(portfolio):
                     )
                 ]) for inv in group["investments"]
             ])
-        ], bordered=True, hover=True, size="sm", className="mt-2")
+        ], bordered=True, hover=True, size="sm", className="mt-3")
         
-        # Create tabs for positions and transactions
+        # Create tabs for positions, transactions, and transaction forms
         detailed_content = dbc.Tabs([
             dbc.Tab(positions_table, label="Positions"),
-            dbc.Tab(transaction_table, label="Transactions")
+            dbc.Tab(transaction_table, label="Transaction History"),
+            dbc.Tab(transaction_forms, label="Record Transaction")
         ], className="mt-3")
         
-        # Create the accordion item for this group
+        # Create accordion item
         accordion_items.append(
             dbc.AccordionItem(
                 detailed_content,
@@ -315,11 +427,10 @@ def create_portfolio_table(portfolio):
         accordion_items,
         start_collapsed=True,
         flush=True,
-        id="portfolio-accordion",
-        class_name="portfolio-accordion"  # Added custom class for CSS targeting
+        id="portfolio-accordion"
     )
     
-    # Add a summary row for the entire portfolio
+    # Add portfolio summary
     total_book_value = sum(group["total_book_value"] for group in grouped_investments.values())
     total_current_value = sum(group["total_current_value"] for group in grouped_investments.values())
     total_gain_loss = total_current_value - total_book_value
@@ -345,5 +456,4 @@ def create_portfolio_table(portfolio):
         ])
     ], className="mb-3")
     
-    print("Portfolio accordion and summary created successfully")
     return html.Div([portfolio_summary, accordion])

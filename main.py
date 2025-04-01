@@ -850,5 +850,135 @@ def load_initial_portfolio_table(n_intervals):
         traceback.print_exc()
         return html.Div(f"Error loading portfolio: {str(e)}")
 
+@app.callback(
+    Output("quick-transaction-feedback", "children"),
+    Output("portfolio-table", "children", allow_duplicate=True),
+    Input("record-quick-transaction", "n_clicks"),
+    [State("quick-transaction-type", "value"),
+     State("quick-transaction-symbol", "value"),
+     State("quick-transaction-shares", "value"),
+     State("quick-transaction-price", "value"),
+     State("quick-transaction-date", "value")],
+    prevent_initial_call=True
+)
+def record_quick_transaction(n_clicks, transaction_type, symbol, shares, price, date):
+    if n_clicks is None or not symbol or shares is None or price is None:
+        raise dash.exceptions.PreventUpdate
+    
+    # Standardize values
+    symbol = symbol.upper().strip()
+    
+    # Record the transaction
+    from modules.transaction_tracker import record_transaction
+    success = record_transaction(symbol, transaction_type, shares, price, date)
+    
+    # Update portfolio table
+    from components.portfolio_management import create_portfolio_table
+    from modules.portfolio_data_updater import update_portfolio_data
+    portfolio = update_portfolio_data()
+    updated_table = create_portfolio_table(portfolio)
+    
+    # Return appropriate feedback
+    if success:
+        action = "purchase" if transaction_type == "buy" else "sale"
+        return (
+            dbc.Alert(f"Successfully recorded {action} of {shares} shares of {symbol}", color="success"),
+            updated_table
+        )
+    else:
+        return (
+            dbc.Alert(f"Failed to record transaction. Please check your inputs.", color="danger"),
+            dash.no_update
+        )
+
+# Fixed pattern-matching callback for buy transactions from accordion
+# This uses separate callbacks for feedback and table updates
+@app.callback(
+    Output({"type": "buy-feedback", "symbol": dash.dependencies.MATCH}, "children"),
+    Input({"type": "record-buy-button", "symbol": dash.dependencies.MATCH}, "n_clicks"),
+    [State({"type": "buy-shares-input", "symbol": dash.dependencies.MATCH}, "value"),
+     State({"type": "buy-price-input", "symbol": dash.dependencies.MATCH}, "value"),
+     State({"type": "buy-date-input", "symbol": dash.dependencies.MATCH}, "value"),
+     State({"type": "record-buy-button", "symbol": dash.dependencies.MATCH}, "id")],
+    prevent_initial_call=True
+)
+def record_buy_feedback(n_clicks, shares, price, date, button_id):
+    if n_clicks is None or shares is None or price is None:
+        raise dash.exceptions.PreventUpdate
+    
+    # Get the symbol from the button ID
+    symbol = button_id["symbol"]
+    
+    # Record the transaction
+    from modules.transaction_tracker import record_transaction
+    success = record_transaction(symbol, "buy", shares, price, date)
+    
+    # Return appropriate feedback
+    if success:
+        return dbc.Alert(f"Successfully recorded purchase of {shares} shares of {symbol}", color="success")
+    else:
+        return dbc.Alert(f"Failed to record transaction. Please check your inputs.", color="danger")
+
+# Update portfolio table after buy transaction
+@app.callback(
+    Output("portfolio-table", "children", allow_duplicate=True),
+    Input({"type": "record-buy-button", "symbol": dash.dependencies.ALL}, "n_clicks"),
+    prevent_initial_call=True
+)
+def update_table_after_buy(n_clicks_list):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        raise dash.exceptions.PreventUpdate
+    
+    # Update portfolio table
+    from components.portfolio_management import create_portfolio_table
+    from modules.portfolio_data_updater import update_portfolio_data
+    portfolio = update_portfolio_data()
+    return create_portfolio_table(portfolio)
+
+# Fixed pattern-matching callback for sell transactions from accordion
+@app.callback(
+    Output({"type": "sell-feedback", "symbol": dash.dependencies.MATCH}, "children"),
+    Input({"type": "record-sell-button", "symbol": dash.dependencies.MATCH}, "n_clicks"),
+    [State({"type": "sell-shares-input", "symbol": dash.dependencies.MATCH}, "value"),
+     State({"type": "sell-price-input", "symbol": dash.dependencies.MATCH}, "value"),
+     State({"type": "sell-date-input", "symbol": dash.dependencies.MATCH}, "value"),
+     State({"type": "record-sell-button", "symbol": dash.dependencies.MATCH}, "id")],
+    prevent_initial_call=True
+)
+def record_sell_feedback(n_clicks, shares, price, date, button_id):
+    if n_clicks is None or shares is None or price is None:
+        raise dash.exceptions.PreventUpdate
+    
+    # Get the symbol from the button ID
+    symbol = button_id["symbol"]
+    
+    # Record the transaction
+    from modules.transaction_tracker import record_transaction
+    success = record_transaction(symbol, "sell", shares, price, date)
+    
+    # Return appropriate feedback
+    if success:
+        return dbc.Alert(f"Successfully recorded sale of {shares} shares of {symbol}", color="success")
+    else:
+        return dbc.Alert(f"Failed to record sale. Please check that you have enough shares to sell.", color="danger")
+
+# Update portfolio table after sell transaction
+@app.callback(
+    Output("portfolio-table", "children", allow_duplicate=True),
+    Input({"type": "record-sell-button", "symbol": dash.dependencies.ALL}, "n_clicks"),
+    prevent_initial_call=True
+)
+def update_table_after_sell(n_clicks_list):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        raise dash.exceptions.PreventUpdate
+    
+    # Update portfolio table
+    from components.portfolio_management import create_portfolio_table
+    from modules.portfolio_data_updater import update_portfolio_data
+    portfolio = update_portfolio_data()
+    return create_portfolio_table(portfolio)
+
 if __name__ == "__main__":
     app.run(debug=True)
