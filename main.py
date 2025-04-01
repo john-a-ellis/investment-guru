@@ -39,7 +39,12 @@ from components.asset_tracker import create_asset_tracker_component, create_trac
 from components.user_profile import create_user_profile_component
 from components.mutual_fund_manager import create_mutual_fund_manager_component
 from components.portfolio_management import create_portfolio_management_component, create_portfolio_table
-from components.portfolio_visualizer import create_portfolio_visualizer_component, create_performance_graph
+from components.portfolio_visualizer import (
+    create_portfolio_visualizer_component, 
+    create_performance_graph, 
+    create_normalized_performance_graph
+)
+
 from components.portfolio_analysis import (
     create_portfolio_analysis_component, create_allocation_chart, create_sector_chart, 
     create_correlation_chart, create_allocation_details, create_sector_details, 
@@ -684,9 +689,10 @@ def manage_portfolio(add_clicks, update_interval, remove_clicks, symbol, shares,
 @app.callback(
     Output("portfolio-performance-graph", "figure"),
     [Input("portfolio-update-interval", "n_intervals"),
-     Input("performance-period-selector", "value")]
+     Input("performance-period-selector", "value"),
+     Input("performance-chart-type", "value")]  # Add chart type input
 )
-def update_portfolio_graph(n_intervals, period):
+def update_portfolio_graph(n_intervals, period, chart_type):
     """
     Update the portfolio performance graph
     """
@@ -706,10 +712,13 @@ def update_portfolio_graph(n_intervals, period):
                 template="plotly_white"
             )
             return fig
-            
-        # Try to create performance graph
-        return create_performance_graph(portfolio, period)
         
+        # Use the appropriate chart function based on chart_type
+        if chart_type == "normalized":
+            return create_normalized_performance_graph(portfolio, period)
+        else:
+            return create_performance_graph(portfolio, period)
+            
     except Exception as e:
         print(f"Error in update_portfolio_graph: {str(e)}")
         import traceback

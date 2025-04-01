@@ -50,7 +50,19 @@ def create_portfolio_visualizer_component():
                         value="3m",
                         inline=True
                     )
-                ], width=12)
+                ], width=6),
+                dbc.Col([
+                    dbc.Label("Chart Type"),
+                    dbc.RadioItems(
+                        id="performance-chart-type",
+                        options=[
+                            {"label": "Actual Value", "value": "value"},
+                            {"label": "Normalized (100)", "value": "normalized"}
+                        ],
+                        value="normalized",  # Default to normalized view
+                        inline=True
+                    )
+                ], width=6)
             ]),
             dbc.Row([
                 dbc.Col([
@@ -62,7 +74,7 @@ def create_portfolio_visualizer_component():
 
 def get_portfolio_historical_data(portfolio, period="3m"):
     """
-    Get historical performance data for the portfolio with proper currency handling
+    Get historical performance data for the portfolio with robust timezone handling
     
     Args:
         portfolio (dict): Portfolio data
@@ -76,17 +88,8 @@ def get_portfolio_historical_data(portfolio, period="3m"):
     if not portfolio:
         return pd.DataFrame()
     
-    # Map our UI periods to yfinance compatible periods
-    yf_period_map = {
-        "1m": "1mo",
-        "3m": "3mo",
-        "6m": "6mo",
-        "1y": "1y",
-        "all": "max"
-    }
-    
-    # Determine date range based on period
-    end_date = datetime.now()
+    # Define date range based on period
+    end_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     
     if period == "1m":
         start_date = end_date - timedelta(days=30)
@@ -106,6 +109,7 @@ def get_portfolio_historical_data(portfolio, period="3m"):
         for investment in portfolio.values():
             try:
                 purchase_date = datetime.strptime(investment.get("purchase_date", end_date.strftime("%Y-%m-%d")), "%Y-%m-%d")
+                purchase_date = purchase_date.replace(hour=0, minute=0, second=0, microsecond=0)
                 if purchase_date < earliest_date:
                     earliest_date = purchase_date
             except Exception as e:
@@ -139,24 +143,21 @@ def get_portfolio_historical_data(portfolio, period="3m"):
     regular_symbol_data = {}
     regular_symbols = list(set(inv["symbol"] for _, inv in regular_investments))
     
-    yf_period = yf_period_map.get(period, "max")
-    
     # Process regular investments (stocks, ETFs, etc.)
     if regular_symbols:
-        try:
-            for symbol in regular_symbols:
-                try:
-                    ticker = yf.Ticker(symbol)
-                    
-                    # Use start/end date approach
-                    hist = ticker.history(start=start_date, end=end_date)
-                    
-                    if not hist.empty and 'Close' in hist.columns:
-                        regular_symbol_data[symbol] = hist['Close']
-                except Exception as e:
-                    print(f"Error getting historical data for {symbol}: {e}")
-        except Exception as e:
-            print(f"Error processing regular investments: {e}")
+        for symbol in regular_symbols:
+            try:
+                ticker = yf.Ticker(symbol)
+                # Add one day to end_date to ensure we include the current day
+                hist = ticker.history(start=start_date, end=end_date + timedelta(days=1))
+                
+                if not hist.empty and 'Close' in hist.columns:
+                    # Convert all dates to strings for consistent handling
+                    hist_df = pd.DataFrame(hist['Close'])
+                    hist_df.index = hist_df.index.strftime('%Y-%m-%d')
+                    regular_symbol_data[symbol] = hist_df['Close']
+            except Exception as e:
+                print(f"Error getting historical data for {symbol}: {e}")
     
     # Process mutual fund investments
     mutual_fund_data = {}
@@ -168,7 +169,10 @@ def get_portfolio_historical_data(portfolio, period="3m"):
                 fund_hist = mutual_fund_provider.get_historical_data(symbol, start_date, end_date)
                 
                 if not fund_hist.empty and 'Close' in fund_hist.columns:
-                    mutual_fund_data[symbol] = fund_hist['Close']
+                    # Convert all dates to strings for consistent handling
+                    fund_df = pd.DataFrame(fund_hist['Close'])
+                    fund_df.index = fund_df.index.strftime('%Y-%m-%d')
+                    mutual_fund_data[symbol] = fund_df['Close']
             except Exception as e:
                 print(f"Error getting mutual fund data for {symbol}: {e}")
     
@@ -178,16 +182,16 @@ def get_portfolio_historical_data(portfolio, period="3m"):
     if not all_symbols_data:
         return pd.DataFrame()
     
-    # Create DataFrame with all price data
+    # Create DataFrame with all price data - string index dates
     price_df = pd.DataFrame(all_symbols_data)
     
     if price_df.empty:
         return pd.DataFrame()
     
     # Fill missing days with forward fill method
-    price_df = price_df.fillna(method='ffill')
+    price_df = price_df.ffill()  # Use ffill instead of fillna with method
     
-    # Calculate portfolio value for each day
+    # Create a new dataframe for portfolio values using the same string dates
     portfolio_values = pd.DataFrame(index=price_df.index)
     portfolio_values['Total_CAD'] = 0
     portfolio_values['Total_USD'] = 0
@@ -207,75 +211,114 @@ def get_portfolio_historical_data(portfolio, period="3m"):
             if not purchase_date_str:
                 continue
                 
+            # Convert purchase date to string format
             purchase_date = datetime.strptime(purchase_date_str, "%Y-%m-%d")
+            purchase_date_str = purchase_date.strftime('%Y-%m-%d')
             
             # Calculate value for each day
             investment_value = price_df[symbol] * shares
             
-            # Zero out values before purchase date
-            investment_value.loc[investment_value.index < purchase_date] = 0
+            # Column name for this investment
+            column_name = f"{symbol}_{investment_id[-6:]}"
+            
+            # Initialize column with zeros
+            portfolio_values[column_name] = 0
+            
+            # Create a mask for dates after or equal to purchase date (string comparison)
+            mask = pd.Series(portfolio_values.index >= purchase_date_str, index=portfolio_values.index)
+            
+            # Set values only for dates after purchase
+            portfolio_values.loc[mask, column_name] = investment_value.loc[mask]
             
             # Add to appropriate currency total
-            column_name = f"{symbol}_{investment_id[-6:]}"
-            portfolio_values[column_name] = investment_value
-            
             if currency == "CAD":
-                portfolio_values['Total_CAD'] += investment_value
+                portfolio_values.loc[mask, 'Total_CAD'] += investment_value.loc[mask]
             else:  # USD
-                portfolio_values['Total_USD'] += investment_value
+                portfolio_values.loc[mask, 'Total_USD'] += investment_value.loc[mask]
         except Exception as e:
             print(f"Error processing investment {investment_id}: {e}")
+            import traceback
+            traceback.print_exc()
     
-    # Get historical USD to CAD exchange rates for converting totals
-    exchange_rates = get_historical_usd_to_cad_rates(portfolio_values.index.min(), portfolio_values.index.max())
-    
-    # Convert USD to CAD and calculate total
-    if 'Total_USD' in portfolio_values.columns and not portfolio_values['Total_USD'].empty:
-        portfolio_values['USD_in_CAD'] = 0
+    # Get historical USD to CAD exchange rates
+    try:
+        # Convert index back to datetime for exchange rate lookup
+        start_idx = datetime.strptime(portfolio_values.index.min(), '%Y-%m-%d')
+        end_idx = datetime.strptime(portfolio_values.index.max(), '%Y-%m-%d')
         
-        for date in portfolio_values.index:
-            if date in exchange_rates.index:
-                rate = exchange_rates.loc[date]
-                portfolio_values.loc[date, 'USD_in_CAD'] = portfolio_values.loc[date, 'Total_USD'] * rate
+        if start_idx and end_idx:
+            # Get exchange rates
+            exchange_rates = get_historical_usd_to_cad_rates(start_idx, end_idx)
+            
+            # Convert the exchange rate index to strings for consistency
+            exchange_rates_dict = {
+                date.strftime('%Y-%m-%d'): rate 
+                for date, rate in zip(exchange_rates.index, exchange_rates.values)
+            }
+            
+            # Convert USD to CAD
+            if 'Total_USD' in portfolio_values.columns and not portfolio_values['Total_USD'].empty:
+                portfolio_values['USD_in_CAD'] = 0
+                
+                # For each date in portfolio_values
+                for date_str in portfolio_values.index:
+                    # Find the exchange rate for this date
+                    if date_str in exchange_rates_dict:
+                        rate = exchange_rates_dict[date_str]
+                    else:
+                        # Use the latest rate as fallback
+                        rate = list(exchange_rates_dict.values())[-1]
+                    
+                    # Convert USD to CAD
+                    portfolio_values.loc[date_str, 'USD_in_CAD'] = portfolio_values.loc[date_str, 'Total_USD'] * rate
+                
+                # Calculate total in CAD
+                portfolio_values['Total'] = portfolio_values['Total_CAD'] + portfolio_values['USD_in_CAD']
             else:
-                # Find closest available rate
-                closest_idx = exchange_rates.index.get_indexer([date], method='nearest')[0]
-                rate = exchange_rates.iloc[closest_idx]
-                portfolio_values.loc[date, 'USD_in_CAD'] = portfolio_values.loc[date, 'Total_USD'] * rate
-        
-        # Calculate total in CAD
-        portfolio_values['Total'] = portfolio_values['Total_CAD'] + portfolio_values['USD_in_CAD']
-    else:
-        # If no USD values, total is just the CAD total
+                # If no USD values, total is just the CAD total
+                portfolio_values['Total'] = portfolio_values['Total_CAD']
+    except Exception as e:
+        print(f"Error converting currencies: {e}")
+        import traceback
+        traceback.print_exc()
+        # Fallback - just use CAD values
         portfolio_values['Total'] = portfolio_values['Total_CAD']
-    
-    # Resample data to the chosen frequency
-    if resample_freq != 'D':
-        portfolio_values = portfolio_values.resample(resample_freq).last()
     
     # Get benchmark data - S&P/TSX Composite (already in CAD)
     try:
         # Get TSX data
         tsx = yf.Ticker("^GSPTSE")
-        tsx_hist = tsx.history(start=start_date, end=end_date)
+        tsx_hist = tsx.history(start=start_date, end=end_date + timedelta(days=1))
         
         if not tsx_hist.empty:
-            # Resample TSX data if needed
-            if resample_freq != 'D':
-                tsx_hist = tsx_hist.resample(resample_freq).last()
+            # Convert TSX dates to strings
+            tsx_hist_df = pd.DataFrame(tsx_hist['Close'])
+            tsx_hist_df.index = tsx_hist_df.index.strftime('%Y-%m-%d')
+            
+            # Add TSX data for matching dates
+            common_dates = set(portfolio_values.index).intersection(set(tsx_hist_df.index))
+            
+            if common_dates:
+                for date_str in common_dates:
+                    portfolio_values.loc[date_str, 'TSX'] = tsx_hist_df.loc[date_str, 'Close']
                 
-            # Normalize to match starting portfolio value
-            if 'Total' in portfolio_values.columns and len(portfolio_values) > 0:
-                initial_portfolio = portfolio_values['Total'].iloc[0]
-                if initial_portfolio > 0 and 'Close' in tsx_hist.columns and len(tsx_hist) > 0:
-                    initial_tsx = tsx_hist['Close'].iloc[0]
-                    if initial_tsx > 0:
-                        tsx_normalized = tsx_hist['Close'] / initial_tsx * initial_portfolio
-                        portfolio_values['TSX'] = tsx_normalized
+                # Fill any missing TSX values
+                if 'TSX' in portfolio_values.columns:
+                    portfolio_values['TSX'] = portfolio_values['TSX'].ffill()
     except Exception as e:
-        print(f"Error getting TSX data: {e}")
+        print(f"Error adding benchmark data: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    # Convert the string index back to datetime for proper date formatting in charts
+    portfolio_values.index = pd.to_datetime(portfolio_values.index)
+    
+    # Resample data to the chosen frequency
+    if resample_freq != 'D':
+        portfolio_values = portfolio_values.resample(resample_freq).last()
     
     return portfolio_values
+
 
 def create_performance_graph(portfolio, period="3m"):
     """
@@ -571,7 +614,6 @@ from modules.portfolio_utils import (
     get_usd_to_cad_rate, get_historical_usd_to_cad_rates, 
     format_currency, get_combined_value_cad
 )
-
 def create_portfolio_visualizer_component():
     """
     Creates a component for visualizing portfolio performance
@@ -604,7 +646,19 @@ def create_portfolio_visualizer_component():
                         value="3m",
                         inline=True
                     )
-                ], width=12)
+                ], width=6),
+                dbc.Col([
+                    dbc.Label("Chart Type"),
+                    dbc.RadioItems(
+                        id="performance-chart-type",
+                        options=[
+                            {"label": "Actual Value", "value": "value"},
+                            {"label": "Normalized (100)", "value": "normalized"}
+                        ],
+                        value="normalized",  # Default to normalized view
+                        inline=True
+                    )
+                ], width=6)
             ]),
             dbc.Row([
                 dbc.Col([
@@ -614,9 +668,12 @@ def create_portfolio_visualizer_component():
         ])
     ])
 
+
+# Replace the get_portfolio_historical_data function in components/portfolio_visualizer.py with this version
+
 def get_portfolio_historical_data(portfolio, period="3m"):
     """
-    Get historical performance data for the portfolio with proper currency handling
+    Get historical performance data for the portfolio with robust timezone handling
     
     Args:
         portfolio (dict): Portfolio data
@@ -630,17 +687,8 @@ def get_portfolio_historical_data(portfolio, period="3m"):
     if not portfolio:
         return pd.DataFrame()
     
-    # Map our UI periods to yfinance compatible periods
-    yf_period_map = {
-        "1m": "1mo",
-        "3m": "3mo",
-        "6m": "6mo",
-        "1y": "1y",
-        "all": "max"
-    }
-    
-    # Determine date range based on period
-    end_date = datetime.now()
+    # Define date range based on period
+    end_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     
     if period == "1m":
         start_date = end_date - timedelta(days=30)
@@ -660,6 +708,7 @@ def get_portfolio_historical_data(portfolio, period="3m"):
         for investment in portfolio.values():
             try:
                 purchase_date = datetime.strptime(investment.get("purchase_date", end_date.strftime("%Y-%m-%d")), "%Y-%m-%d")
+                purchase_date = purchase_date.replace(hour=0, minute=0, second=0, microsecond=0)
                 if purchase_date < earliest_date:
                     earliest_date = purchase_date
             except Exception as e:
@@ -693,24 +742,21 @@ def get_portfolio_historical_data(portfolio, period="3m"):
     regular_symbol_data = {}
     regular_symbols = list(set(inv["symbol"] for _, inv in regular_investments))
     
-    yf_period = yf_period_map.get(period, "max")
-    
     # Process regular investments (stocks, ETFs, etc.)
     if regular_symbols:
-        try:
-            for symbol in regular_symbols:
-                try:
-                    ticker = yf.Ticker(symbol)
-                    
-                    # Use start/end date approach
-                    hist = ticker.history(start=start_date, end=end_date)
-                    
-                    if not hist.empty and 'Close' in hist.columns:
-                        regular_symbol_data[symbol] = hist['Close']
-                except Exception as e:
-                    print(f"Error getting historical data for {symbol}: {e}")
-        except Exception as e:
-            print(f"Error processing regular investments: {e}")
+        for symbol in regular_symbols:
+            try:
+                ticker = yf.Ticker(symbol)
+                # Add one day to end_date to ensure we include the current day
+                hist = ticker.history(start=start_date, end=end_date + timedelta(days=1))
+                
+                if not hist.empty and 'Close' in hist.columns:
+                    # Convert all dates to strings for consistent handling
+                    hist_df = pd.DataFrame(hist['Close'])
+                    hist_df.index = hist_df.index.strftime('%Y-%m-%d')
+                    regular_symbol_data[symbol] = hist_df['Close']
+            except Exception as e:
+                print(f"Error getting historical data for {symbol}: {e}")
     
     # Process mutual fund investments
     mutual_fund_data = {}
@@ -722,7 +768,10 @@ def get_portfolio_historical_data(portfolio, period="3m"):
                 fund_hist = mutual_fund_provider.get_historical_data(symbol, start_date, end_date)
                 
                 if not fund_hist.empty and 'Close' in fund_hist.columns:
-                    mutual_fund_data[symbol] = fund_hist['Close']
+                    # Convert all dates to strings for consistent handling
+                    fund_df = pd.DataFrame(fund_hist['Close'])
+                    fund_df.index = fund_df.index.strftime('%Y-%m-%d')
+                    mutual_fund_data[symbol] = fund_df['Close']
             except Exception as e:
                 print(f"Error getting mutual fund data for {symbol}: {e}")
     
@@ -732,16 +781,16 @@ def get_portfolio_historical_data(portfolio, period="3m"):
     if not all_symbols_data:
         return pd.DataFrame()
     
-    # Create DataFrame with all price data
+    # Create DataFrame with all price data - string index dates
     price_df = pd.DataFrame(all_symbols_data)
     
     if price_df.empty:
         return pd.DataFrame()
     
     # Fill missing days with forward fill method
-    price_df = price_df.fillna(method='ffill')
+    price_df = price_df.ffill()  # Use ffill instead of fillna with method
     
-    # Calculate portfolio value for each day
+    # Create a new dataframe for portfolio values using the same string dates
     portfolio_values = pd.DataFrame(index=price_df.index)
     portfolio_values['Total_CAD'] = 0
     portfolio_values['Total_USD'] = 0
@@ -760,94 +809,112 @@ def get_portfolio_historical_data(portfolio, period="3m"):
             purchase_date_str = investment.get("purchase_date")
             if not purchase_date_str:
                 continue
-            
-            # Convert purchase date to naive datetime (remove timezone info)
+                
+            # Convert purchase date to string format
             purchase_date = datetime.strptime(purchase_date_str, "%Y-%m-%d")
+            purchase_date_str = purchase_date.strftime('%Y-%m-%d')
             
-            # Convert index dates to naive datetime for comparison
+            # Calculate value for each day
             investment_value = price_df[symbol] * shares
             
-            # Create a mask for dates after purchase date (ensuring both are naive datetimes)
-            mask = pd.Series(
-                [d.replace(tzinfo=None) >= purchase_date for d in price_df.index], 
-                index=price_df.index
-            )
+            # Column name for this investment
+            column_name = f"{symbol}_{investment_id[-6:]}"
             
-            # Zero out values before purchase date using the mask
-            investment_value = investment_value.where(mask, 0)
+            # Initialize column with zeros
+            portfolio_values[column_name] = 0
+            
+            # Create a mask for dates after or equal to purchase date (string comparison)
+            mask = pd.Series(portfolio_values.index >= purchase_date_str, index=portfolio_values.index)
+            
+            # Set values only for dates after purchase
+            portfolio_values.loc[mask, column_name] = investment_value.loc[mask]
             
             # Add to appropriate currency total
-            column_name = f"{symbol}_{investment_id[-6:]}"
-            portfolio_values[column_name] = investment_value
-            
             if currency == "CAD":
-                portfolio_values['Total_CAD'] += investment_value
+                portfolio_values.loc[mask, 'Total_CAD'] += investment_value.loc[mask]
             else:  # USD
-                portfolio_values['Total_USD'] += investment_value
+                portfolio_values.loc[mask, 'Total_USD'] += investment_value.loc[mask]
         except Exception as e:
             print(f"Error processing investment {investment_id}: {e}")
             import traceback
             traceback.print_exc()
     
-    # Get historical USD to CAD exchange rates for converting totals
-    exchange_rates = get_historical_usd_to_cad_rates(portfolio_values.index.min(), portfolio_values.index.max())
-    
-    # Convert USD to CAD and calculate total
-    if 'Total_USD' in portfolio_values.columns and not portfolio_values['Total_USD'].empty:
-        portfolio_values['USD_in_CAD'] = 0
+    # Get historical USD to CAD exchange rates
+    try:
+        # Convert index back to datetime for exchange rate lookup
+        start_idx = datetime.strptime(portfolio_values.index.min(), '%Y-%m-%d')
+        end_idx = datetime.strptime(portfolio_values.index.max(), '%Y-%m-%d')
         
-        for date in portfolio_values.index:
-            # Convert date to naive datetime if it has timezone info
-            lookup_date = date
-            if hasattr(date, 'tzinfo') and date.tzinfo is not None:
-                lookup_date = date.replace(tzinfo=None)
+        if start_idx and end_idx:
+            # Get exchange rates
+            exchange_rates = get_historical_usd_to_cad_rates(start_idx, end_idx)
+            
+            # Convert the exchange rate index to strings for consistency
+            exchange_rates_dict = {
+                date.strftime('%Y-%m-%d'): rate 
+                for date, rate in zip(exchange_rates.index, exchange_rates.values)
+            }
+            
+            # Convert USD to CAD
+            if 'Total_USD' in portfolio_values.columns and not portfolio_values['Total_USD'].empty:
+                portfolio_values['USD_in_CAD'] = 0
                 
-            # Find the nearest rate in exchange_rates
-            if lookup_date in exchange_rates.index:
-                rate = exchange_rates.loc[lookup_date]
-                portfolio_values.loc[date, 'USD_in_CAD'] = portfolio_values.loc[date, 'Total_USD'] * rate
+                # For each date in portfolio_values
+                for date_str in portfolio_values.index:
+                    # Find the exchange rate for this date
+                    if date_str in exchange_rates_dict:
+                        rate = exchange_rates_dict[date_str]
+                    else:
+                        # Use the latest rate as fallback
+                        rate = list(exchange_rates_dict.values())[-1]
+                    
+                    # Convert USD to CAD
+                    portfolio_values.loc[date_str, 'USD_in_CAD'] = portfolio_values.loc[date_str, 'Total_USD'] * rate
+                
+                # Calculate total in CAD
+                portfolio_values['Total'] = portfolio_values['Total_CAD'] + portfolio_values['USD_in_CAD']
             else:
-                # Find closest available rate using nearest method
-                try:
-                    closest_idx = exchange_rates.index.get_indexer([lookup_date], method='nearest')[0]
-                    rate = exchange_rates.iloc[closest_idx]
-                    portfolio_values.loc[date, 'USD_in_CAD'] = portfolio_values.loc[date, 'Total_USD'] * rate
-                except Exception as e:
-                    print(f"Error finding exchange rate for {lookup_date}: {e}")
-                    # Use a default rate as fallback
-                    portfolio_values.loc[date, 'USD_in_CAD'] = portfolio_values.loc[date, 'Total_USD'] * 1.33
-        
-        # Calculate total in CAD
-        portfolio_values['Total'] = portfolio_values['Total_CAD'] + portfolio_values['USD_in_CAD']
-    else:
-        # If no USD values, total is just the CAD total
+                # If no USD values, total is just the CAD total
+                portfolio_values['Total'] = portfolio_values['Total_CAD']
+    except Exception as e:
+        print(f"Error converting currencies: {e}")
+        import traceback
+        traceback.print_exc()
+        # Fallback - just use CAD values
         portfolio_values['Total'] = portfolio_values['Total_CAD']
-    
-    # Resample data to the chosen frequency
-    if resample_freq != 'D':
-        portfolio_values = portfolio_values.resample(resample_freq).last()
     
     # Get benchmark data - S&P/TSX Composite (already in CAD)
     try:
         # Get TSX data
         tsx = yf.Ticker("^GSPTSE")
-        tsx_hist = tsx.history(start=start_date, end=end_date)
+        tsx_hist = tsx.history(start=start_date, end=end_date + timedelta(days=1))
         
         if not tsx_hist.empty:
-            # Resample TSX data if needed
-            if resample_freq != 'D':
-                tsx_hist = tsx_hist.resample(resample_freq).last()
+            # Convert TSX dates to strings
+            tsx_hist_df = pd.DataFrame(tsx_hist['Close'])
+            tsx_hist_df.index = tsx_hist_df.index.strftime('%Y-%m-%d')
+            
+            # Add TSX data for matching dates
+            common_dates = set(portfolio_values.index).intersection(set(tsx_hist_df.index))
+            
+            if common_dates:
+                for date_str in common_dates:
+                    portfolio_values.loc[date_str, 'TSX'] = tsx_hist_df.loc[date_str, 'Close']
                 
-            # Normalize to match starting portfolio value
-            if 'Total' in portfolio_values.columns and len(portfolio_values) > 0:
-                initial_portfolio = portfolio_values['Total'].iloc[0]
-                if initial_portfolio > 0 and 'Close' in tsx_hist.columns and len(tsx_hist) > 0:
-                    initial_tsx = tsx_hist['Close'].iloc[0]
-                    if initial_tsx > 0:
-                        tsx_normalized = tsx_hist['Close'] / initial_tsx * initial_portfolio
-                        portfolio_values['TSX'] = tsx_normalized
+                # Fill any missing TSX values
+                if 'TSX' in portfolio_values.columns:
+                    portfolio_values['TSX'] = portfolio_values['TSX'].ffill()
     except Exception as e:
-        print(f"Error getting TSX data: {e}")
+        print(f"Error adding benchmark data: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    # Convert the string index back to datetime for proper date formatting in charts
+    portfolio_values.index = pd.to_datetime(portfolio_values.index)
+    
+    # Resample data to the chosen frequency
+    if resample_freq != 'D':
+        portfolio_values = portfolio_values.resample(resample_freq).last()
     
     return portfolio_values
 
@@ -1128,3 +1195,247 @@ def create_summary_stats(portfolio):
             ])
         ], width=3)
     ])
+
+def create_normalized_performance_graph(portfolio, period="3m"):
+    """
+    Create a normalized performance graph where all assets start at 100,
+    making trend comparison much easier.
+    
+    Args:
+        portfolio (dict): Portfolio data
+        period (str): Time period to display
+        
+    Returns:
+        Figure: Plotly figure with normalized performance graph
+    """
+    # Get historical data
+    try:
+        historical_data = get_portfolio_historical_data(portfolio, period)
+    except Exception as e:
+        print(f"Error getting historical data: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Return empty figure with error message
+        fig = go.Figure()
+        fig.update_layout(
+            title=f"Portfolio Performance (Error: {str(e)})",
+            xaxis_title="Date",
+            yaxis_title="Normalized Value (Starting at 100)",
+            template="plotly_white"
+        )
+        return fig
+    
+    if historical_data.empty or 'Total' not in historical_data.columns:
+        # Return empty figure
+        fig = go.Figure()
+        fig.update_layout(
+            title="Portfolio Performance (No Data Available)",
+            xaxis_title="Date",
+            yaxis_title="Normalized Value (Starting at 100)",
+            template="plotly_white"
+        )
+        return fig
+    
+    # Create a new dataframe for normalized values
+    normalized_data = pd.DataFrame(index=historical_data.index)
+    
+    # Get all relevant columns for normalization (portfolio total and individual investments)
+    relevant_columns = ['Total']
+    
+    # Add TSX benchmark if available
+    if 'TSX' in historical_data.columns:
+        relevant_columns.append('TSX')
+    
+    # Add individual investment columns
+    investment_columns = [col for col in historical_data.columns 
+                          if col not in ['Total', 'TSX', 'Total_CAD', 'Total_USD', 'USD_in_CAD']]
+    
+    # Find top investments by final value to reduce clutter
+    if investment_columns:
+        try:
+            final_values = {}
+            for col in investment_columns:
+                if col in historical_data.columns and not historical_data[col].empty and len(historical_data[col]) > 0:
+                    # Get the last non-zero, non-NaN value
+                    last_valid = historical_data[col].replace(0, np.nan).dropna()
+                    if not last_valid.empty:
+                        final_values[col] = last_valid.iloc[-1]
+            
+            # Sort investments by final value and take top 5
+            top_investments = sorted(final_values.items(), key=lambda x: x[1], reverse=True)[:5]
+            investment_columns = [col for col, _ in top_investments]
+        except Exception as e:
+            print(f"Error finding top investments: {e}")
+    
+    # Add top investment columns to the list
+    relevant_columns.extend(investment_columns)
+    
+    # Normalize each column to start at 100
+    for col in relevant_columns:
+        if col in historical_data.columns:
+            try:
+                # Get series with non-zero values
+                non_zero_series = historical_data[col].replace(0, np.nan).dropna()
+                
+                if not non_zero_series.empty:
+                    # Get the first non-zero value
+                    first_valid_value = non_zero_series.iloc[0]
+                    
+                    if first_valid_value > 0:
+                        # Normalize to 100
+                        normalized_data[col] = historical_data[col] / first_valid_value * 100
+                        
+                        # Replace NaN with 0 for dates before first valid value
+                        normalized_data[col] = normalized_data[col].fillna(0)
+            except Exception as e:
+                print(f"Error normalizing column {col}: {e}")
+    
+    # Create figure
+    fig = go.Figure()
+    
+    # Add portfolio line
+    if 'Total' in normalized_data.columns:
+        fig.add_trace(go.Scatter(
+            x=normalized_data.index,
+            y=normalized_data['Total'],
+            mode='lines',
+            name='Portfolio',
+            line=dict(color='#2C3E50', width=3)
+        ))
+    
+    # Add benchmark line if available
+    if 'TSX' in normalized_data.columns:
+        fig.add_trace(go.Scatter(
+            x=normalized_data.index,
+            y=normalized_data['TSX'],
+            mode='lines',
+            name='S&P/TSX Composite',
+            line=dict(color='#3498DB', width=2, dash='dash')
+        ))
+    
+    # Add individual investment lines
+    for col in investment_columns:
+        if col in normalized_data.columns:
+            # Extract the symbol from the column name
+            symbol = col.split('_')[0] if '_' in col else col
+            
+            fig.add_trace(go.Scatter(
+                x=normalized_data.index,
+                y=normalized_data[col],
+                mode='lines',
+                name=f"{symbol}",
+                line=dict(width=1.5),
+                visible='legendonly'  # Hidden by default
+            ))
+    
+    # Calculate performance metrics (since normalization starts at 100)
+    try:
+        if 'Total' in normalized_data.columns and len(normalized_data) > 1:
+            # Get first and last valid values
+            total_series = normalized_data['Total'].replace(0, np.nan).dropna()
+            
+            if not total_series.empty and len(total_series) > 1:
+                first_valid = 100  # Normalized start
+                final_valid = total_series.iloc[-1]
+                
+                final_performance = final_valid - first_valid  # Performance percentage
+                
+                # Add performance annotation
+                fig.add_annotation(
+                    x=0.02,
+                    y=0.98,
+                    xref="paper",
+                    yref="paper",
+                    text=f"Portfolio Performance: {final_performance:.2f}%",
+                    showarrow=False,
+                    font=dict(
+                        size=14,
+                        color="white"
+                    ),
+                    align="left",
+                    bgcolor="#2C3E50",
+                    bordercolor="#1ABC9C",
+                    borderwidth=2,
+                    borderpad=4,
+                    opacity=0.8
+                )
+    except Exception as e:
+        print(f"Error calculating performance metrics: {e}")
+    
+    # Format date on x-axis based on period
+    dtick = None
+    if period == "1m":
+        dtick = "d7"  # Weekly ticks for 1 month view
+    elif period == "3m":
+        dtick = "d14"  # Bi-weekly ticks for 3 month view
+    elif period == "6m":
+        dtick = "M1"  # Monthly ticks for 6 month view
+    elif period == "1y":
+        dtick = "M2"  # Bi-monthly ticks for 1 year view
+    
+    # Update layout
+    period_text = {"1m": "1 Month", "3m": "3 Months", "6m": "6 Months", "1y": "1 Year", "all": "All Time"}
+    title_text = f"Normalized Performance - {period_text.get(period, period)}"
+    
+    fig.update_layout(
+        title=title_text,
+        xaxis_title="Date",
+        yaxis_title="Normalized Value (Starting at 100)",
+        template="plotly_white",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        ),
+        margin=dict(l=20, r=20, t=60, b=20),
+        hovermode="x unified"
+    )
+    
+    # Add a reference line at 100 (starting value)
+    fig.add_shape(
+        type="line",
+        x0=0,
+        y0=100,
+        x1=1,
+        y1=100,
+        xref="paper",
+        line=dict(
+            color="gray",
+            width=1,
+            dash="dot",
+        )
+    )
+    
+    # Add zones for positive and negative performance
+    fig.add_shape(
+        type="rect",
+        x0=0,
+        y0=100,
+        x1=1,
+        y1=200,  # Arbitrary upper limit
+        xref="paper",
+        fillcolor="rgba(0, 255, 0, 0.04)",
+        line=dict(width=0),
+        layer="below"
+    )
+    
+    fig.add_shape(
+        type="rect",
+        x0=0,
+        y0=0,  # Arbitrary lower limit
+        x1=1,
+        y1=100,
+        xref="paper",
+        fillcolor="rgba(255, 0, 0, 0.04)",
+        line=dict(width=0),
+        layer="below"
+    )
+    
+    # Apply date formatting if specified
+    if dtick:
+        fig.update_xaxes(dtick=dtick)
+    
+    return fig
