@@ -1,6 +1,32 @@
-/* Portfolio accordion styling */
-#portfolio-accordion {
+/* Portfolio Accordion Styling */
+.portfolio-accordion .accordion-button {
     width: 100%;
+    padding-right: 20px;
+}
+
+.portfolio-accordion .accordion-button::after {
+    margin-left: auto;
+}
+
+.portfolio-accordion-header {
+    width: 100%;
+    display: flex;
+}
+
+/* Make sure the accordion header content spans the full width */
+.portfolio-accordion .accordion-button .w-100 {
+    flex: 1;
+}
+
+/* Ensure the row inside the header has proper alignment */
+.portfolio-accordion .accordion-button .row {
+    width: 100%;
+    margin: 0;
+}
+
+/* Ensure columns inside the header distribute properly */
+.portfolio-accordion .accordion-button .col {
+    padding: 0 5px;
 }
 
 /* Make accordion items full width */

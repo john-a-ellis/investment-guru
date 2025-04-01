@@ -436,13 +436,13 @@ def create_performance_graph(portfolio, period="3mo"):
     # Format date on x-axis based on period
     dtick = None
     if period == "1m":
-        dtick = "7D"  # Weekly ticks for 1 month view
+        dtick = "d7"  # Weekly ticks for 1 month view
     elif period == "3m":
-        dtick = "14D"  # Bi-weekly ticks for 3 month view
+        dtick = "d14"  # Bi-weekly ticks for 3 month view
     elif period == "6m":
-        dtick = "1M"  # Monthly ticks for 6 month view
+        dtick = "M1"  # Monthly ticks for 6 month view
     elif period == "1y":
-        dtick = "2M"  # Bi-monthly ticks for 1 year view
+        dtick = "M2"  # Bi-monthly ticks for 1 year view
     
     # Update layout
     period_text = {"1m": "1 Month", "3m": "3 Months", "6m": "6 Months", "1y": "1 Year", "all": "All Time"}

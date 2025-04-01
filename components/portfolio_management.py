@@ -104,6 +104,9 @@ def load_transactions():
         print(f"Error loading transactions: {e}")
         return {}
 
+# Update the create_portfolio_table function in portfolio_management.py
+# Replace the existing function with this one
+
 def create_portfolio_table(portfolio):
     """
     Create a table to display current portfolio investments with accordion components
@@ -198,7 +201,7 @@ def create_portfolio_table(portfolio):
     sorted_groups = sorted(grouped_investments.items(), key=lambda x: x[1]["total_current_value"], reverse=True)
     
     for symbol, group in sorted_groups:
-        # Create the header with summary information
+        # Create the header with summary information - FIXED LAYOUT
         header = html.Div([
             dbc.Row([
                 dbc.Col(html.Strong(symbol), width=2),
@@ -218,8 +221,8 @@ def create_portfolio_table(portfolio):
                     width=1
                 ),
                 dbc.Col(group["currency"], width=1)
-            ], className="g-0")
-        ])
+            ], className="g-0 w-100")  # Added w-100 class to ensure full width
+        ], className="w-100 portfolio-accordion-header")  # Added custom class for styling
         
         # Create detailed view with tabs for Positions and Transactions
         transaction_table = None
@@ -312,7 +315,8 @@ def create_portfolio_table(portfolio):
         accordion_items,
         start_collapsed=True,
         flush=True,
-        id="portfolio-accordion"
+        id="portfolio-accordion",
+        class_name="portfolio-accordion"  # Added custom class for CSS targeting
     )
     
     # Add a summary row for the entire portfolio
