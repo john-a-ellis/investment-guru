@@ -1,0 +1,12 @@
+{
+    "CGL-C.TO": {
+        "name": "iShares Gold Bullion Non-Hedged ETF",
+        "type": "etf",
+        "added_date": "2025-03-31"
+    },
+    "SVR-C.TO": {
+        "name": "BlackRock iShares Silver Bullion ETF Non-Hedged",
+        "type": "etf",
+        "added_date": "2025-03-31"
+    }
+}

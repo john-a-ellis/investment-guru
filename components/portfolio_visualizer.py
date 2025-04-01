@@ -34,13 +34,13 @@ def create_portfolio_visualizer_component():
                     dbc.RadioItems(
                         id="performance-period-selector",
                         options=[
-                            {"label": "1 Month", "value": "1m"},
-                            {"label": "3 Months", "value": "3m"},
-                            {"label": "6 Months", "value": "6m"},
+                            {"label": "1 Month", "value": "1mo"},
+                            {"label": "3 Months", "value": "3mo"},
+                            {"label": "6 Months", "value": "6mo"},
                             {"label": "1 Year", "value": "1y"},
                             {"label": "All Time", "value": "all"}
                         ],
-                        value="3m",
+                        value="3mo",
                         inline=True
                     )
                 ], width=12)
@@ -55,7 +55,7 @@ def create_portfolio_visualizer_component():
 
 def get_portfolio_historical_data(portfolio, period="3m"):
     """
-    Get historical performance data for the portfolio
+    Get historical performance data for the portfolio with mutual fund support
     
     Args:
         portfolio (dict): Portfolio data
@@ -64,11 +64,26 @@ def get_portfolio_historical_data(portfolio, period="3m"):
     Returns:
         DataFrame: Historical portfolio data
     """
+    from modules.mutual_fund_provider import MutualFundProvider
+    
+    print(f"Starting get_portfolio_historical_data with period: {period}")
+    
     if not portfolio:
+        print("Portfolio is empty")
         return pd.DataFrame()
-        
-    # Determine start date based on period
+    
+    # Map our UI periods to yfinance compatible periods
+    yf_period_map = {
+        "1m": "1mo",
+        "3m": "3mo",
+        "6m": "6mo",
+        "1y": "1y",
+        "all": "max"
+    }
+    
+    # Determine date range based on period
     end_date = datetime.now()
+    
     if period == "1m":
         start_date = end_date - timedelta(days=30)
         resample_freq = 'D'  # Daily for shorter periods
@@ -85,9 +100,13 @@ def get_portfolio_historical_data(portfolio, period="3m"):
         # Find earliest purchase date
         earliest_date = end_date
         for investment in portfolio.values():
-            purchase_date = datetime.strptime(investment.get("purchase_date", end_date.strftime("%Y-%m-%d")), "%Y-%m-%d")
-            if purchase_date < earliest_date:
-                earliest_date = purchase_date
+            try:
+                purchase_date = datetime.strptime(investment.get("purchase_date", end_date.strftime("%Y-%m-%d")), "%Y-%m-%d")
+                if purchase_date < earliest_date:
+                    earliest_date = purchase_date
+            except Exception as e:
+                print(f"Error parsing purchase date: {e}")
+                continue
         
         # Go back at least 1 day before earliest purchase
         start_date = earliest_date - timedelta(days=1)
@@ -98,35 +117,89 @@ def get_portfolio_historical_data(portfolio, period="3m"):
         else:
             resample_freq = 'D'  # Daily
     
-    # Get historical data for each symbol
-    symbol_data = {}
-    symbols = [inv["symbol"] for inv in portfolio.values()]
+    print(f"Date range: {start_date} to {end_date}")
     
-    # Use a batch request if possible to minimize API calls
-    try:
-        ticker_data = yf.download(symbols, start=start_date, end=end_date, group_by='ticker')
-        
-        # Process each symbol
-        for symbol in symbols:
-            if symbol in ticker_data.columns:
-                hist = ticker_data[symbol]
-                symbol_data[symbol] = hist['Close']
-    except:
-        # Fallback to individual requests if batch fails
-        for symbol in symbols:
+    # Initialize mutual fund provider
+    mutual_fund_provider = MutualFundProvider()
+    
+    # Separate investments by type to handle them differently
+    regular_investments = []  # Stocks, ETFs, etc.
+    mutual_fund_investments = []  # Mutual funds
+    
+    for inv_id, inv in portfolio.items():
+        asset_type = inv.get("asset_type", "stock")
+        if asset_type == "mutual_fund":
+            mutual_fund_investments.append((inv_id, inv))
+        else:
+            regular_investments.append((inv_id, inv))
+    
+    # Get historical data for regular investments using yfinance
+    regular_symbol_data = {}
+    regular_symbols = list(set(inv["symbol"] for _, inv in regular_investments))
+    
+    print(f"Regular symbols to fetch: {regular_symbols}")
+    yf_period = yf_period_map.get(period, "max")
+    
+    # Process regular investments (stocks, ETFs, etc.)
+    if regular_symbols:
+        try:
+            print("Using individual ticker downloads for regular investments")
+            for symbol in regular_symbols:
+                try:
+                    print(f"Fetching data for {symbol} with period {yf_period}...")
+                    ticker = yf.Ticker(symbol)
+                    
+                    # Use start/end date approach
+                    hist = ticker.history(start=start_date, end=end_date)
+                    
+                    if hist.empty:
+                        print(f"No data returned for {symbol}")
+                        continue
+                        
+                    if 'Close' in hist.columns:
+                        regular_symbol_data[symbol] = hist['Close']
+                        print(f"Added {symbol} data with {len(regular_symbol_data[symbol])} rows")
+                    else:
+                        print(f"Missing 'Close' column for {symbol}")
+                except Exception as e:
+                    print(f"Error getting historical data for {symbol}: {e}")
+        except Exception as e:
+            print(f"Error processing regular investments: {e}")
+    
+    # Process mutual fund investments
+    mutual_fund_data = {}
+    mutual_fund_symbols = list(set(inv["symbol"] for _, inv in mutual_fund_investments))
+    
+    print(f"Mutual fund symbols to fetch: {mutual_fund_symbols}")
+    if mutual_fund_symbols:
+        for symbol in mutual_fund_symbols:
             try:
-                ticker = yf.Ticker(symbol)
-                hist = ticker.history(start=start_date, end=end_date)
-                if not hist.empty:
-                    symbol_data[symbol] = hist['Close']
+                print(f"Fetching mutual fund data for {symbol}...")
+                fund_hist = mutual_fund_provider.get_historical_data(symbol, start_date, end_date)
+                
+                if not fund_hist.empty and 'Close' in fund_hist.columns:
+                    mutual_fund_data[symbol] = fund_hist['Close']
+                    print(f"Added mutual fund {symbol} data with {len(mutual_fund_data[symbol])} rows")
+                else:
+                    print(f"No historical data for mutual fund {symbol}")
             except Exception as e:
-                print(f"Error getting historical data for {symbol}: {e}")
-    
-    if not symbol_data:
-        return pd.DataFrame()
+                print(f"Error getting mutual fund data for {symbol}: {e}")
     
     # Combine all price data
-    price_df = pd.DataFrame(symbol_data)
+    all_symbols_data = {**regular_symbol_data, **mutual_fund_data}
+    
+    if not all_symbols_data:
+        print("Failed to retrieve data for any symbols")
+        return pd.DataFrame()
+    
+    # Create DataFrame with all price data
+    price_df = pd.DataFrame(all_symbols_data)
+    
+    if price_df.empty:
+        print("Combined price DataFrame is empty")
+        return pd.DataFrame()
+        
+    print(f"Combined price data shape: {price_df.shape}")
     
     # Fill missing days with forward fill method
     price_df = price_df.fillna(method='ffill')
@@ -135,14 +208,27 @@ def get_portfolio_historical_data(portfolio, period="3m"):
     portfolio_values = pd.DataFrame(index=price_df.index)
     portfolio_values['Total'] = 0
     
-    # Create a separate column for each investment to show individual performance
+    # Process all investments
     for investment_id, investment in portfolio.items():
-        symbol = investment["symbol"]
-        shares = investment["shares"]
+        symbol = investment.get("symbol")
+        shares = investment.get("shares", 0)
         
-        if symbol in price_df.columns:
+        if not symbol or not shares:
+            print(f"Investment {investment_id} missing symbol or shares")
+            continue
+            
+        if symbol not in price_df.columns:
+            print(f"Symbol {symbol} not in price data")
+            continue
+        
+        try:
             # Skip investments before their purchase date
-            purchase_date = datetime.strptime(investment.get("purchase_date", start_date.strftime("%Y-%m-%d")), "%Y-%m-%d")
+            purchase_date_str = investment.get("purchase_date")
+            if not purchase_date_str:
+                print(f"Investment {investment_id} missing purchase date")
+                continue
+                
+            purchase_date = datetime.strptime(purchase_date_str, "%Y-%m-%d")
             
             # Calculate value for each day
             investment_value = price_df[symbol] * shares
@@ -151,37 +237,66 @@ def get_portfolio_historical_data(portfolio, period="3m"):
             investment_value.loc[investment_value.index < purchase_date] = 0
             
             # Add to portfolio total and store individual value
-            portfolio_values[f"{symbol}_{investment_id[-6:]}"] = investment_value
+            column_name = f"{symbol}_{investment_id[-6:]}"
+            portfolio_values[column_name] = investment_value
             portfolio_values['Total'] += investment_value
+            
+            print(f"Added investment {investment_id} ({symbol}) to portfolio values")
+        except Exception as e:
+            print(f"Error processing investment {investment_id}: {e}")
+    
+    if 'Total' not in portfolio_values.columns or portfolio_values['Total'].sum() == 0:
+        print("Portfolio values missing Total column or Total is all zeros")
+        return pd.DataFrame()
+        
+    print(f"Portfolio values shape: {portfolio_values.shape}")
     
     # Resample data to the chosen frequency
     if resample_freq != 'D':
+        print(f"Resampling to {resample_freq} frequency")
         portfolio_values = portfolio_values.resample(resample_freq).last()
     
     # Get benchmark data - S&P/TSX Composite
     try:
         # Get TSX data
+        print("Fetching TSX benchmark data...")
         tsx = yf.Ticker("^GSPTSE")
         tsx_hist = tsx.history(start=start_date, end=end_date)
         
         if not tsx_hist.empty:
             # Resample TSX data if needed
-            if resample_freq != 'D':
+            if resample_freq != 'D' and 'Close' in tsx_hist.columns:
                 tsx_hist = tsx_hist.resample(resample_freq).last()
                 
             # Normalize to match starting portfolio value
-            if not portfolio_values.empty and portfolio_values['Total'].iloc[0] > 0:
-                initial_value = portfolio_values['Total'].iloc[0]
-                tsx_normalized = tsx_hist['Close'] / tsx_hist['Close'].iloc[0] * initial_value
-                portfolio_values['TSX'] = tsx_normalized
+            if not portfolio_values.empty and 'Total' in portfolio_values.columns and len(portfolio_values) > 0:
+                initial_portfolio = portfolio_values['Total'].iloc[0]
+                if initial_portfolio > 0 and 'Close' in tsx_hist.columns and len(tsx_hist) > 0:
+                    initial_tsx = tsx_hist['Close'].iloc[0]
+                    if initial_tsx > 0:
+                        tsx_normalized = tsx_hist['Close'] / initial_tsx * initial_portfolio
+                        portfolio_values['TSX'] = tsx_normalized
+                        print("Added TSX benchmark data")
+                    else:
+                        print("Initial TSX value is zero or negative")
+                else:
+                    print("Initial portfolio value is zero or negative, or missing TSX Close column")
+            else:
+                print("Couldn't normalize TSX data - empty portfolio values")
+        else:
+            print("TSX benchmark data is empty")
     except Exception as e:
         print(f"Error getting TSX data: {e}")
     
+    print(f"Final portfolio values shape: {portfolio_values.shape}")
+    if not portfolio_values.empty:
+        print(f"Final columns: {portfolio_values.columns.tolist()}")
+        
     return portfolio_values
 
-def create_performance_graph(portfolio, period="3m"):
+def create_performance_graph(portfolio, period="3mo"):
     """
-    Create a performance graph for the portfolio
+    Create a performance graph for the portfolio with enhanced error handling
     
     Args:
         portfolio (dict): Portfolio data
@@ -190,14 +305,44 @@ def create_performance_graph(portfolio, period="3m"):
     Returns:
         Figure: Plotly figure with performance graph
     """
-    # Get historical data
-    historical_data = get_portfolio_historical_data(portfolio, period)
+    print(f"Creating performance graph for period: {period}")
     
-    if historical_data.empty or 'Total' not in historical_data.columns:
-        # Return empty figure if no data
+    # Get historical data
+    try:
+        historical_data = get_portfolio_historical_data(portfolio, period)
+    except Exception as e:
+        print(f"Error getting historical data: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Return empty figure with error message
+        fig = go.Figure()
+        fig.update_layout(
+            title=f"Portfolio Performance (Error: {str(e)})",
+            xaxis_title="Date",
+            yaxis_title="Value ($)",
+            template="plotly_white"
+        )
+        return fig
+    
+    if historical_data.empty:
+        print("Historical data is empty")
+        # Return empty figure
         fig = go.Figure()
         fig.update_layout(
             title="Portfolio Performance (No Data Available)",
+            xaxis_title="Date",
+            yaxis_title="Value ($)",
+            template="plotly_white"
+        )
+        return fig
+        
+    if 'Total' not in historical_data.columns:
+        print("'Total' column missing from historical data")
+        # Return empty figure
+        fig = go.Figure()
+        fig.update_layout(
+            title="Portfolio Performance (Missing Total Column)",
             xaxis_title="Date",
             yaxis_title="Value ($)",
             template="plotly_white"
@@ -221,25 +366,28 @@ def create_performance_graph(portfolio, period="3m"):
     
     # Limit to top 5 investments by final value to avoid cluttering the chart
     if investment_columns:
-        final_values = {col: historical_data[col].iloc[-1] for col in investment_columns if not historical_data[col].empty}
-        top_investments = sorted(final_values.items(), key=lambda x: x[1], reverse=True)[:5]
-        
-        for col, _ in top_investments:
-            # Skip if all values are zero
-            if historical_data[col].sum() == 0:
-                continue
-                
-            # Extract the symbol from the column name
-            symbol = col.split('_')[0]
+        try:
+            final_values = {col: historical_data[col].iloc[-1] for col in investment_columns 
+                          if not historical_data[col].empty and historical_data[col].iloc[-1] > 0}
             
-            fig.add_trace(go.Scatter(
-                x=historical_data.index,
-                y=historical_data[col],
-                mode='lines',
-                name=f"{symbol}",
-                line=dict(width=1.5),
-                visible='legendonly'  # Hidden by default
-            ))
+            top_investments = sorted(final_values.items(), key=lambda x: x[1], reverse=True)[:5]
+            
+            for col, value in top_investments:
+                # Extract the symbol from the column name
+                symbol = col.split('_')[0] if '_' in col else col
+                
+                fig.add_trace(go.Scatter(
+                    x=historical_data.index,
+                    y=historical_data[col],
+                    mode='lines',
+                    name=f"{symbol}",
+                    line=dict(width=1.5),
+                    visible='legendonly'  # Hidden by default
+                ))
+                
+            print(f"Added {len(top_investments)} individual investment lines")
+        except Exception as e:
+            print(f"Error adding individual investment lines: {e}")
     
     # Add benchmark line if available
     if 'TSX' in historical_data.columns and not historical_data['TSX'].empty:
@@ -250,35 +398,40 @@ def create_performance_graph(portfolio, period="3m"):
             name='S&P/TSX Composite',
             line=dict(color='#3498DB', width=2, dash='dash')
         ))
+        print("Added TSX benchmark line")
     
     # Calculate performance metrics
-    if len(historical_data) > 1:
-        initial_value = historical_data['Total'].iloc[0]
-        final_value = historical_data['Total'].iloc[-1]
-        
-        # Skip if initial value is zero (to avoid division by zero)
-        if initial_value > 0:
-            performance_pct = ((final_value / initial_value) - 1) * 100
+    try:
+        if len(historical_data) > 1 and not historical_data['Total'].empty:
+            initial_value = historical_data['Total'].iloc[0]
+            final_value = historical_data['Total'].iloc[-1]
             
-            # Add performance annotation
-            fig.add_annotation(
-                x=0.02,
-                y=0.98,
-                xref="paper",
-                yref="paper",
-                text=f"Performance: {performance_pct:.2f}%",
-                showarrow=False,
-                font=dict(
-                    size=14,
-                    color="white"
-                ),
-                align="left",
-                bgcolor="#2C3E50",
-                bordercolor="#1ABC9C",
-                borderwidth=2,
-                borderpad=4,
-                opacity=0.8
-            )
+            # Skip if initial value is zero (to avoid division by zero)
+            if initial_value > 0:
+                performance_pct = ((final_value / initial_value) - 1) * 100
+                
+                # Add performance annotation
+                fig.add_annotation(
+                    x=0.02,
+                    y=0.98,
+                    xref="paper",
+                    yref="paper",
+                    text=f"Performance: {performance_pct:.2f}%",
+                    showarrow=False,
+                    font=dict(
+                        size=14,
+                        color="white"
+                    ),
+                    align="left",
+                    bgcolor="#2C3E50",
+                    bordercolor="#1ABC9C",
+                    borderwidth=2,
+                    borderpad=4,
+                    opacity=0.8
+                )
+                print(f"Added performance annotation: {performance_pct:.2f}%")
+    except Exception as e:
+        print(f"Error calculating performance metrics: {e}")
     
     # Format date on x-axis based on period
     dtick = None
@@ -292,8 +445,11 @@ def create_performance_graph(portfolio, period="3m"):
         dtick = "2M"  # Bi-monthly ticks for 1 year view
     
     # Update layout
+    period_text = {"1m": "1 Month", "3m": "3 Months", "6m": "6 Months", "1y": "1 Year", "all": "All Time"}
+    title_text = f"Portfolio Performance - {period_text.get(period, period)}"
+    
     fig.update_layout(
-        title=f"Portfolio Performance - {period.upper() if period != 'all' else 'All Time'}",
+        title=title_text,
         xaxis_title="Date",
         yaxis_title="Value ($)",
         template="plotly_white",
@@ -312,6 +468,7 @@ def create_performance_graph(portfolio, period="3m"):
     if dtick:
         fig.update_xaxes(dtick=dtick)
     
+    print("Performance graph created successfully")
     return fig
 
 def create_summary_stats(portfolio):

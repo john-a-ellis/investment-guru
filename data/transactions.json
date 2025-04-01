@@ -1,0 +1,222 @@
+{
+    "a24e8092-dd7d-4201-944d-938f74c41b49": {
+        "symbol": "MFC.TO",
+        "transaction_type": "buy",
+        "shares": 1.405,
+        "price": 44.23,
+        "transaction_date": "2025-03-28",
+        "currency": "CAD",
+        "total_amount": 62.14315,
+        "notes": "",
+        "recorded_at": "2025-03-30 19:53:08"
+    },
+    "d9d89db7-ebf9-4696-935d-4f17310df90a": {
+        "symbol": "MFC.TO",
+        "transaction_type": "buy",
+        "shares": 1.405,
+        "price": 44.23,
+        "transaction_date": "2025-03-28",
+        "currency": "CAD",
+        "total_amount": 62.14315,
+        "notes": "",
+        "recorded_at": "2025-03-30 19:54:39"
+    },
+    "3505fbc9-a659-44f2-b3c5-754c6fc09117": {
+        "symbol": "TRI-TO",
+        "transaction_type": "buy",
+        "shares": 0.699,
+        "price": 246.94,
+        "transaction_date": "2025-03-27",
+        "currency": "USD",
+        "total_amount": 172.61105999999998,
+        "notes": "",
+        "recorded_at": "2025-03-30 20:03:34"
+    },
+    "9a48b85c-2ab7-4c66-a8f3-8c4de035b279": {
+        "symbol": "TRI-TO",
+        "transaction_type": "buy",
+        "shares": 0.019,
+        "price": 230.43,
+        "transaction_date": "2024-10-01",
+        "currency": "USD",
+        "total_amount": 4.37817,
+        "notes": "",
+        "recorded_at": "2025-03-30 20:04:55"
+    },
+    "af0ac4e9-c84c-4775-b3b1-c2c279c8150c": {
+        "symbol": "TRI.TO",
+        "transaction_type": "buy",
+        "shares": 0.699,
+        "price": 246.94,
+        "transaction_date": "2025-03-27",
+        "currency": "CAD",
+        "total_amount": 172.61105999999998,
+        "notes": "",
+        "recorded_at": "2025-03-30 20:06:30"
+    },
+    "a4f2a479-efd3-48b8-98e3-285f9e7eef96": {
+        "symbol": "TRI.TO",
+        "transaction_type": "buy",
+        "shares": 0.93,
+        "price": 245.27,
+        "transaction_date": "2025-03-26",
+        "currency": "CAD",
+        "total_amount": 228.10110000000003,
+        "notes": "",
+        "recorded_at": "2025-03-30 20:07:04"
+    },
+    "e4b5f290-d58b-4efe-a1b7-f1565f1133a3": {
+        "symbol": "TRI.TO",
+        "transaction_type": "buy",
+        "shares": 0.19,
+        "price": 230.43,
+        "transaction_date": "2024-10-01",
+        "currency": "CAD",
+        "total_amount": 43.7817,
+        "notes": "",
+        "recorded_at": "2025-03-30 20:08:05"
+    },
+    "0578dc80-0397-4008-8c3b-091ef276cf20": {
+        "symbol": "TRI.TO",
+        "transaction_type": "buy",
+        "shares": 0.336,
+        "price": 234.16,
+        "transaction_date": "2024-09-12",
+        "currency": "CAD",
+        "total_amount": 78.67776,
+        "notes": "",
+        "recorded_at": "2025-03-30 20:08:46"
+    },
+    "d5f05998-d0e5-42ab-804e-5f1aad9e99ec": {
+        "symbol": "CGL-C.TO",
+        "transaction_type": "buy",
+        "shares": 6.929,
+        "price": 32.17,
+        "transaction_date": "2024-12-10",
+        "currency": "CAD",
+        "total_amount": 222.90593,
+        "notes": "",
+        "recorded_at": "2025-03-30 20:13:46"
+    },
+    "2c34a046-364c-4e5f-a375-b9f7938cbaa8": {
+        "symbol": "CGL-C.TO",
+        "transaction_type": "buy",
+        "shares": 3.643,
+        "price": 30.31,
+        "transaction_date": "2024-11-14",
+        "currency": "CAD",
+        "total_amount": 110.41932999999999,
+        "notes": "",
+        "recorded_at": "2025-03-30 20:15:21"
+    },
+    "ab3c8ba9-d366-4856-8e13-bf6ada8d9ff0": {
+        "symbol": "CWW.TO",
+        "transaction_type": "buy",
+        "shares": 92.0,
+        "price": 59.49,
+        "transaction_date": "2025-03-26",
+        "currency": "CAD",
+        "total_amount": 5473.08,
+        "notes": "",
+        "recorded_at": "2025-03-30 20:17:56"
+    },
+    "620e00ed-a4d3-4dff-98e0-856cce6c3dad": {
+        "symbol": "PNG.V",
+        "transaction_type": "buy",
+        "shares": 15.0,
+        "price": 0.52,
+        "transaction_date": "2023-05-23",
+        "currency": "CAD",
+        "total_amount": 7.800000000000001,
+        "notes": "",
+        "recorded_at": "2025-03-30 20:27:07"
+    },
+    "ef7e3c5a-b2e6-48f2-bbca-aa08e28df9e3": {
+        "symbol": "CGL-C.TO",
+        "transaction_type": "buy",
+        "shares": 1.0,
+        "price": 20.29,
+        "transaction_date": "2021-02-01",
+        "currency": "CAD",
+        "total_amount": 20.29,
+        "notes": "",
+        "recorded_at": "2025-03-31 05:51:37"
+    },
+    "0b19e4a1-1691-433d-a7c3-8d12ac67f095": {
+        "symbol": "CGL-C.TO",
+        "transaction_type": "buy",
+        "shares": 2.0,
+        "price": 22.98,
+        "transaction_date": "2020-08-06",
+        "currency": "CAD",
+        "total_amount": 45.96,
+        "notes": "",
+        "recorded_at": "2025-03-31 05:53:03"
+    },
+    "b6c5c160-605a-419c-9c7b-a6325ba7790b": {
+        "symbol": "CWW-TO",
+        "transaction_type": "buy",
+        "shares": 5.0,
+        "price": 40.28,
+        "transaction_date": "2020-08-04",
+        "currency": "USD",
+        "total_amount": 201.4,
+        "notes": "",
+        "recorded_at": "2025-03-31 06:10:37"
+    },
+    "3cd00b73-8fbf-4436-bc38-a3fe61387b73": {
+        "symbol": "CWW-TO",
+        "transaction_type": "buy",
+        "shares": 3.0,
+        "price": 49.0,
+        "transaction_date": "2022-03-25",
+        "currency": "USD",
+        "total_amount": 147.0,
+        "notes": "",
+        "recorded_at": "2025-03-31 06:15:16"
+    },
+    "964655d7-84f9-455b-aa4f-7bbc3263399d": {
+        "symbol": "CWW.TO",
+        "transaction_type": "buy",
+        "shares": 3.0,
+        "price": 49.0,
+        "transaction_date": "2022-03-25",
+        "currency": "CAD",
+        "total_amount": 147.0,
+        "notes": "",
+        "recorded_at": "2025-03-31 06:16:30"
+    },
+    "7d503250-8fe4-4941-bc58-f85ae8232a26": {
+        "symbol": "XTR.TO",
+        "transaction_type": "buy",
+        "shares": 3.0,
+        "price": 10.54,
+        "transaction_date": "2023-04-25",
+        "currency": "CAD",
+        "total_amount": 31.619999999999997,
+        "notes": "",
+        "recorded_at": "2025-03-31 06:22:40"
+    },
+    "6c910706-1f8b-46cc-b4e6-ec8d630c8783": {
+        "symbol": "CWW.TO",
+        "transaction_type": "buy",
+        "shares": 5.0,
+        "price": 40.28,
+        "transaction_date": "2020-08-06",
+        "currency": "CAD",
+        "total_amount": 201.4,
+        "notes": "",
+        "recorded_at": "2025-03-31 06:27:07"
+    },
+    "82224d5d-7808-487c-aeff-b008c554be94": {
+        "symbol": "TRI.TO",
+        "transaction_type": "buy",
+        "shares": 0.019,
+        "price": 230.43,
+        "transaction_date": "2024-10-01",
+        "currency": "CAD",
+        "total_amount": 4.37817,
+        "notes": "",
+        "recorded_at": "2025-03-31 06:29:44"
+    }
+}

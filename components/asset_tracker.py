@@ -9,7 +9,7 @@ from datetime import datetime
 
 def create_asset_tracker_component():
     """
-    Creates a component for users to add and remove tracked assets
+    Creates a component for users to add and remove tracked assets, including mutual funds
     """
     return dbc.Card([
         dbc.CardHeader("Tracked Assets Manager"),
@@ -18,13 +18,14 @@ def create_asset_tracker_component():
                 dbc.Col([
                     dbc.Label("Add New Asset"),
                     dbc.InputGroup([
-                        dbc.Input(id="asset-symbol-input", placeholder="Symbol (e.g., MFC.TO)"),
+                        dbc.Input(id="asset-symbol-input", placeholder="Symbol (e.g., MFC.TO or fund code)"),
                         dbc.Input(id="asset-name-input", placeholder="Name (e.g., Manulife Financial)"),
                         dbc.Select(
                             id="asset-type-select",
                             options=[
                                 {"label": "Stock", "value": "stock"},
                                 {"label": "ETF", "value": "etf"},
+                                {"label": "Mutual Fund", "value": "mutual_fund"},
                                 {"label": "Cryptocurrency", "value": "crypto"},
                                 {"label": "Bond", "value": "bond"},
                                 {"label": "Cash", "value": "cash"}

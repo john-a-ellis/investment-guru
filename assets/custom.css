@@ -1,56 +1,170 @@
-/* Make sure the accordion takes full width */
-.portfolio-container {
+/* Portfolio accordion styling */
+#portfolio-accordion {
     width: 100%;
 }
 
-.portfolio-container .accordion-alignment {
+/* Make accordion items full width */
+#portfolio-accordion .accordion-item {
     width: 100%;
+    margin-bottom: 0.5rem;
+    border-radius: 0.25rem;
+    overflow: hidden;
 }
 
-/* Make headers and accordion content full width */
-.portfolio-container .header-row,
-.portfolio-container .accordion-button {
+/* Style accordion headers */
+#portfolio-accordion .accordion-button {
+    padding: 0.5rem;
+    font-weight: normal;
+    background-color: #f8f9fa;
+}
+
+/* Remove focus outline on accordion buttons */
+#portfolio-accordion .accordion-button:focus {
+    box-shadow: none;
+    z-index: 1;
+}
+
+/* Remove default accordion button styling when collapsed */
+#portfolio-accordion .accordion-button:not(.collapsed) {
+    background-color: #e9ecef;
+    color: inherit;
+}
+
+/* Style the row inside accordion headers */
+#portfolio-accordion .accordion-button .row {
+    width: 100%;
+    margin: 0;
+}
+
+/* Ensure columns in the header align properly */
+#portfolio-accordion .accordion-button .col {
+    padding: 0.25rem;
     display: flex;
     align-items: center;
-    padding: 0.5rem 1rem;
+}
+
+/* Style accordion content */
+#portfolio-accordion .accordion-body {
+    padding: 1rem;
+    background-color: #ffffff;
+}
+
+/* Style tabs inside accordion */
+#portfolio-accordion .nav-tabs {
+    margin-bottom: 1rem;
+}
+
+#portfolio-accordion .tab-content {
+    padding-top: 0.5rem;
+}
+
+/* Style tables inside accordion */
+#portfolio-accordion table {
     width: 100%;
-}
-/* Fix alignment between headers and accordion content */
-.portfolio-container .header-row,
-.portfolio-container .accordion-button {
-    display: flex;
-    align-items: center;
-    padding: 0.5rem 1rem;
+    margin-bottom: 0;
 }
 
-/* Match the inner content alignment */
-.portfolio-container .header-row > div,
-.portfolio-container .accordion-button > div {
-    flex: 1;
+#portfolio-accordion th {
+    background-color: #f8f9fa;
+    font-weight: 600;
 }
 
-/* Adjust accordion button padding and arrow size */
-.portfolio-container .accordion-alignment .accordion-button {
-    padding: 0.5rem 1rem;
+/* Style portfolio summary card */
+.portfolio-summary {
+    margin-bottom: 1.5rem;
+    background-color: #f8f9fa;
+    border-left: 4px solid #17a2b8;
 }
 
-.accordion-alignment .accordion-button::after {
-    width: 1rem;
-    height: 1rem;
-    background-size: 1rem;
-    margin-left: 0.5rem;
-}
-
-/* Remove default accordion button padding */
-.portfolio-container .accordion-body {
+.portfolio-summary .card-body {
     padding: 0.75rem;
 }
 
-/* Column widths for consistent alignment */
-.col-symbol { width: 16.66%; }
-.col-shares { width: 8.33%; }
-.col-book { width: 16.66%; }
-.col-current { width: 16.66%; }
-.col-gain { width: 16.66%; }
-.col-pct { width: 16.66%; }
-.col-arrow { width: 8.33%; }
+.portfolio-summary h5 {
+    margin-bottom: 0;
+    font-size: 1rem;
+}
+
+/* Color coding for gain/loss values */
+.text-gain {
+    color: #28a745 !important;
+}
+
+.text-loss {
+    color: #dc3545 !important;
+}
+
+/* Make sure content is responsive */
+@media (max-width: 992px) {
+    #portfolio-accordion .accordion-button .row {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    
+    #portfolio-accordion .accordion-button .col {
+        width: 100%;
+        padding: 0.1rem;
+        text-align: left;
+    }
+    
+    .portfolio-summary .row {
+        flex-direction: column;
+    }
+    
+    .portfolio-summary .col {
+        width: 100%;
+        text-align: left;
+        margin-bottom: 0.25rem;
+    }
+}
+
+/* Custom styles for better readability */
+.symbol-text {
+    font-weight: bold;
+}
+
+.currency-text {
+    color: #6c757d;
+    font-size: 0.875rem;
+}
+
+.asset-type-badge {
+    display: inline-block;
+    padding: 0.2rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    background-color: #e9ecef;
+    margin-left: 0.5rem;
+}
+
+/* Specific asset type colors */
+.asset-type-stock {
+    background-color: #cff4fc;
+    color: #055160;
+}
+
+.asset-type-etf {
+    background-color: #d1e7dd;
+    color: #0f5132;
+}
+
+.asset-type-mutual_fund {
+    background-color: #fff3cd;
+    color: #664d03;
+}
+
+.asset-type-crypto {
+    background-color: #e2e3e5;
+    color: #41464b;
+}
+
+.asset-type-bond {
+    background-color: #f8d7da;
+    color: #842029;
+}
+
+.asset-type-cash {
+    background-color: #d3d3d3;
+    color: #212529;
+}

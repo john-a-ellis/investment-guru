@@ -2,7 +2,7 @@
 # main.py - Entry point for the application
 
 import dash
-from dash import dcc, html, callback, Input, Output, State, ctx, no_update, ALL
+from dash import dcc, html, callback, Input, Output, State, ALL, ctx
 import dash_bootstrap_components as dbc
 import pandas as pd
 import numpy as np
@@ -13,28 +13,27 @@ import sys
 import os
 from dash.exceptions import PreventUpdate
 import json
-import os
 from datetime import datetime
+import yfinance as yf
+
 # Add the parent directory to sys.path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Custom modules
-from components.transaction_recorder import create_transaction_recorder_component, create_transaction_history_table
-from modules.transaction_tracker import record_transaction
-from modules.currency_utils import get_usd_to_cad_rate, format_currency, get_combined_value_cad
-
 from modules.data_collector import DataCollector
 from modules.market_analyzer import MarketAnalyzer
 from modules.news_analyzer import NewsAnalyzer
 from modules.recommendation_engine import RecommendationEngine
 from modules.portfolio_tracker import PortfolioTracker
-from components.asset_tracker import create_asset_tracker_component, load_tracked_assets, create_tracked_assets_table,  save_tracked_assets
-from components.user_profile import create_user_profile_component
+from components.asset_tracker import create_asset_tracker_component, load_tracked_assets, create_tracked_assets_table, save_tracked_assets
+from components.user_profile import create_user_profile_component, load_user_profile, save_user_profile
+from components.mutual_fund_manager import create_mutual_fund_manager_component
+from modules.mutual_fund_provider import MutualFundProvider
 
 # New imports for portfolio tracking
 from components.portfolio_management import create_portfolio_management_component
-from components.portfolio_visualizer import create_portfolio_visualizer_component, create_performance_graph, create_summary_stats
-from modules.portfolio_data_updater import update_portfolio_data, add_investment, remove_investment, load_portfolio
+from components.portfolio_visualizer import create_portfolio_visualizer_component, create_performance_graph, get_portfolio_historical_data
+from modules.portfolio_data_updater import update_portfolio_data, add_investment, remove_investment, load_portfolio, save_portfolio
 from components.portfolio_analysis import (
     create_portfolio_analysis_component, 
     create_allocation_chart,
@@ -44,6 +43,7 @@ from components.portfolio_analysis import (
     create_sector_details,
     create_correlation_analysis
 )
+from modules.currency_utils import get_usd_to_cad_rate, format_currency, get_combined_value_cad
 
 # Initialize the Dash app with a Bootstrap theme
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
@@ -74,6 +74,7 @@ app.layout = dbc.Container([
             create_asset_tracker_component()
         ], width=12)
     ], className="mb-4"),
+    
     dbc.Row([
         dbc.Col([
             create_user_profile_component()
@@ -109,11 +110,20 @@ app.layout = dbc.Container([
             ], className="mb-4")
         ], width=12)
     ]),
+    
+    # Mutual Fund Manager Component
+    dbc.Row([
+        dbc.Col([
+            create_mutual_fund_manager_component()
+        ], width=12)
+    ], className="mb-4"),
+    
     dbc.Row([
         dbc.Col([
             create_portfolio_analysis_component()
         ], width=12)
     ], className="mb-4"),
+    
     dbc.Row([
         dbc.Col([
             dbc.Card([
@@ -125,20 +135,15 @@ app.layout = dbc.Container([
             ], className="mb-4")
         ], width=12)
     ]),
-    dbc.Row([
-        dbc.Col([
-            create_transaction_recorder_component()
-        ], width=12)
-    ], className="mb-4"),
-
-    # Portfolio Management Component - NEW
+    
+    # Portfolio Management Component
     dbc.Row([
         dbc.Col([
             create_portfolio_management_component()
         ], width=12)
     ], className="mb-4"),
 
-    # Portfolio Visualizer Component - NEW
+    # Portfolio Visualizer Component
     dbc.Row([
         dbc.Col([
             create_portfolio_visualizer_component()
@@ -157,7 +162,6 @@ def load_assets_table(n_clicks):
     """
     Load and display the tracked assets table when the app starts
     """
-    
     # Load current assets
     assets = load_tracked_assets()
     
@@ -166,22 +170,20 @@ def load_assets_table(n_clicks):
 
 # Callback to add new asset
 @app.callback(
-    [Output("add-asset-feedback", "children"),
-     Output("tracked-assets-table", "children", allow_duplicate=True),
-     Output("asset-symbol-input", "value"),
-     Output("asset-name-input", "value")],
+    Output("add-asset-feedback", "children"),
+    Output("tracked-assets-table", "children", allow_duplicate=True),
+    Output("asset-symbol-input", "value"),
+    Output("asset-name-input", "value"),
     Input("add-asset-button", "n_clicks"),
-    [State("asset-symbol-input", "value"),
-     State("asset-name-input", "value"),
-     State("asset-type-select", "value")],
+    State("asset-symbol-input", "value"),
+    State("asset-name-input", "value"),
+    State("asset-type-select", "value"),
     prevent_initial_call=True
 )
 def add_new_asset(n_clicks, symbol, name, asset_type):
     """
     Add a new asset to tracked assets when the Add button is clicked
     """
-    # from components.asset_tracker import load_tracked_assets, save_tracked_assets, create_tracked_assets_table
-    
     if n_clicks is None:
         raise PreventUpdate
     
@@ -218,20 +220,17 @@ def add_new_asset(n_clicks, symbol, name, asset_type):
 @app.callback(
     Output("profile-update-status", "children"),
     Input("update-profile-button", "n_clicks"),
-    [State("risk-slider", "value"),
-     State("investment-horizon", "value"),
-     State("initial-investment", "value")],
+    State("risk-slider", "value"),
+    State("investment-horizon", "value"),
+    State("initial-investment", "value"),
     prevent_initial_call=True
 )
 def update_user_profile(n_clicks, risk_level, investment_horizon, initial_investment):
     """
     Save user profile when the Update Profile button is clicked
     """
-    from components.user_profile import save_user_profile
-    from datetime import datetime
-    
     if n_clicks is None:
-        raise dash.exceptions.PreventUpdate
+        raise PreventUpdate
     
     # Create profile object
     profile = {
@@ -257,39 +256,40 @@ def remove_asset(n_clicks_list):
     """
     Remove an asset when its remove button is clicked
     """
-    # Print debug information
-    print(f"Callback triggered with clicks: {n_clicks_list}")
-    
-    if not ctx.triggered_id:
-        print("No trigger detected")
+    # Check if callback context has been triggered
+    if not ctx.triggered:
         raise PreventUpdate
     
-    # Get the clicked button pattern-matching ID directly from ctx.triggered_id
-    clicked_id = ctx.triggered_id
-    print(f"Clicked button ID: {clicked_id}")
+    # Check if any buttons have been clicked
+    if not n_clicks_list or all(n is None for n in n_clicks_list):
+        raise PreventUpdate
     
-    if clicked_id and 'index' in clicked_id:
-        symbol_to_remove = clicked_id['index']
-        print(f"Symbol to remove: {symbol_to_remove}")
-        
-        # Load current assets
-        assets = load_tracked_assets()
-        print(f"Current assets: {list(assets.keys())}")
-        
-        # Remove the asset
-        if symbol_to_remove in assets:
-            print(f"Removing {symbol_to_remove}")
-            del assets[symbol_to_remove]
-            
-            # Save updated assets
-            save_success = save_tracked_assets(assets)
-            print(f"Save success: {save_success}")
-            
-        # Return updated table
-        return create_tracked_assets_table(assets)
+    # Find which button was clicked - only consider those with n_clicks > 0
+    clicked_index = None
+    for i, n_clicks in enumerate(n_clicks_list):
+        if n_clicks and n_clicks > 0:  # Check for non-None and positive click count
+            # Get the ID of the trigger
+            trigger_id = ctx.triggered_id
+            if trigger_id and 'index' in trigger_id:
+                clicked_index = trigger_id['index']
+                break
     
-    # If something went wrong, just refresh the current table
-    return create_tracked_assets_table(load_tracked_assets())
+    # If no valid button was identified, prevent update
+    if not clicked_index:
+        raise PreventUpdate
+    
+    print(f"Removing asset with symbol: {clicked_index}")
+    
+    # Load current assets
+    assets = load_tracked_assets()
+    
+    # Remove the asset if it exists
+    if clicked_index in assets:
+        del assets[clicked_index]
+        save_tracked_assets(assets)
+    
+    # Return updated table
+    return create_tracked_assets_table(assets)
 
 @app.callback(
     Output("market-overview-graph", "figure"),
@@ -299,10 +299,6 @@ def update_market_overview(n):
     """
     Update the market overview graph with actual historical data for tracked assets
     """
-    from components.asset_tracker import load_tracked_assets
-    import yfinance as yf
-    from datetime import datetime, timedelta
-    
     # Load tracked assets
     tracked_assets = load_tracked_assets()
     
@@ -392,26 +388,6 @@ def update_news_analysis(n):
     """
     Update news analysis with relevant stories about tracked assets and portfolio holdings
     """
-    from components.asset_tracker import load_tracked_assets
-    from modules.portfolio_data_updater import load_portfolio
-    import requests
-    from datetime import datetime, timedelta
-    import os
-    from dotenv import load_dotenv
-
-    # Load environment variables for API keys
-    load_dotenv()
-    
-    # Get API key from environment variable
-    news_api_key = os.getenv("NEWS_API_KEY")
-    if not news_api_key:
-        return [
-            dbc.Alert(
-                "News API key not found in environment. Please add NEWS_API_KEY to your .env file.",
-                color="warning"
-            )
-        ]
-    
     # Load tracked assets and portfolio
     tracked_assets = load_tracked_assets()
     portfolio = load_portfolio()
@@ -452,54 +428,8 @@ def update_news_analysis(n):
         {"title": "Tech Stocks Lead Market Recovery", "url": "#", "publishedAt": datetime.now().strftime("%Y-%m-%d"), "source": {"name": "Sample Source"}}
     ]
     
-    try:
-        # Calculate date for news search (7 days ago)
-        from_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-        
-        # Prepare for API call
-        news_articles = []
-        
-        # Call News API for each search term (with rate limiting)
-        for term in search_terms[:10]:  # Limit to 10 terms to avoid excessive API calls
-            url = f"https://newsapi.org/v2/everything"
-            params = {
-                "q": term,
-                "from": from_date,
-                "sortBy": "relevancy",
-                "language": "en",
-                "apiKey": news_api_key,
-                "pageSize": 5  # Limit to 5 articles per term
-            }
-            
-            try:
-                response = requests.get(url, params=params)
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get("status") == "ok" and data.get("articles"):
-                        # Add relevant articles
-                        news_articles.extend(data["articles"])
-            except Exception as e:
-                print(f"Error retrieving news for {term}: {e}")
-        
-        # Deduplicate articles
-        unique_articles = {}
-        for article in news_articles:
-            title = article.get("title", "")
-            if title and title not in unique_articles:
-                unique_articles[title] = article
-        
-        # Use deduplicated articles
-        if unique_articles:
-            news_articles = list(unique_articles.values())
-        else:
-            news_articles = fallback_news
-            
-    except Exception as e:
-        print(f"Error retrieving news: {e}")
-        news_articles = fallback_news
-    
-    # Sort by date
-    news_articles = sorted(news_articles, key=lambda x: x.get("publishedAt", ""), reverse=True)
+    # Since we don't have a functional news API here, we'll use the fallback news
+    news_articles = fallback_news
     
     # Find relevant symbols in each article
     for article in news_articles:
@@ -513,15 +443,6 @@ def update_news_analysis(n):
             # Check company name
             elif symbol in company_names and company_names[symbol] in article_title:
                 article["relevant_symbols"].append(symbol)
-    
-    # Filter out articles with no relevant symbols and limit to top 10
-    relevant_articles = [a for a in news_articles if a.get("relevant_symbols")][:10]
-    
-    # Use relevant articles if we found any, otherwise use fallback
-    if not relevant_articles:
-        news_articles = fallback_news
-    else:
-        news_articles = relevant_articles
     
     # Create news cards
     news_cards = []
@@ -574,9 +495,9 @@ def update_news_analysis(n):
 @app.callback(
     Output("recommendations-content", "children"),
     Input("generate-recommendations-button", "n_clicks"),
-    State("risk-slider", "value"),
-    State("investment-horizon", "value"),
-    State("initial-investment", "value"),
+    [State("risk-slider", "value"),
+     State("investment-horizon", "value"),
+     State("initial-investment", "value")],
     prevent_initial_call=True
 )
 def generate_recommendations(n_clicks, risk_level, investment_horizon, initial_investment):
@@ -610,108 +531,156 @@ def generate_recommendations(n_clicks, risk_level, investment_horizon, initial_i
     
     return recommendation_cards
 
-# NEW CALLBACKS FOR PORTFOLIO TRACKING
+# Mutual Fund Manager Callbacks
+@app.callback(
+    Output("add-fund-price-feedback", "children"),
+    Input("add-fund-price-button", "n_clicks"),
+    [State("fund-code-input", "value"),
+     State("fund-date-input", "value"),
+     State("fund-price-input", "value")],
+    prevent_initial_call=True
+)
+def add_fund_price(n_clicks, fund_code, date, price):
+    """
+    Add a price point for a mutual fund
+    """
+    if not n_clicks:
+        raise PreventUpdate
+    
+    if not fund_code or not date or not price:
+        return dbc.Alert("Fund code, date, and price are required", color="warning")
+    
+    # Standardize fund code
+    fund_code = fund_code.upper().strip()
+    
+    # Add price to the provider
+    provider = MutualFundProvider()
+    success = provider.add_manual_price(fund_code, date, price)
+    
+    if success:
+        return dbc.Alert(f"Successfully added price for {fund_code}", color="success")
+    else:
+        return dbc.Alert("Failed to add price", color="danger")
 
 @app.callback(
-    Output("portfolio-table", "children"),
-    [Input("add-investment-button", "n_clicks"),
-     Input("portfolio-update-interval", "n_intervals")],
-    prevent_initial_call=False
+    Output("fund-price-history", "children"),
+    Input("view-fund-history-button", "n_clicks"),
+    State("fund-filter-input", "value"),
+    prevent_initial_call=True
 )
-def load_portfolio_table(n_clicks, n_intervals):
+def view_fund_history(n_clicks, fund_code):
     """
-    Load and display the portfolio table when the app starts or updates
+    View price history for a mutual fund
     """
-    # Update portfolio data with current market prices
-    portfolio = update_portfolio_data()
+    if not n_clicks or not fund_code:
+        raise PreventUpdate
     
-    # Create and return the table
-    from components.portfolio_management import create_portfolio_table
-    return create_portfolio_table(portfolio)
+    # Standardize fund code
+    fund_code = fund_code.upper().strip()
+    
+    # Get historical data
+    provider = MutualFundProvider()
+    hist_data = provider.get_historical_data(fund_code)
+    
+    if hist_data.empty:
+        return dbc.Alert(f"No price data found for {fund_code}", color="warning")
+    
+    # Create a DataFrame with the data
+    df = hist_data.reset_index()
+    df.columns = ['Date', 'Price']
+    
+    # Format the date
+    df['Date'] = df['Date'].dt.strftime('%Y-%m-%d')
+    
+    # Create table
+    return dbc.Table([
+        html.Thead(
+            html.Tr([
+                html.Th("Date"),
+                html.Th("Price")
+            ])
+        ),
+        html.Tbody([
+            html.Tr([
+                html.Td(row['Date']),
+                html.Td(f"${row['Price']:.4f}")
+            ]) for _, row in df.iterrows()
+        ])
+    ], striped=True, bordered=True, hover=True)
 
+# Consolidated Portfolio Management Callback
 @app.callback(
     [Output("add-investment-feedback", "children"),
-     Output("portfolio-table", "children", allow_duplicate=True),
+     Output("portfolio-table", "children"),
      Output("investment-symbol-input", "value"),
      Output("investment-shares-input", "value"),
      Output("investment-price-input", "value")],
-    Input("add-investment-button", "n_clicks"),
+    [Input("add-investment-button", "n_clicks"),
+     Input("portfolio-update-interval", "n_intervals"),
+     Input({"type": "remove-investment-button", "index": ALL}, "n_clicks")],
     [State("investment-symbol-input", "value"),
      State("investment-shares-input", "value"),
      State("investment-price-input", "value"),
-     State("investment-date-input", "value")],
+     State("investment-date-input", "value"),
+     State("investment-type-select", "value")],
     prevent_initial_call=True
 )
-def add_new_investment(n_clicks, symbol, shares, price, date):
+def manage_portfolio(add_clicks, update_interval, remove_clicks, symbol, shares, price, date, asset_type):
     """
-    Add a new investment to the portfolio when the Add button is clicked
+    Consolidated callback to manage portfolio actions (add, update, remove)
     """
     from components.portfolio_management import create_portfolio_table
     
-    if n_clicks is None:
-        raise dash.exceptions.PreventUpdate
+    # Initialize default return values
+    feedback = None
+    updated_table = dash.no_update
+    clear_symbol = dash.no_update
+    clear_shares = dash.no_update
+    clear_price = dash.no_update
     
-    if not symbol or not shares or not price:
-        return dbc.Alert("Symbol, shares, and price are required", color="warning"), dash.no_update, dash.no_update, dash.no_update, dash.no_update
+    # Get the triggered component
+    if not ctx.triggered:
+        return feedback, updated_table, clear_symbol, clear_shares, clear_price
     
-    # Standardize symbol format
-    symbol = symbol.upper().strip()
+    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
     
-    # Add investment
-    success = add_investment(symbol, shares, price, date)
-    
-    if success:
-        # Update portfolio
-        portfolio = update_portfolio_data()
-        
-        # Create updated table
-        updated_table = create_portfolio_table(portfolio)
-        
-        # Return success message, updated table, and clear input fields
-        return dbc.Alert(f"Successfully added {symbol}", color="success"), updated_table, "", None, None
-    else:
-        return dbc.Alert("Failed to add investment", color="danger"), dash.no_update, dash.no_update, dash.no_update, dash.no_update
-
-@app.callback(
-    Output("portfolio-table", "children", allow_duplicate=True),
-    Input({"type": "remove-investment-button", "index": dash.ALL}, "n_clicks"),
-    prevent_initial_call=True
-)
-def remove_portfolio_investment(n_clicks_list):
-    """
-    Remove an investment when its remove button is clicked
-    """
-    from components.portfolio_management import create_portfolio_table
-    
-    if not n_clicks_list or not any(n_clicks_list):
-        raise dash.exceptions.PreventUpdate
-    
-    # Find which button was clicked
-    if not dash.callback_context.triggered:
-        raise dash.exceptions.PreventUpdate
-    
-    # Get the clicked button ID
-    button_id = dash.callback_context.triggered[0]["prop_id"].split(".")[0]
-    
-    try:
-        # Extract the investment ID from the button ID (it's in JSON format)
-        button_id_dict = json.loads(button_id)
-        investment_id = button_id_dict.get("index")
-        
-        if investment_id:
-            # Remove the investment
-            remove_investment(investment_id)
+    # Handle add investment
+    if trigger_id == "add-investment-button" and add_clicks:
+        if not symbol or not shares or not price:
+            feedback = dbc.Alert("Symbol, shares, and price are required", color="warning")
+        else:
+            # Standardize symbol format
+            symbol_upper = symbol.upper().strip()
             
-            # Load updated portfolio
-            portfolio = load_portfolio()
+            # Add investment with asset type
+            success = add_investment(symbol_upper, shares, price, date, asset_type)
             
-            # Return updated table
-            return create_portfolio_table(portfolio)
-    except Exception as e:
-        print(f"Error removing investment: {e}")
+            if success:
+                feedback = dbc.Alert(f"Successfully added {symbol_upper}", color="success")
+                clear_symbol = ""
+                clear_shares = None
+                clear_price = None
+            else:
+                feedback = dbc.Alert("Failed to add investment", color="danger")
     
-    # If something went wrong, just refresh the current table
-    return create_portfolio_table(load_portfolio())
+    # Handle remove investment
+    elif isinstance(trigger_id, str) and "{" in trigger_id:  # Pattern matching ID
+        try:
+            button_id = json.loads(trigger_id)
+            if button_id.get("type") == "remove-investment-button":
+                investment_id = button_id.get("index")
+                if investment_id and any(remove_clicks):
+                    remove_investment(investment_id)
+                    feedback = dbc.Alert(f"Investment removed", color="info")
+        except Exception as e:
+            print(f"Error processing remove action: {e}")
+            feedback = dbc.Alert(f"Error removing investment: {str(e)}", color="danger")
+    
+    # Always update the table regardless of action
+    portfolio = update_portfolio_data()
+    updated_table = create_portfolio_table(portfolio)
+    
+    return feedback, updated_table, clear_symbol, clear_shares, clear_price
 
 @app.callback(
     Output("portfolio-performance-graph", "figure"),
@@ -722,11 +691,40 @@ def update_portfolio_graph(n_intervals, period):
     """
     Update the portfolio performance graph
     """
-    # Load portfolio data
-    portfolio = load_portfolio()
     
-    # Create and return graph
-    return create_performance_graph(portfolio, period)
+    # Load portfolio data
+    try:
+        portfolio = load_portfolio()
+        print(f"Portfolio loaded with {len(portfolio)} investments")
+        
+        if not portfolio:
+            # Return empty figure if no portfolio data
+            fig = go.Figure()
+            fig.update_layout(
+                title="Portfolio Performance (No portfolio data available)",
+                xaxis_title="Date",
+                yaxis_title="Value ($)",
+                template="plotly_white"
+            )
+            return fig
+            
+        # Try to create performance graph
+        return create_performance_graph(portfolio, period)
+        
+    except Exception as e:
+        print(f"Error in update_portfolio_graph: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
+        # Return error figure
+        fig = go.Figure()
+        fig.update_layout(
+            title=f"Portfolio Performance (Error: {str(e)})",
+            xaxis_title="Date",
+            yaxis_title="Value ($)",
+            template="plotly_white"
+        )
+        return fig
 
 @app.callback(
     Output("portfolio-summary-stats", "children"),
@@ -736,11 +734,14 @@ def update_portfolio_stats(n_intervals):
     """
     Update the portfolio summary statistics
     """
+    from components.portfolio_visualizer import create_summary_stats
+    
     # Load portfolio data
     portfolio = load_portfolio()
     
     # Create and return summary stats
     return create_summary_stats(portfolio)
+
 @app.callback(
     Output("portfolio-allocation-chart", "figure"),
     Input("analysis-update-interval", "n_intervals")
@@ -824,6 +825,30 @@ def update_correlation_analysis(n):
     
     # Create and return analysis
     return create_correlation_analysis(portfolio)
+
+# Add this callback to main.py to ensure the table loads initially
+@app.callback(
+    Output("portfolio-table", "children", allow_duplicate=True),
+    Input("portfolio-update-interval", "n_intervals"),
+    prevent_initial_call='initial_duplicate' # This is important - allow initial call
+)
+def load_initial_portfolio_table(n_intervals):
+    """
+    Load and display the portfolio table when the app first loads
+    """
+    print("Initial portfolio table load triggered")
+    from components.portfolio_management import create_portfolio_table
+    try:
+        # Update portfolio data with current market prices
+        portfolio = update_portfolio_data()
+        
+        # Create and return the table
+        return create_portfolio_table(portfolio)
+    except Exception as e:
+        print(f"Error loading initial portfolio: {e}")
+        import traceback
+        traceback.print_exc()
+        return html.Div(f"Error loading portfolio: {str(e)}")
 
 if __name__ == "__main__":
     app.run(debug=True)
