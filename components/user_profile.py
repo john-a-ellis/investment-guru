@@ -1,11 +1,7 @@
 # components/user_profile.py
-import dash
-from dash import dcc, html, callback, Input, Output, State
+from dash import dcc, html
 import dash_bootstrap_components as dbc
-import json
-import os
-from datetime import datetime
-from modules.portfolio_utils import load_user_profile, save_user_profile
+from modules.portfolio_utils import load_user_profile
 
 def create_user_profile_component():
     """

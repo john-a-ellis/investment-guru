@@ -2,12 +2,9 @@
 # main.py - Entry point for the application
 
 import dash
-from dash import dcc, html, callback, Input, Output, State, ALL, ctx
+from dash import dcc, html, Input, Output, State, ALL, ctx
 import dash_bootstrap_components as dbc
-import pandas as pd
-import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
 from datetime import datetime, timedelta
 import sys
 import os
@@ -28,10 +25,9 @@ from modules.mutual_fund_provider import MutualFundProvider
 
 # Import consolidated portfolio utilities
 from modules.portfolio_utils import (
-    load_portfolio, save_portfolio, update_portfolio_data, add_investment, 
-    remove_investment, record_transaction, load_transactions, load_tracked_assets, 
-    save_tracked_assets, load_user_profile, save_user_profile, get_usd_to_cad_rate,
-    get_combined_value_cad, format_currency
+    load_portfolio, update_portfolio_data, add_investment, 
+    remove_investment, record_transaction, load_tracked_assets, 
+    save_tracked_assets, save_user_profile
 )
 
 # Components
@@ -40,9 +36,7 @@ from components.user_profile import create_user_profile_component
 from components.mutual_fund_manager import create_mutual_fund_manager_component
 from components.portfolio_management import create_portfolio_management_component, create_portfolio_table
 from components.portfolio_visualizer import (
-    create_portfolio_visualizer_component, 
-    create_performance_graph, 
-    create_normalized_performance_graph
+    create_portfolio_visualizer_component
 )
 
 from components.portfolio_analysis import (
@@ -690,17 +684,18 @@ def manage_portfolio(add_clicks, update_interval, remove_clicks, symbol, shares,
     Output("portfolio-performance-graph", "figure"),
     [Input("portfolio-update-interval", "n_intervals"),
      Input("performance-period-selector", "value"),
-     Input("performance-chart-type", "value")]  # Add chart type input
+     Input("performance-chart-type", "value")]
 )
 def update_portfolio_graph(n_intervals, period, chart_type):
     """
-    Update the portfolio performance graph
+    Update the portfolio performance graph based on the selected time period and chart type
     """
     
     # Load portfolio data
     try:
         portfolio = load_portfolio()
         print(f"Portfolio loaded with {len(portfolio)} investments")
+        print(f"Chart type selected: {chart_type}")
         
         if not portfolio:
             # Return empty figure if no portfolio data
@@ -715,8 +710,10 @@ def update_portfolio_graph(n_intervals, period, chart_type):
         
         # Use the appropriate chart function based on chart_type
         if chart_type == "normalized":
+            from components.portfolio_visualizer import create_normalized_performance_graph
             return create_normalized_performance_graph(portfolio, period)
-        else:
+        else:  # "value" (actual value)
+            from components.portfolio_visualizer import create_performance_graph
             return create_performance_graph(portfolio, period)
             
     except Exception as e:
@@ -733,7 +730,7 @@ def update_portfolio_graph(n_intervals, period, chart_type):
             template="plotly_white"
         )
         return fig
-
+    
 @app.callback(
     Output("portfolio-summary-stats", "children"),
     Input("portfolio-update-interval", "n_intervals")

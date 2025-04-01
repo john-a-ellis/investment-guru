@@ -2,7 +2,7 @@
 
 import dash
 import pandas as pd
-from dash import dcc, html, callback, Input, Output, State
+from dash import html, callback, Input, Output, State
 import dash_bootstrap_components as dbc
 from datetime import datetime
 from modules.transaction_tracker import record_transaction, load_transactions

@@ -1,10 +1,6 @@
 # components/wealthsimple_integration.py
-import dash
-from dash import dcc, html, callback, Input, Output, State
+from dash import dcc, html
 import dash_bootstrap_components as dbc
-import pandas as pd
-import json
-import os
 
 def create_wealthsimple_component():
     """

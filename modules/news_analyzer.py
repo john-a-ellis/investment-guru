@@ -1,5 +1,4 @@
 # modules/news_analyzer.py
-import pandas as pd
 import re
 import nltk
 from nltk.sentiment.vader import SentimentIntensityAnalyzer

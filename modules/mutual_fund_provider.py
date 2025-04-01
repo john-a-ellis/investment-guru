@@ -1,9 +1,5 @@
 # modules/mutual_fund_provider.py
 import pandas as pd
-import numpy as np
-import requests
-from bs4 import BeautifulSoup
-import yfinance as yf
 import json
 import os
 from datetime import datetime, timedelta

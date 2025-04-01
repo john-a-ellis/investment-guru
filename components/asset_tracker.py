@@ -1,11 +1,7 @@
 # components/asset_tracker.py
-import dash
-from dash import dcc, html, callback, Input, Output, State
+from dash import html
 import dash_bootstrap_components as dbc
 import pandas as pd
-import json
-import os
-from datetime import datetime
 
 
 def create_asset_tracker_component():

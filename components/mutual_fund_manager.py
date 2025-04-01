@@ -1,12 +1,7 @@
 # components/mutual_fund_manager.py
-import dash
-from dash import dcc, html, callback, Input, Output, State
+from dash import html
 import dash_bootstrap_components as dbc
-import pandas as pd
 from datetime import datetime
-import json
-import os
-from modules.mutual_fund_provider import MutualFundProvider
 
 def create_mutual_fund_manager_component():
     """

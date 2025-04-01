@@ -1,11 +1,6 @@
 # modules/recommendation_engine.py
-import pandas as pd
-import numpy as np
-from sklearn.cluster import KMeans
-import tensorflow as tf
 from tensorflow import keras
 
-from modules.portfolio_utils import load_tracked_assets
 
 # Fix in recommendation_engine.py
 class RecommendationEngine:

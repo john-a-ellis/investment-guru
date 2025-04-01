@@ -1,6 +1,5 @@
 # components/portfolio_analysis.py
-import dash
-from dash import dcc, html, callback, Input, Output, State
+from dash import dcc, html
 import dash_bootstrap_components as dbc
 import pandas as pd
 import numpy as np

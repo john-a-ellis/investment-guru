@@ -4,16 +4,16 @@
         "shares": 1.405,
         "purchase_price": 44.23,
         "purchase_date": "2025-03-28",
-        "current_price": 45.5,
-        "current_value": 63.9275,
-        "gain_loss": 1.7843500000000034,
-        "gain_loss_percent": 2.871354284422356,
+        "current_price": 45.459999084472656,
+        "current_value": 63.871298713684084,
+        "gain_loss": 1.7281487136840852,
+        "gain_loss_percent": 2.7809158590835548,
         "currency": "CAD",
         "transaction_ids": [
             "a24e8092-dd7d-4201-944d-938f74c41b49"
         ],
         "added_date": "2025-03-30 19:53:08",
-        "last_updated": "2025-04-01 15:56:39",
+        "last_updated": "2025-04-01 19:30:23",
         "asset_type": "stock"
     },
     "93db14b2-9bcd-44ae-9035-d098e6533d90": {
@@ -21,16 +21,16 @@
         "shares": 0.699,
         "purchase_price": 246.94,
         "purchase_date": "2025-03-27",
-        "current_price": 249.14999389648438,
-        "current_value": 174.15584573364256,
-        "gain_loss": 1.544785733642584,
-        "gain_loss_percent": 0.8949517682369734,
+        "current_price": 249.1999969482422,
+        "current_value": 174.19079786682127,
+        "gain_loss": 1.57973786682129,
+        "gain_loss_percent": 0.9152008375484799,
         "currency": "CAD",
         "transaction_ids": [
             "af0ac4e9-c84c-4775-b3b1-c2c279c8150c"
         ],
         "added_date": "2025-03-30 20:06:30",
-        "last_updated": "2025-04-01 15:56:39",
+        "last_updated": "2025-04-01 19:30:23",
         "asset_type": "stock"
     },
     "993eddb8-3747-419e-a232-ad4daf9bc5f2": {
@@ -38,16 +38,16 @@
         "shares": 0.93,
         "purchase_price": 245.27,
         "purchase_date": "2025-03-26",
-        "current_price": 249.14999389648438,
-        "current_value": 231.70949432373047,
-        "gain_loss": 3.608394323730437,
-        "gain_loss_percent": 1.5819276293408846,
+        "current_price": 249.1999969482422,
+        "current_value": 231.75599716186525,
+        "gain_loss": 3.6548971618652217,
+        "gain_loss_percent": 1.6023145709798126,
         "currency": "CAD",
         "transaction_ids": [
             "a4f2a479-efd3-48b8-98e3-285f9e7eef96"
         ],
         "added_date": "2025-03-30 20:07:04",
-        "last_updated": "2025-04-01 15:56:39",
+        "last_updated": "2025-04-01 19:30:23",
         "asset_type": "stock"
     },
     "d1e2c4d6-76ac-4e00-a8b7-d8064ff4f7e7": {
@@ -55,16 +55,16 @@
         "shares": 0.336,
         "purchase_price": 234.16,
         "purchase_date": "2024-09-12",
-        "current_price": 249.14999389648438,
-        "current_value": 83.71439794921875,
-        "gain_loss": 5.036637949218743,
-        "gain_loss_percent": 6.401603133107447,
+        "current_price": 249.1999969482422,
+        "current_value": 83.73119897460938,
+        "gain_loss": 5.053438974609378,
+        "gain_loss_percent": 6.422957357465919,
         "currency": "CAD",
         "transaction_ids": [
             "0578dc80-0397-4008-8c3b-091ef276cf20"
         ],
         "added_date": "2025-03-30 20:08:46",
-        "last_updated": "2025-04-01 15:56:39",
+        "last_updated": "2025-04-01 19:30:23",
         "asset_type": "stock"
     },
     "984b94de-c74d-41d9-8c67-dfdf21d85213": {
@@ -72,13 +72,13 @@
         "shares": 346.889,
         "purchase_price": 36.2,
         "purchase_date": "2025-03-26",
-        "current_price": 37.560001373291016,
-        "current_value": 13029.151316379548,
-        "gain_loss": 471.769516379547,
-        "gain_loss_percent": 3.756909870969638,
+        "current_price": 37.54999923706055,
+        "current_value": 13025.681685344696,
+        "gain_loss": 468.2998853446952,
+        "gain_loss_percent": 3.7292796603882516,
         "currency": "CAD",
         "added_date": "2025-03-30 20:11:11",
-        "last_updated": "2025-04-01 15:56:39",
+        "last_updated": "2025-04-01 19:30:23",
         "asset_type": "etf"
     },
     "efe50737-9c08-40a8-8570-532e9c597f34": {
@@ -86,16 +86,16 @@
         "shares": 6.929,
         "purchase_price": 32.17,
         "purchase_date": "2024-12-10",
-        "current_price": 37.560001373291016,
-        "current_value": 260.25324951553347,
-        "gain_loss": 37.34731951553346,
-        "gain_loss_percent": 16.75474471026115,
+        "current_price": 37.54999923706055,
+        "current_value": 260.18394471359255,
+        "gain_loss": 37.27801471359254,
+        "gain_loss_percent": 16.723653208145926,
         "currency": "CAD",
         "transaction_ids": [
             "d5f05998-d0e5-42ab-804e-5f1aad9e99ec"
         ],
         "added_date": "2025-03-30 20:13:46",
-        "last_updated": "2025-04-01 15:56:39",
+        "last_updated": "2025-04-01 19:30:23",
         "asset_type": "etf"
     },
     "db208aac-c878-4627-8241-9ae1bfd804c1": {
@@ -103,16 +103,16 @@
         "shares": 3.643,
         "purchase_price": 30.31,
         "purchase_date": "2024-11-14",
-        "current_price": 37.560001373291016,
-        "current_value": 136.83108500289916,
-        "gain_loss": 26.41175500289917,
-        "gain_loss_percent": 23.91950304615973,
+        "current_price": 37.54999923706055,
+        "current_value": 136.79464722061155,
+        "gain_loss": 26.375317220611564,
+        "gain_loss_percent": 23.886503586474927,
         "currency": "CAD",
         "transaction_ids": [
             "2c34a046-364c-4e5f-a375-b9f7938cbaa8"
         ],
         "added_date": "2025-03-30 20:15:21",
-        "last_updated": "2025-04-01 15:56:39",
+        "last_updated": "2025-04-01 19:30:23",
         "asset_type": "etf"
     },
     "9ebf6c82-c306-4cfb-ad1a-43b35364c052": {
@@ -129,7 +129,7 @@
             "ab3c8ba9-d366-4856-8e13-bf6ada8d9ff0"
         ],
         "added_date": "2025-03-30 20:17:56",
-        "last_updated": "2025-04-01 15:56:39",
+        "last_updated": "2025-04-01 19:30:23",
         "asset_type": "etf"
     },
     "47d89303-7d25-4991-89c5-b836b050ccdf": {
@@ -146,7 +146,7 @@
             "620e00ed-a4d3-4dff-98e0-856cce6c3dad"
         ],
         "added_date": "2025-03-30 20:27:07",
-        "last_updated": "2025-04-01 15:56:39",
+        "last_updated": "2025-04-01 19:30:23",
         "asset_type": "stock"
     },
     "d6e25837-aaa3-4e90-aaae-61bb322169d1": {
@@ -160,7 +160,7 @@
         "gain_loss_percent": 4.2572484500166485,
         "currency": "CAD",
         "added_date": "2025-03-31 05:30:42",
-        "last_updated": "2025-04-01 15:56:39",
+        "last_updated": "2025-04-01 19:30:23",
         "asset_type": "etf"
     },
     "1d403ad9-9380-4738-8ca2-c0b0c0691e37": {
@@ -168,16 +168,16 @@
         "shares": 1.0,
         "purchase_price": 20.29,
         "purchase_date": "2021-02-01",
-        "current_price": 37.560001373291016,
-        "current_value": 37.560001373291016,
-        "gain_loss": 17.270001373291016,
-        "gain_loss_percent": 85.11582736959595,
+        "current_price": 37.54999923706055,
+        "current_value": 37.54999923706055,
+        "gain_loss": 17.259999237060548,
+        "gain_loss_percent": 85.06653147885928,
         "currency": "CAD",
         "transaction_ids": [
             "ef7e3c5a-b2e6-48f2-bbca-aa08e28df9e3"
         ],
         "added_date": "2025-03-31 05:51:37",
-        "last_updated": "2025-04-01 15:56:39",
+        "last_updated": "2025-04-01 19:30:23",
         "asset_type": "etf"
     },
     "a1a2b187-ad29-4918-82b1-4824eb804cc9": {
@@ -185,16 +185,16 @@
         "shares": 2.0,
         "purchase_price": 22.98,
         "purchase_date": "2020-08-06",
-        "current_price": 37.560001373291016,
-        "current_value": 75.12000274658203,
-        "gain_loss": 29.16000274658203,
-        "gain_loss_percent": 63.4464811718495,
+        "current_price": 37.54999923706055,
+        "current_value": 75.0999984741211,
+        "gain_loss": 29.139998474121093,
+        "gain_loss_percent": 63.40295577485007,
         "currency": "CAD",
         "transaction_ids": [
             "0b19e4a1-1691-433d-a7c3-8d12ac67f095"
         ],
         "added_date": "2025-03-31 05:53:03",
-        "last_updated": "2025-04-01 15:56:39",
+        "last_updated": "2025-04-01 19:30:23",
         "asset_type": "etf"
     },
     "ce8a3a32-c7f6-4082-ad96-ab6f3cce8ca5": {
@@ -211,7 +211,7 @@
             "964655d7-84f9-455b-aa4f-7bbc3263399d"
         ],
         "added_date": "2025-03-31 06:16:30",
-        "last_updated": "2025-04-01 15:56:39",
+        "last_updated": "2025-04-01 19:30:23",
         "asset_type": "etf"
     },
     "92a8cb92-ffd5-45ea-8552-d3917bdf0748": {
@@ -228,7 +228,7 @@
             "7d503250-8fe4-4941-bc58-f85ae8232a26"
         ],
         "added_date": "2025-03-31 06:22:40",
-        "last_updated": "2025-04-01 15:56:39",
+        "last_updated": "2025-04-01 19:30:23",
         "asset_type": "etf"
     },
     "bfef9aac-c6cc-458c-864a-46f5e280ba1d": {
@@ -245,7 +245,7 @@
             "6c910706-1f8b-46cc-b4e6-ec8d630c8783"
         ],
         "added_date": "2025-03-31 06:27:07",
-        "last_updated": "2025-04-01 15:56:39",
+        "last_updated": "2025-04-01 19:30:23",
         "asset_type": "etf"
     },
     "21c9af11-889d-4fa8-af7f-f94e550a9c14": {
@@ -253,16 +253,16 @@
         "shares": 0.019,
         "purchase_price": 230.43,
         "purchase_date": "2024-10-01",
-        "current_price": 249.14999389648438,
-        "current_value": 4.733849884033203,
-        "gain_loss": 0.3556798840332034,
-        "gain_loss_percent": 8.12393954627626,
+        "current_price": 249.1999969482422,
+        "current_value": 4.734799942016601,
+        "gain_loss": 0.3566299420166015,
+        "gain_loss_percent": 8.145639434206565,
         "currency": "CAD",
         "transaction_ids": [
             "82224d5d-7808-487c-aeff-b008c554be94"
         ],
         "added_date": "2025-03-31 06:29:44",
-        "last_updated": "2025-04-01 15:56:39",
+        "last_updated": "2025-04-01 19:30:23",
         "asset_type": "stock"
     }
 }
