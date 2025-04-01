@@ -79,51 +79,51 @@ def create_portfolio_management_component():
         ])
     ])
 
-def load_portfolio():
-    """
-    Load portfolio data from storage file
-    """
-    try:
-        if os.path.exists('data/portfolio.json'):
-            with open('data/portfolio.json', 'r') as f:
-                return json.load(f)
-        else:
-            # Default empty portfolio if no file exists
-            return {}
-    except Exception as e:
-        print(f"Error loading portfolio: {e}")
-        return {}
+# def load_portfolio():
+#     """
+#     Load portfolio data from storage file
+#     """
+#     try:
+#         if os.path.exists('data/portfolio.json'):
+#             with open('data/portfolio.json', 'r') as f:
+#                 return json.load(f)
+#         else:
+#             # Default empty portfolio if no file exists
+#             return {}
+#     except Exception as e:
+#         print(f"Error loading portfolio: {e}")
+#         return {}
 
-def save_portfolio(portfolio):
-    """
-    Save portfolio data to storage file
-    """
-    try:
-        os.makedirs('data', exist_ok=True)
-        with open('data/portfolio.json', 'w') as f:
-            json.dump(portfolio, f, indent=4)
-        return True
-    except Exception as e:
-        print(f"Error saving portfolio: {e}")
-        return False
+# def save_portfolio(portfolio):
+#     """
+#     Save portfolio data to storage file
+#     """
+#     try:
+#         os.makedirs('data', exist_ok=True)
+#         with open('data/portfolio.json', 'w') as f:
+#             json.dump(portfolio, f, indent=4)
+#         return True
+#     except Exception as e:
+#         print(f"Error saving portfolio: {e}")
+#         return False
 
-def load_transactions():
-    """
-    Load transaction records from storage file
+# def load_transactions():
+#     """
+#     Load transaction records from storage file
     
-    Returns:
-        dict: Transaction records
-    """
-    try:
-        if os.path.exists('data/transactions.json'):
-            with open('data/transactions.json', 'r') as f:
-                return json.load(f)
-        else:
-            # Default empty transactions if no file exists
-            return {}
-    except Exception as e:
-        print(f"Error loading transactions: {e}")
-        return {}
+#     Returns:
+#         dict: Transaction records
+#     """
+#     try:
+#         if os.path.exists('data/transactions.json'):
+#             with open('data/transactions.json', 'r') as f:
+#                 return json.load(f)
+#         else:
+#             # Default empty transactions if no file exists
+#             return {}
+#     except Exception as e:
+#         print(f"Error loading transactions: {e}")
+#         return {}
 
 def create_portfolio_table(portfolio):
     """

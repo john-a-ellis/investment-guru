@@ -13,37 +13,38 @@ import sys
 import os
 from dash.exceptions import PreventUpdate
 import json
-from datetime import datetime
 import yfinance as yf
 
 # Add the parent directory to sys.path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-# Custom modules
+# Custom modules - consolidated imports from our improved architecture
 from modules.data_collector import DataCollector
 from modules.market_analyzer import MarketAnalyzer
 from modules.news_analyzer import NewsAnalyzer
 from modules.recommendation_engine import RecommendationEngine
 from modules.portfolio_tracker import PortfolioTracker
-from components.asset_tracker import create_asset_tracker_component, load_tracked_assets, create_tracked_assets_table, save_tracked_assets
-from components.user_profile import create_user_profile_component, load_user_profile, save_user_profile
-from components.mutual_fund_manager import create_mutual_fund_manager_component
 from modules.mutual_fund_provider import MutualFundProvider
 
-# New imports for portfolio tracking
-from components.portfolio_management import create_portfolio_management_component
-from components.portfolio_visualizer import create_portfolio_visualizer_component, create_performance_graph, get_portfolio_historical_data
-from modules.portfolio_data_updater import update_portfolio_data, add_investment, remove_investment, load_portfolio, save_portfolio
+# Import consolidated portfolio utilities
+from modules.portfolio_utils import (
+    load_portfolio, save_portfolio, update_portfolio_data, add_investment, 
+    remove_investment, record_transaction, load_transactions, load_tracked_assets, 
+    save_tracked_assets, load_user_profile, save_user_profile, get_usd_to_cad_rate,
+    get_combined_value_cad, format_currency
+)
+
+# Components
+from components.asset_tracker import create_asset_tracker_component, create_tracked_assets_table
+from components.user_profile import create_user_profile_component
+from components.mutual_fund_manager import create_mutual_fund_manager_component
+from components.portfolio_management import create_portfolio_management_component, create_portfolio_table
+from components.portfolio_visualizer import create_portfolio_visualizer_component, create_performance_graph
 from components.portfolio_analysis import (
-    create_portfolio_analysis_component, 
-    create_allocation_chart,
-    create_sector_chart, 
-    create_correlation_chart,
-    create_allocation_details,
-    create_sector_details,
+    create_portfolio_analysis_component, create_allocation_chart, create_sector_chart, 
+    create_correlation_chart, create_allocation_details, create_sector_details, 
     create_correlation_analysis
 )
-from modules.currency_utils import get_usd_to_cad_rate, format_currency, get_combined_value_cad
 
 # Initialize the Dash app with a Bootstrap theme
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
@@ -629,8 +630,6 @@ def manage_portfolio(add_clicks, update_interval, remove_clicks, symbol, shares,
     """
     Consolidated callback to manage portfolio actions (add, update, remove)
     """
-    from components.portfolio_management import create_portfolio_table
-    
     # Initialize default return values
     feedback = None
     updated_table = dash.no_update
@@ -837,7 +836,6 @@ def load_initial_portfolio_table(n_intervals):
     Load and display the portfolio table when the app first loads
     """
     print("Initial portfolio table load triggered")
-    from components.portfolio_management import create_portfolio_table
     try:
         # Update portfolio data with current market prices
         portfolio = update_portfolio_data()
@@ -869,12 +867,9 @@ def record_quick_transaction(n_clicks, transaction_type, symbol, shares, price, 
     symbol = symbol.upper().strip()
     
     # Record the transaction
-    from modules.transaction_tracker import record_transaction
-    success = record_transaction(symbol, transaction_type, shares, price, date)
+    success = record_transaction(transaction_type, symbol, price, shares, date)
     
     # Update portfolio table
-    from components.portfolio_management import create_portfolio_table
-    from modules.portfolio_data_updater import update_portfolio_data
     portfolio = update_portfolio_data()
     updated_table = create_portfolio_table(portfolio)
     
@@ -892,7 +887,6 @@ def record_quick_transaction(n_clicks, transaction_type, symbol, shares, price, 
         )
 
 # Fixed pattern-matching callback for buy transactions from accordion
-# This uses separate callbacks for feedback and table updates
 @app.callback(
     Output({"type": "buy-feedback", "symbol": dash.dependencies.MATCH}, "children"),
     Input({"type": "record-buy-button", "symbol": dash.dependencies.MATCH}, "n_clicks"),
@@ -910,8 +904,7 @@ def record_buy_feedback(n_clicks, shares, price, date, button_id):
     symbol = button_id["symbol"]
     
     # Record the transaction
-    from modules.transaction_tracker import record_transaction
-    success = record_transaction(symbol, "buy", shares, price, date)
+    success = record_transaction("buy", symbol, price, shares, date)
     
     # Return appropriate feedback
     if success:
@@ -931,8 +924,6 @@ def update_table_after_buy(n_clicks_list):
         raise dash.exceptions.PreventUpdate
     
     # Update portfolio table
-    from components.portfolio_management import create_portfolio_table
-    from modules.portfolio_data_updater import update_portfolio_data
     portfolio = update_portfolio_data()
     return create_portfolio_table(portfolio)
 
@@ -954,8 +945,7 @@ def record_sell_feedback(n_clicks, shares, price, date, button_id):
     symbol = button_id["symbol"]
     
     # Record the transaction
-    from modules.transaction_tracker import record_transaction
-    success = record_transaction(symbol, "sell", shares, price, date)
+    success = record_transaction("sell", symbol, price, shares, date)
     
     # Return appropriate feedback
     if success:
@@ -975,8 +965,6 @@ def update_table_after_sell(n_clicks_list):
         raise dash.exceptions.PreventUpdate
     
     # Update portfolio table
-    from components.portfolio_management import create_portfolio_table
-    from modules.portfolio_data_updater import update_portfolio_data
     portfolio = update_portfolio_data()
     return create_portfolio_table(portfolio)
 

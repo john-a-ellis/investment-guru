@@ -5,7 +5,7 @@ from sklearn.cluster import KMeans
 import tensorflow as tf
 from tensorflow import keras
 
-from components.asset_tracker import load_tracked_assets
+from modules.portfolio_utils import load_tracked_assets
 
 # Fix in recommendation_engine.py
 class RecommendationEngine:
