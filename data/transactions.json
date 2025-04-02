@@ -3,7 +3,7 @@
         "symbol": "CGL-C.TO",
         "transaction_type": "buy",
         "shares": 346.889,
-        "price": 36.20,
+        "price": 36.2,
         "transaction_date": "2025-03-26",
         "currency": "CAD",
         "total_amount": 12557.3818,
@@ -174,5 +174,15 @@
         "total_amount": 4.37817,
         "notes": "",
         "recorded_at": "2025-03-31 06:29:44"
+    },
+    "e1a48df9-a7cf-45a5-ad05-70b079e1d759": {
+        "type": "buy",
+        "symbol": "XTR.TO",
+        "price": 11.5,
+        "shares": 21.0,
+        "amount": 241.5,
+        "date": "2025-04-02",
+        "notes": "",
+        "recorded_at": "2025-04-02 09:51:02"
     }
 }
