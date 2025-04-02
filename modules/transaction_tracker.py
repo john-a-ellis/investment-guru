@@ -381,6 +381,9 @@ def load_transactions(symbol=None, start_date=None, end_date=None):
             tx_dict['transaction_date'] = tx_dict['transaction_date'].strftime("%Y-%m-%d")
             tx_dict['recorded_at'] = tx_dict['recorded_at'].strftime("%Y-%m-%d %H:%M:%S")
             
+            # Ensure ID is converted to string
+            tx_dict['id'] = str(tx_dict['id'])
+            
             # Add to result dictionary
             result[tx_dict['id']] = tx_dict
     

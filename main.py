@@ -671,6 +671,7 @@ def manage_portfolio(add_clicks, update_interval, remove_clicks, symbol, shares,
             if button_id.get("type") == "remove-investment-button":
                 investment_id = button_id.get("index")
                 if investment_id and any(remove_clicks):
+                    # The investment_id here is already a string from the JSON parse
                     remove_investment(investment_id)
                     feedback = dbc.Alert(f"Investment removed", color="info")
         except Exception as e:

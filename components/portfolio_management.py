@@ -393,7 +393,8 @@ def create_portfolio_table(portfolio):
                     html.Td(
                         dbc.Button(
                             "Remove", 
-                            id={"type": "remove-investment-button", "index": inv["id"]},
+                            # Convert UUID to string here - THIS IS THE FIX
+                            id={"type": "remove-investment-button", "index": str(inv["id"])},
                             color="danger",
                             size="sm"
                         )
