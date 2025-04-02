@@ -318,6 +318,148 @@ def update_portfolio_data():
     # Return updated portfolio
     return load_portfolio()
 
+def add_investment(symbol, shares, purchase_price, purchase_date, asset_type="stock"):
+    """
+    Add a new investment to the portfolio database
+    
+    Args:
+        symbol (str): Investment symbol
+        shares (float): Number of shares
+        purchase_price (float): Purchase price per share
+        purchase_date (str): Purchase date in YYYY-MM-DD format
+        asset_type (str): Type of asset (stock, etf, mutual_fund, etc.)
+        
+    Returns:
+        bool: Success status
+    """
+    import yfinance as yf
+    from modules.mutual_fund_provider import MutualFundProvider
+    
+    # Generate unique ID for this investment
+    investment_id = str(uuid.uuid4())
+    
+    # Calculate initial values
+    initial_value = float(shares) * float(purchase_price)
+    
+    # Default current price to purchase price
+    current_price = float(purchase_price)
+    
+    # For mutual funds, try to get price from our provider
+    if asset_type == "mutual_fund":
+        # Import here to avoid circular imports
+        mutual_fund_provider = MutualFundProvider()
+        
+        # Get the most recent price
+        fund_price = mutual_fund_provider.get_current_price(symbol)
+        if fund_price:
+            current_price = fund_price
+            
+        # Always treat mutual funds as CAD
+        currency = "CAD"
+    else:
+        # Determine currency based on symbol for non-mutual fund investments
+        is_canadian = symbol.endswith(".TO") or symbol.endswith(".V") or "-CAD" in symbol
+        currency = "CAD" if is_canadian else "USD"
+        
+        # Find if we already have this symbol in our portfolio for the current price
+        select_query = "SELECT current_price FROM portfolio WHERE symbol = %s LIMIT 1;"
+        existing_price = execute_query(select_query, (symbol,), fetchone=True)
+        
+        if existing_price and existing_price['current_price']:
+            current_price = float(existing_price['current_price'])
+        
+        # If we don't have an existing price, try to get it from the API
+        if current_price == float(purchase_price) and asset_type != "mutual_fund":
+            try:
+                ticker = yf.Ticker(symbol)
+                price_data = ticker.history(period="1d")
+                
+                if not price_data.empty:
+                    current_price = price_data['Close'].iloc[-1]
+            except Exception as e:
+                logger.error(f"Error getting initial price for {symbol}: {e}")
+    
+    # Calculate current value and gain/loss
+    current_value = float(shares) * current_price
+    gain_loss = current_value - initial_value
+    gain_loss_percent = ((current_price / float(purchase_price)) - 1) * 100 if float(purchase_price) > 0 else 0
+    
+    # Insert into portfolio table
+    insert_query = """
+    INSERT INTO portfolio (
+        id, symbol, shares, purchase_price, purchase_date, asset_type,
+        current_price, current_value, gain_loss, gain_loss_percent, 
+        currency, added_date, last_updated
+    ) VALUES (
+        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+    );
+    """
+    
+    params = (
+        investment_id,
+        symbol,
+        float(shares),
+        float(purchase_price),
+        purchase_date,
+        asset_type,
+        current_price,
+        current_value,
+        gain_loss,
+        gain_loss_percent,
+        currency,
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    )
+    
+    result = execute_query(insert_query, params, commit=True)
+    
+    if result is not None:
+        logger.info(f"Investment added successfully: {symbol} {shares} shares")
+        return True
+    
+    logger.error(f"Failed to add investment: {symbol}")
+    return False
+
+def remove_investment(investment_id):
+    """
+    Remove an investment from the portfolio
+    
+    Args:
+        investment_id (str): ID of investment to remove
+        
+    Returns:
+        bool: Success status
+    """
+    # Delete from portfolio
+    delete_query = "DELETE FROM portfolio WHERE id = %s;"
+    result = execute_query(delete_query, (investment_id,), commit=True)
+    
+    if result is not None:
+        logger.info(f"Investment removed successfully: {investment_id}")
+        return True
+    
+    logger.error(f"Failed to remove investment: {investment_id}")
+    return False
+
+def record_transaction(symbol, transaction_type, price, shares, date=None, notes=""):
+    """
+    Wrapper function for transaction recording
+    
+    Args:
+        symbol (str): Asset symbol
+        transaction_type (str): "buy" or "sell"
+        price (float): Price per share
+        shares (float): Number of shares
+        date (str): Transaction date (optional, defaults to current date)
+        notes (str): Transaction notes (optional)
+        
+    Returns:
+        bool: Success status
+    """
+    # Import here to avoid circular import issues
+    from modules.transaction_tracker import record_transaction as record_transaction_impl
+    return record_transaction_impl(symbol, transaction_type, shares, price, date, notes)
+
 def get_usd_to_cad_rate():
     """
     Get the current USD to CAD exchange rate
@@ -695,110 +837,138 @@ def get_money_weighted_return(portfolio, transactions=None, period="3m"):
     Returns:
         float: Money-weighted return (IRR) as a percentage
     """
-    from scipy import optimize
-    
-    # Get transaction data if not provided
-    if transactions is None:
-        # Get transactions from the database
-        transactions_query = """
-        SELECT * FROM transactions 
-        WHERE transaction_date >= %s
-        ORDER BY transaction_date, recorded_at;
-        """
+    try:
+        from scipy import optimize
         
-        # Define date range based on period
-        end_date = datetime.now()
-        
-        if period == "1m":
-            start_date = end_date - timedelta(days=30)
-        elif period == "3m":
-            start_date = end_date - timedelta(days=90)
-        elif period == "6m":
-            start_date = end_date - timedelta(days=180)
-        elif period == "1y":
-            start_date = end_date - timedelta(days=365)
-        else:  # "all"
-            # Find earliest transaction date from the database
-            earliest_date_query = """
-            SELECT MIN(transaction_date) as earliest_date FROM transactions;
+        # Get transaction data if not provided
+        if transactions is None:
+            # Get transactions from the database
+            transactions_query = """
+            SELECT * FROM transactions 
+            WHERE transaction_date >= %s
+            ORDER BY transaction_date, recorded_at;
             """
-            earliest_result = execute_query(earliest_date_query, fetchone=True)
             
-            start_date = end_date - timedelta(days=365)  # Default to 1 year
-            if earliest_result and earliest_result['earliest_date']:
-                start_date = earliest_result['earliest_date']
-        
-        transaction_records = execute_query(
-            transactions_query, 
-            (start_date.strftime("%Y-%m-%d"),),
-            fetchall=True
-        )
-        
-        transactions = {}
-        if transaction_records:
-            for tx in transaction_records:
-                tx_dict = dict(tx)
+            # Define date range based on period
+            end_date = datetime.now()
+            
+            if period == "1m":
+                start_date = end_date - timedelta(days=30)
+            elif period == "3m":
+                start_date = end_date - timedelta(days=90)
+            elif period == "6m":
+                start_date = end_date - timedelta(days=180)
+            elif period == "1y":
+                start_date = end_date - timedelta(days=365)
+            else:  # "all"
+                # Find earliest transaction date from the database
+                earliest_date_query = """
+                SELECT MIN(transaction_date) as earliest_date FROM transactions;
+                """
+                earliest_result = execute_query(earliest_date_query, fetchone=True)
                 
-                # Format dates for consistency
-                tx_dict['date'] = tx_dict['transaction_date'].strftime("%Y-%m-%d")
-                tx_dict['recorded_at'] = tx_dict['recorded_at'].strftime("%Y-%m-%d %H:%M:%S")
-                
-                transactions[str(tx_dict['id'])] = tx_dict
-    
-    # Get all transactions within the period
-    cash_flows = []
-    for transaction_id, transaction in transactions.items():
-        transaction_type = transaction.get("type", "").lower()
-        amount = float(transaction.get("amount", 0))
-        transaction_date = datetime.strptime(transaction.get("date", ""), "%Y-%m-%d")
+                start_date = end_date - timedelta(days=365)  # Default to 1 year
+                if earliest_result and earliest_result['earliest_date']:
+                    start_date = earliest_result['earliest_date']
+            
+            transaction_records = execute_query(
+                transactions_query, 
+                (start_date.strftime("%Y-%m-%d"),),
+                fetchall=True
+            )
+            
+            transactions = {}
+            if transaction_records:
+                for tx in transaction_records:
+                    tx_dict = dict(tx)
+                    
+                    # Format dates for consistency
+                    tx_dict['date'] = tx_dict['transaction_date'].strftime("%Y-%m-%d")
+                    tx_dict['recorded_at'] = tx_dict['recorded_at'].strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    transactions[str(tx_dict['id'])] = tx_dict
         
-        # Buy is negative cash flow (money leaving your account)
-        # Sell is positive cash flow (money coming into your account)
-        if transaction_type == "buy":
-            cash_flows.append((transaction_date, -amount))
-        elif transaction_type == "sell":
-            cash_flows.append((transaction_date, amount))
-    
-    # Current portfolio value is a positive cash flow (as if you were to sell everything)
-    portfolio_value = sum(float(inv.get("current_value", 0)) for inv in portfolio.values())
-    cash_flows.append((datetime.now(), portfolio_value))
-    
-    # Initial portfolio value (at start of period) is a negative cash flow
-    # We'll need to estimate this if not explicitly provided
-    from components.portfolio_visualizer import get_portfolio_historical_data
-    historical_data = get_portfolio_historical_data(portfolio, period)
-    
-    if not historical_data.empty and 'Total' in historical_data.columns:
-        initial_dates = historical_data.index[historical_data.index >= (end_date - timedelta(days={"1m": 30, "3m": 90, "6m": 180, "1y": 365, "all": 36500}[period]))]
-        if len(initial_dates) > 0:
-            initial_date = initial_dates[0]
-            initial_value = historical_data.loc[initial_date, 'Total']
-            cash_flows.append((initial_date, -initial_value))
-    
-    # Sort cash flows by date
-    cash_flows.sort(key=lambda x: x[0])
-    
-    # Convert to days since first cash flow for IRR calculation
-    if cash_flows:
-        first_date = cash_flows[0][0]
-        days_values = [(d - first_date).days for d, v in cash_flows]
-        values = [v for _, v in cash_flows]
-        
-        # Function to calculate NPV with a given rate
-        def npv(rate):
-            return sum(values[i] / (1 + rate) ** (days_values[i] / 365) for i in range(len(values)))
-        
-        # Find IRR (rate where NPV is zero)
-        try:
-            irr = optimize.newton(npv, 0.1)  # Use 10% as initial guess
-            return irr * 100  # Convert to percentage
-        except:
+        # Get all transactions within the period
+        cash_flows = []
+        for transaction_id, transaction in transactions.items():
             try:
-                # Fall back to a more robust but slower method
-                irr = optimize.brentq(npv, -0.999, 5)  # Reasonable range for returns
-                return irr * 100  # Convert to percentage
-            except:
-                # If all else fails
+                transaction_type = transaction.get("type", "").lower()
+                amount = float(transaction.get("amount", 0))
+                date_str = transaction.get("date", "")
+                if not date_str:
+                    continue
+                    
+                transaction_date = datetime.strptime(date_str, "%Y-%m-%d")
+                
+                # Buy is negative cash flow (money leaving your account)
+                # Sell is positive cash flow (money coming into your account)
+                if transaction_type == "buy":
+                    cash_flows.append((transaction_date, -amount))
+                elif transaction_type == "sell":
+                    cash_flows.append((transaction_date, amount))
+            except Exception as e:
+                logger.error(f"Error processing transaction {transaction_id}: {e}")
+                continue
+        
+        # Current portfolio value is a positive cash flow (as if you were to sell everything)
+        portfolio_value = sum(float(inv.get("current_value", 0)) for inv in portfolio.values())
+        cash_flows.append((datetime.now(), portfolio_value))
+        
+        # Initial portfolio value (at start of period) is a negative cash flow
+        # We'll need to estimate this if not explicitly provided
+        from components.portfolio_visualizer import get_portfolio_historical_data
+        historical_data = get_portfolio_historical_data(portfolio, period)
+        
+        if not historical_data.empty and 'Total' in historical_data.columns:
+            period_days = {"1m": 30, "3m": 90, "6m": 180, "1y": 365, "all": 36500}
+            period_start = end_date - timedelta(days=period_days.get(period, 90))
+            
+            initial_dates = historical_data.index[historical_data.index >= period_start]
+            if len(initial_dates) > 0:
+                initial_date = initial_dates[0]
+                initial_value = historical_data.loc[initial_date, 'Total']
+                cash_flows.append((initial_date, -initial_value))
+        
+        # Sort cash flows by date
+        cash_flows.sort(key=lambda x: x[0])
+        
+        # Convert to days since first cash flow for IRR calculation
+        if len(cash_flows) >= 2:  # Need at least 2 cash flows for meaningful IRR
+            first_date = cash_flows[0][0]
+            days_values = [(d - first_date).days for d, v in cash_flows]
+            values = [v for _, v in cash_flows]
+            
+            # Filter out zero values that can cause IRR calculation issues
+            non_zero_indices = [i for i, v in enumerate(values) if abs(v) > 0.01]
+            if len(non_zero_indices) < 2:
+                logger.warning("Not enough non-zero cash flows for IRR calculation")
                 return 0
+                
+            filtered_days = [days_values[i] for i in non_zero_indices]
+            filtered_values = [values[i] for i in non_zero_indices]
+            
+            # Function to calculate NPV with a given rate
+            def npv(rate):
+                return sum(filtered_values[i] / (1 + rate) ** (filtered_days[i] / 365) for i in range(len(filtered_values)))
+            
+            # Find IRR (rate where NPV is zero)
+            try:
+                irr = optimize.newton(npv, 0.1)  # Use 10% as initial guess
+                return irr * 100  # Convert to percentage
+            except Exception as e:
+                logger.warning(f"Newton's method failed for IRR calculation: {e}")
+                try:
+                    # Fall back to a more robust but slower method
+                    irr = optimize.brentq(npv, -0.99, 5)  # Reasonable range for returns
+                    return irr * 100  # Convert to percentage
+                except Exception as e:
+                    logger.error(f"IRR calculation failed: {e}")
+                    # If all else fails
+                    return 0
+        else:
+            logger.warning("Not enough cash flows for IRR calculation")
+            return 0
     
-    return 0
+    except Exception as e:
+        logger.error(f"Error in get_money_weighted_return: {e}")
+        return 0

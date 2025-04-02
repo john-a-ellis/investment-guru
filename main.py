@@ -26,8 +26,8 @@ from modules.mutual_fund_provider import MutualFundProvider
 # Import consolidated portfolio utilities
 from modules.portfolio_utils import (
     load_portfolio, update_portfolio_data, add_investment, 
-    remove_investment, record_transaction, load_tracked_assets, 
-    save_tracked_assets, save_user_profile
+    remove_investment, load_tracked_assets, save_tracked_assets, 
+    save_user_profile, record_transaction
 )
 
 # Components
