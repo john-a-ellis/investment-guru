@@ -16,7 +16,8 @@ from modules.portfolio_utils import (
 )
 def create_portfolio_visualizer_component():
     """
-    Creates a component for visualizing portfolio performance
+    Creates a component for visualizing portfolio performance with
+    options for different calculation methods, including TWRR
     """
     return dbc.Card([
         dbc.CardHeader("Portfolio Performance"),
@@ -46,7 +47,7 @@ def create_portfolio_visualizer_component():
                         value="3m",
                         inline=True
                     )
-                ], width=6),
+                ], width=4),
                 dbc.Col([
                     dbc.Label("Chart Type"),
                     dbc.RadioItems(
@@ -59,7 +60,20 @@ def create_portfolio_visualizer_component():
                         value="normalized",  # Default to normalized view
                         inline=True
                     )
-                ], width=6)
+                ], width=4),
+                dbc.Col([
+                    dbc.Label("Calculation Method"),
+                    dbc.RadioItems(
+                        id="performance-calculation-method",
+                        options=[
+                            {"label": "Simple Returns", "value": "simple"},
+                            {"label": "Time-Weighted (TWRR)", "value": "twrr"},
+                            {"label": "Money-Weighted (IRR)", "value": "mwr"}
+                        ],
+                        value="twrr",  # Default to TWRR
+                        inline=True
+                    )
+                ], width=4)
             ]),
             dbc.Row([
                 dbc.Col([
@@ -68,6 +82,279 @@ def create_portfolio_visualizer_component():
             ])
         ])
     ])
+
+# Add this new function to create a TWRR chart
+def create_twrr_performance_graph(portfolio, period="3m"):
+    """
+    Create a Time-Weighted Rate of Return (TWRR) performance graph that
+    eliminates the impact of cash flows (deposits/withdrawals)
+    
+    Args:
+        portfolio (dict): Portfolio data
+        period (str): Time period to display
+        
+    Returns:
+        Figure: Plotly figure with TWRR performance graph
+    """
+    import plotly.graph_objects as go
+    from modules.portfolio_utils import calculate_twrr
+    
+    try:
+        # Calculate TWRR
+        twrr_data = calculate_twrr(portfolio, period=period)
+        
+        if twrr_data['normalized_series'].empty:
+            # Return empty figure
+            fig = go.Figure()
+            fig.update_layout(
+                title="Portfolio TWRR Performance (No Data Available)",
+                xaxis_title="Date",
+                yaxis_title="Time-Weighted Return (%)",
+                template="plotly_white"
+            )
+            return fig
+        
+        # Create figure
+        fig = go.Figure()
+        
+        # Add TWRR series
+        fig.add_trace(go.Scatter(
+            x=twrr_data['normalized_series'].index,
+            y=twrr_data['normalized_series'],
+            mode='lines',
+            name='Portfolio TWRR',
+            line=dict(color='#2C3E50', width=3)
+        ))
+        
+        # Add TSX benchmark for comparison (if available)
+        from components.portfolio_visualizer import get_portfolio_historical_data
+        historical_data = get_portfolio_historical_data(portfolio, period)
+        
+        if not historical_data.empty and 'TSX' in historical_data.columns:
+            # Normalize TSX to 100 at start
+            first_tsx = historical_data['TSX'].iloc[0]
+            if first_tsx > 0:
+                normalized_tsx = (historical_data['TSX'] / first_tsx) * 100
+                
+                fig.add_trace(go.Scatter(
+                    x=normalized_tsx.index,
+                    y=normalized_tsx,
+                    mode='lines',
+                    name='S&P/TSX Composite',
+                    line=dict(color='#3498DB', width=2, dash='dash')
+                ))
+        
+        # Add overall TWRR percentage to chart title
+        twrr_pct = twrr_data['twrr']
+        period_text = {"1m": "1 Month", "3m": "3 Months", "6m": "6 Months", "1y": "1 Year", "all": "All Time"}
+        title_text = f"Portfolio Performance (TWRR: {twrr_pct:.2f}%) - {period_text.get(period, period)}"
+        
+        # Add zone coloring for positive/negative performance
+        fig.add_shape(
+            type="rect",
+            x0=0,
+            y0=100,
+            x1=1,
+            y1=200,  # Upper bound for positive zone
+            xref="paper",
+            fillcolor="rgba(0, 255, 0, 0.04)",
+            line=dict(width=0),
+            layer="below"
+        )
+        
+        fig.add_shape(
+            type="rect",
+            x0=0,
+            y0=0,  # Lower bound for negative zone
+            x1=1,
+            y1=100,
+            xref="paper",
+            fillcolor="rgba(255, 0, 0, 0.04)",
+            line=dict(width=0),
+            layer="below"
+        )
+        
+        # Add reference line at 100 (starting value)
+        fig.add_shape(
+            type="line",
+            x0=0,
+            y0=100,
+            x1=1,
+            y1=100,
+            xref="paper",
+            line=dict(
+                color="gray",
+                width=1,
+                dash="dot",
+            )
+        )
+        
+        # Format date on x-axis based on period
+        dtick = None
+        if period == "1m":
+            dtick = "d7"  # Weekly ticks for 1 month view
+        elif period == "3m":
+            dtick = "d14"  # Bi-weekly ticks for 3 month view
+        elif period == "6m":
+            dtick = "M1"  # Monthly ticks for 6 month view
+        elif period == "1y":
+            dtick = "M2"  # Bi-monthly ticks for 1 year view
+        
+        # Update layout
+        fig.update_layout(
+            title=title_text,
+            xaxis_title="Date",
+            yaxis_title="Time-Weighted Return (Base 100)",
+            template="plotly_white",
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            ),
+            margin=dict(l=20, r=20, t=60, b=20),
+            hovermode="x unified"
+        )
+        
+        # Apply date formatting if specified
+        if dtick:
+            fig.update_xaxes(dtick=dtick)
+        
+        return fig
+        
+    except Exception as e:
+        print(f"Error creating TWRR graph: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Return empty figure with error message
+        fig = go.Figure()
+        fig.update_layout(
+            title=f"Portfolio TWRR Performance (Error: {str(e)})",
+            xaxis_title="Date",
+            yaxis_title="Time-Weighted Return (%)",
+            template="plotly_white"
+        )
+        return fig
+
+# Add this new function to create an IRR/Money-Weighted Return summary
+def create_mwr_summary(portfolio, period="3m"):
+    """
+    Create a summary of Money-Weighted Return (IRR) with deposit/withdrawal impact details
+    
+    Args:
+        portfolio (dict): Portfolio data
+        period (str): Time period to display
+        
+    Returns:
+        html.Div: Dash component with MWR summary and cash flow details
+    """
+    from dash import html
+    import dash_bootstrap_components as dbc
+    from modules.portfolio_utils import get_money_weighted_return, load_transactions
+    
+    try:
+        # Calculate Money-Weighted Return
+        transactions = load_transactions()
+        mwr = get_money_weighted_return(portfolio, transactions, period)
+        
+        # Format the period name for display
+        period_text = {
+            "1m": "1 Month", 
+            "3m": "3 Months", 
+            "6m": "6 Months", 
+            "1y": "1 Year", 
+            "all": "All Time"
+        }.get(period, period)
+        
+        # Define date range based on period
+        end_date = datetime.now()
+        if period == "1m":
+            start_date = end_date - timedelta(days=30)
+        elif period == "3m":
+            start_date = end_date - timedelta(days=90)
+        elif period == "6m":
+            start_date = end_date - timedelta(days=180)
+        elif period == "1y":
+            start_date = end_date - timedelta(days=365)
+        else:  # "all"
+            # Find earliest transaction date
+            earliest_date = end_date
+            for transaction_id, transaction in transactions.items():
+                try:
+                    transaction_date = datetime.strptime(transaction.get("date", end_date.strftime("%Y-%m-%d")), "%Y-%m-%d")
+                    if transaction_date < earliest_date:
+                        earliest_date = transaction_date
+                except Exception as e:
+                    continue
+            
+            start_date = earliest_date - timedelta(days=1)
+        
+        # Get all transactions within the period
+        period_transactions = []
+        for transaction_id, transaction in transactions.items():
+            try:
+                transaction_date = datetime.strptime(transaction.get("date", ""), "%Y-%m-%d")
+                if start_date <= transaction_date <= end_date:
+                    period_transactions.append({
+                        'date': transaction_date.strftime("%Y-%m-%d"),
+                        'type': transaction.get("type", "").capitalize(),
+                        'symbol': transaction.get("symbol", ""),
+                        'amount': transaction.get("amount", 0)
+                    })
+            except Exception as e:
+                continue
+        
+        # Sort transactions by date (newest first)
+        period_transactions.sort(key=lambda x: x['date'], reverse=True)
+        
+        # Calculate total deposits and withdrawals
+        total_deposits = sum(tx['amount'] for tx in period_transactions if tx['type'].lower() == 'buy')
+        total_withdrawals = sum(tx['amount'] for tx in period_transactions if tx['type'].lower() == 'sell')
+        
+        # Create the summary component
+        return html.Div([
+            dbc.Alert([
+                html.H4(f"Money-Weighted Return ({period_text}): {mwr:.2f}%", className="alert-heading"),
+                html.P(f"This accounts for the timing and size of all deposits and withdrawals during this period."),
+                html.Hr(),
+                html.P([
+                    f"Total Deposits: ${total_deposits:.2f}",
+                    html.Br(),
+                    f"Total Withdrawals: ${total_withdrawals:.2f}"
+                ], className="mb-0")
+            ], color="info"),
+            
+            html.H5("Cash Flow Details", className="mt-3"),
+            
+            dbc.Table([
+                html.Thead(
+                    html.Tr([
+                        html.Th("Date"),
+                        html.Th("Type"),
+                        html.Th("Symbol"),
+                        html.Th("Amount")
+                    ])
+                ),
+                html.Tbody([
+                    html.Tr([
+                        html.Td(tx['date']),
+                        html.Td(tx['type']),
+                        html.Td(tx['symbol']),
+                        html.Td(f"${tx['amount']:.2f}")
+                    ]) for tx in period_transactions[:10]  # Only show most recent 10 transactions
+                ])
+            ], bordered=True, striped=True, hover=True, size="sm")
+        ])
+        
+    except Exception as e:
+        print(f"Error creating MWR summary: {e}")
+        
+        # Return simple error message
+        return html.Div([
+            dbc.Alert(f"Error calculating Money-Weighted Return: {str(e)}", color="danger")
+        ])
 
 
 def get_portfolio_historical_data(portfolio, period="3m"):

@@ -1,14 +1,14 @@
 {
-    "a24e8092-dd7d-4201-944d-938f74c41b49": {
-        "symbol": "MFC.TO",
+    "a0f1b2c3-d4e5-6789-abcd-ef0123456789": {
+        "symbol": "CGL-C.TO",
         "transaction_type": "buy",
-        "shares": 1.405,
-        "price": 44.23,
-        "transaction_date": "2025-03-28",
+        "shares": 346.889,
+        "price": 36.20,
+        "transaction_date": "2025-03-26",
         "currency": "CAD",
-        "total_amount": 62.14315,
-        "notes": "",
-        "recorded_at": "2025-03-30 19:53:08"
+        "total_amount": 12557.3818,
+        "notes": "Moved from BNS TFSA",
+        "recorded_at": "2025-03-30 19:54:39"
     },
     "d9d89db7-ebf9-4696-935d-4f17310df90a": {
         "symbol": "MFC.TO",
@@ -64,17 +64,6 @@
         "total_amount": 228.10110000000003,
         "notes": "",
         "recorded_at": "2025-03-30 20:07:04"
-    },
-    "e4b5f290-d58b-4efe-a1b7-f1565f1133a3": {
-        "symbol": "TRI.TO",
-        "transaction_type": "buy",
-        "shares": 0.19,
-        "price": 230.43,
-        "transaction_date": "2024-10-01",
-        "currency": "CAD",
-        "total_amount": 43.7817,
-        "notes": "",
-        "recorded_at": "2025-03-30 20:08:05"
     },
     "0578dc80-0397-4008-8c3b-091ef276cf20": {
         "symbol": "TRI.TO",
@@ -141,39 +130,6 @@
         "total_amount": 20.29,
         "notes": "",
         "recorded_at": "2025-03-31 05:51:37"
-    },
-    "0b19e4a1-1691-433d-a7c3-8d12ac67f095": {
-        "symbol": "CGL-C.TO",
-        "transaction_type": "buy",
-        "shares": 2.0,
-        "price": 22.98,
-        "transaction_date": "2020-08-06",
-        "currency": "CAD",
-        "total_amount": 45.96,
-        "notes": "",
-        "recorded_at": "2025-03-31 05:53:03"
-    },
-    "b6c5c160-605a-419c-9c7b-a6325ba7790b": {
-        "symbol": "CWW-TO",
-        "transaction_type": "buy",
-        "shares": 5.0,
-        "price": 40.28,
-        "transaction_date": "2020-08-04",
-        "currency": "USD",
-        "total_amount": 201.4,
-        "notes": "",
-        "recorded_at": "2025-03-31 06:10:37"
-    },
-    "3cd00b73-8fbf-4436-bc38-a3fe61387b73": {
-        "symbol": "CWW-TO",
-        "transaction_type": "buy",
-        "shares": 3.0,
-        "price": 49.0,
-        "transaction_date": "2022-03-25",
-        "currency": "USD",
-        "total_amount": 147.0,
-        "notes": "",
-        "recorded_at": "2025-03-31 06:15:16"
     },
     "964655d7-84f9-455b-aa4f-7bbc3263399d": {
         "symbol": "CWW.TO",

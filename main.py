@@ -687,11 +687,13 @@ def manage_portfolio(add_clicks, update_interval, remove_clicks, symbol, shares,
     Output("portfolio-performance-graph", "figure"),
     [Input("portfolio-update-interval", "n_intervals"),
      Input("performance-period-selector", "value"),
-     Input("performance-chart-type", "value")]
+     Input("performance-chart-type", "value"),
+     Input("performance-calculation-method", "value")]
 )
-def update_portfolio_graph(n_intervals, period, chart_type):
+def update_portfolio_graph(n_intervals, period, chart_type, calculation_method):
     """
-    Update the portfolio performance graph based on the selected time period and chart type
+    Update the portfolio performance graph based on the selected time period,
+    chart type, and calculation method
     """
     
     # Load portfolio data
@@ -709,19 +711,33 @@ def update_portfolio_graph(n_intervals, period, chart_type):
             )
             return fig
         
-        # Use the appropriate chart function based on chart_type
-        if chart_type == "normalized":
-            # Use the normalized view where all assets start at 100
-            from components.portfolio_visualizer import create_normalized_performance_graph
-            return create_normalized_performance_graph(portfolio, period)
-        elif chart_type == "relative":
-            # Use the relative percentage change view
-            from components.portfolio_visualizer import create_adaptive_scale_graph
-            return create_adaptive_scale_graph(portfolio, period, relative_view=True)
-        else:  # "value" (actual value)
-            # Use the absolute value view
-            from components.portfolio_visualizer import create_performance_graph
-            return create_performance_graph(portfolio, period)
+        # Use appropriate calculation method
+        if calculation_method == "twrr":
+            # Time-Weighted Rate of Return
+            from components.portfolio_visualizer import create_twrr_performance_graph
+            return create_twrr_performance_graph(portfolio, period)
+            
+        elif calculation_method == "mwr":
+            # Money-Weighted Return / IRR
+            # For MWR, we'll show a summary with the IRR percentage,
+            # but use the TWRR chart visualization
+            from components.portfolio_visualizer import create_twrr_performance_graph
+            return create_twrr_performance_graph(portfolio, period)
+        
+        else:  # "simple"
+            # Use the original chart functions based on chart_type
+            if chart_type == "normalized":
+                # Use the normalized view where all assets start at 100
+                from components.portfolio_visualizer import create_normalized_performance_graph
+                return create_normalized_performance_graph(portfolio, period)
+            elif chart_type == "relative":
+                # Use the relative percentage change view
+                from components.portfolio_visualizer import create_adaptive_scale_graph
+                return create_adaptive_scale_graph(portfolio, period, relative_view=True)
+            else:  # "value" (actual value)
+                # Use the absolute value view
+                from components.portfolio_visualizer import create_performance_graph
+                return create_performance_graph(portfolio, period)
             
     except Exception as e:
         print(f"Error in update_portfolio_graph: {str(e)}")
@@ -737,22 +753,29 @@ def update_portfolio_graph(n_intervals, period, chart_type):
             template="plotly_white"
         )
         return fig
-    
+
+# Update the summary stats callback to show IRR details when appropriate
 @app.callback(
     Output("portfolio-summary-stats", "children"),
-    Input("portfolio-update-interval", "n_intervals")
+    [Input("portfolio-update-interval", "n_intervals"),
+     Input("performance-period-selector", "value"),
+     Input("performance-calculation-method", "value")]
 )
-def update_portfolio_stats(n_intervals):
+def update_portfolio_stats(n_intervals, period, calculation_method):
     """
-    Update the portfolio summary statistics
+    Update the portfolio summary statistics based on the selected calculation method
     """
-    from components.portfolio_visualizer import create_summary_stats
-    
     # Load portfolio data
     portfolio = load_portfolio()
     
-    # Create and return summary stats
-    return create_summary_stats(portfolio)
+    # If using money-weighted return (IRR) method, show the MWR summary
+    if calculation_method == "mwr":
+        from components.portfolio_visualizer import create_mwr_summary
+        return create_mwr_summary(portfolio, period)
+    else:
+        # For TWRR or simple methods, show the standard summary stats
+        from components.portfolio_visualizer import create_summary_stats
+        return create_summary_stats(portfolio)
 
 @app.callback(
     Output("portfolio-allocation-chart", "figure"),

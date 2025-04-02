@@ -7,6 +7,7 @@ import os
 import json
 import pandas as pd
 import yfinance as yf
+import numpy as np
 from datetime import datetime, timedelta
 import uuid
 
@@ -552,6 +553,7 @@ def remove_investment(investment_id):
     return False
 
 def update_portfolio_data():
+
     """
     Updates portfolio data with current market prices and performance metrics
     
@@ -652,3 +654,315 @@ def update_portfolio_data():
     save_portfolio(portfolio)
     
     return portfolio
+
+def calculate_twrr(portfolio, transactions=None, period="3m"):
+    """
+    Calculate the Time-Weighted Rate of Return (TWRR) for a portfolio.
+    
+    This method eliminates the distorting effects of cash flows (deposits or 
+    withdrawals) by breaking the overall period into sub-periods defined by 
+    the timing of cash flows.
+    
+    Args:
+        portfolio (dict): Current portfolio data
+        transactions (dict): Transaction history (optional)
+        period (str): Time period to calculate for ("1m", "3m", "6m", "1y", "all")
+        
+    Returns:
+        dict: TWRR metrics including performance data series for charting
+    """
+    # Get transaction data if not provided
+    if transactions is None:
+        transactions = load_transactions()
+    
+    # Define date range based on period
+    end_date = datetime.now()
+    
+    if period == "1m":
+        start_date = end_date - timedelta(days=30)
+    elif period == "3m":
+        start_date = end_date - timedelta(days=90)
+    elif period == "6m":
+        start_date = end_date - timedelta(days=180)
+    elif period == "1y":
+        start_date = end_date - timedelta(days=365)
+    else:  # "all"
+        # Find earliest transaction date
+        earliest_date = end_date
+        for transaction_id, transaction in transactions.items():
+            try:
+                transaction_date = datetime.strptime(transaction.get("date", end_date.strftime("%Y-%m-%d")), "%Y-%m-%d")
+                if transaction_date < earliest_date:
+                    earliest_date = transaction_date
+            except Exception as e:
+                print(f"Error parsing transaction date: {e}")
+                continue
+        
+        # Go back at least 1 day before earliest transaction to get a baseline
+        start_date = earliest_date - timedelta(days=1)
+    
+    # Get historical portfolio values
+    from components.portfolio_visualizer import get_portfolio_historical_data
+    historical_data = get_portfolio_historical_data(portfolio, period)
+    
+    if historical_data.empty or 'Total' not in historical_data.columns:
+        return {
+            'twrr': 0,
+            'historical_values': pd.DataFrame(),
+            'normalized_series': pd.Series()
+        }
+    
+    # Get all transactions within the period
+    period_transactions = []
+    for transaction_id, transaction in transactions.items():
+        try:
+            transaction_date = datetime.strptime(transaction.get("date", ""), "%Y-%m-%d")
+            if start_date <= transaction_date <= end_date:
+                period_transactions.append({
+                    'date': transaction_date,
+                    'type': transaction.get("type", ""),
+                    'amount': transaction.get("amount", 0)
+                })
+        except Exception as e:
+            print(f"Error processing transaction for TWRR: {e}")
+            continue
+    
+    # Sort transactions by date
+    period_transactions.sort(key=lambda x: x['date'])
+    
+    # Calculate TWRR by breaking into sub-periods
+    sub_period_returns = []
+    portfolio_values = historical_data['Total']
+    
+    # Create a data structure for significant dates (transactions)
+    significant_dates = []
+    for transaction in period_transactions:
+        # Only include buys and sells, not dividends or other transaction types
+        if transaction['type'].lower() in ['buy', 'sell']:
+            # Find closest date in the data
+            closest_date = portfolio_values.index[portfolio_values.index >= transaction['date']]
+            if len(closest_date) > 0:
+                significant_dates.append({
+                    'date': closest_date[0],
+                    'amount': transaction['amount'] if transaction['type'].lower() == 'buy' else -transaction['amount']
+                })
+    
+    # Make sure significant dates are sorted and unique
+    significant_dates.sort(key=lambda x: x['date'])
+    unique_dates = []
+    date_map = {}
+    for item in significant_dates:
+        date_str = item['date'].strftime("%Y-%m-%d")
+        if date_str in date_map:
+            date_map[date_str]['amount'] += item['amount']
+        else:
+            date_map[date_str] = item
+            unique_dates.append(item)
+    
+    significant_dates = unique_dates
+    
+    # If no significant dates, just calculate the total return
+    if not significant_dates:
+        if len(portfolio_values) >= 2:
+            first_val = portfolio_values.iloc[0]
+            last_val = portfolio_values.iloc[-1]
+            if first_val > 0:
+                total_return = (last_val / first_val) - 1
+                sub_period_returns.append((1 + total_return))
+    else:
+        # Calculate returns for each sub-period
+        prev_date = portfolio_values.index[0]
+        prev_value = portfolio_values.iloc[0]
+        
+        for date_item in significant_dates:
+            current_date = date_item['date']
+            flow_amount = date_item['amount']
+            
+            # Get value just before flow
+            try:
+                before_flow_value = portfolio_values.loc[current_date]
+            except KeyError:
+                # Get the closest previous date
+                before_dates = portfolio_values.index[portfolio_values.index <= current_date]
+                if len(before_dates) > 0:
+                    before_flow_value = portfolio_values.loc[before_dates[-1]]
+                else:
+                    continue
+            
+            # Calculate return for this sub-period
+            if prev_value > 0:
+                sub_period_return = (before_flow_value / prev_value) - 1
+                sub_period_returns.append((1 + sub_period_return))
+            
+            # Update for next sub-period (adjust for cash flow)
+            prev_value = before_flow_value + flow_amount
+            prev_date = current_date
+        
+        # Calculate return for the last sub-period
+        last_value = portfolio_values.iloc[-1]
+        if prev_value > 0:
+            last_sub_period_return = (last_value / prev_value) - 1
+            sub_period_returns.append((1 + last_sub_period_return))
+    
+    # Calculate the overall TWRR
+    if sub_period_returns:
+        twrr = (np.prod(sub_period_returns) - 1) * 100
+    else:
+        twrr = 0
+    
+    # Create a normalized series for charting
+    normalized_series = pd.Series(index=portfolio_values.index)
+    
+    # Calculate the impact of cash flows on the performance line
+    running_adjustment = 1.0
+    last_date = portfolio_values.index[0]
+    normalized_series.iloc[0] = 100  # Start at 100
+    
+    for i in range(1, len(portfolio_values)):
+        current_date = portfolio_values.index[i]
+        
+        # Check if there were any cash flows between the last date and current date
+        flows_between = [item for item in significant_dates 
+                         if last_date < item['date'] <= current_date]
+        
+        if flows_between:
+            # There were cash flows, need to adjust
+            for flow in flows_between:
+                flow_date = flow['date']
+                flow_amount = flow['amount']
+                
+                # Get portfolio value before and after flow
+                try:
+                    before_flow = portfolio_values.loc[flow_date]
+                except KeyError:
+                    before_dates = portfolio_values.index[portfolio_values.index < flow_date]
+                    before_flow = portfolio_values.loc[before_dates[-1]] if len(before_dates) > 0 else 0
+                
+                # Calculate adjustment factor
+                if before_flow > 0:
+                    flow_factor = before_flow / (before_flow + flow_amount)
+                    running_adjustment *= flow_factor
+        
+        # Calculate the normalized value that removes the impact of cash flows
+        if running_adjustment > 0:
+            performance_only = portfolio_values.iloc[i] / (portfolio_values.iloc[0] * running_adjustment)
+            normalized_series.iloc[i] = performance_only * 100
+        else:
+            normalized_series.iloc[i] = normalized_series.iloc[i-1]
+        
+        last_date = current_date
+    
+    return {
+        'twrr': twrr,
+        'historical_values': portfolio_values,
+        'normalized_series': normalized_series
+    }
+
+def get_money_weighted_return(portfolio, transactions=None, period="3m"):
+    """
+    Calculate the Money-Weighted Rate of Return (Internal Rate of Return or IRR)
+    for a portfolio over a given period.
+    
+    Args:
+        portfolio (dict): Current portfolio data
+        transactions (dict): Transaction history (optional)
+        period (str): Time period to calculate for ("1m", "3m", "6m", "1y", "all")
+        
+    Returns:
+        float: Money-weighted return (IRR) as a percentage
+    """
+    from scipy import optimize
+    
+    # Get transaction data if not provided
+    if transactions is None:
+        transactions = load_transactions()
+    
+    # Define date range based on period
+    end_date = datetime.now()
+    
+    if period == "1m":
+        start_date = end_date - timedelta(days=30)
+    elif period == "3m":
+        start_date = end_date - timedelta(days=90)
+    elif period == "6m":
+        start_date = end_date - timedelta(days=180)
+    elif period == "1y":
+        start_date = end_date - timedelta(days=365)
+    else:  # "all"
+        # Find earliest transaction date
+        earliest_date = end_date
+        for transaction_id, transaction in transactions.items():
+            try:
+                transaction_date = datetime.strptime(transaction.get("date", end_date.strftime("%Y-%m-%d")), "%Y-%m-%d")
+                if transaction_date < earliest_date:
+                    earliest_date = transaction_date
+            except Exception as e:
+                print(f"Error parsing transaction date: {e}")
+                continue
+        
+        # Go back at least 1 day before earliest transaction to get a baseline
+        start_date = earliest_date - timedelta(days=1)
+    
+    # Get all transactions within the period
+    cash_flows = []
+    for transaction_id, transaction in transactions.items():
+        try:
+            transaction_date = datetime.strptime(transaction.get("date", ""), "%Y-%m-%d")
+            if start_date <= transaction_date <= end_date:
+                transaction_type = transaction.get("type", "").lower()
+                amount = transaction.get("amount", 0)
+                
+                # Buy is negative cash flow (money leaving your account)
+                # Sell is positive cash flow (money coming into your account)
+                if transaction_type == "buy":
+                    cash_flows.append((transaction_date, -amount))
+                elif transaction_type == "sell":
+                    cash_flows.append((transaction_date, amount))
+        except Exception as e:
+            print(f"Error processing transaction for IRR: {e}")
+            continue
+    
+    # Current portfolio value is a positive cash flow (as if you were to sell everything)
+    portfolio_value = sum(inv.get("current_value", 0) for inv in portfolio.values())
+    cash_flows.append((end_date, portfolio_value))
+    
+    # Initial portfolio value (at start of period) is a negative cash flow
+    # (as if you had just bought everything)
+    # We'll need to estimate this if not explicitly provided
+    from components.portfolio_visualizer import get_portfolio_historical_data
+    historical_data = get_portfolio_historical_data(portfolio, period)
+    
+    if not historical_data.empty and 'Total' in historical_data.columns:
+        initial_dates = historical_data.index[historical_data.index >= start_date]
+        if len(initial_dates) > 0:
+            initial_date = initial_dates[0]
+            initial_value = historical_data.loc[initial_date, 'Total']
+            cash_flows.append((initial_date, -initial_value))
+    
+    # Sort cash flows by date
+    cash_flows.sort(key=lambda x: x[0])
+    
+    # Convert to days since first cash flow for IRR calculation
+    if cash_flows:
+        first_date = cash_flows[0][0]
+        days_values = [(d - first_date).days for d, v in cash_flows]
+        values = [v for _, v in cash_flows]
+        
+        # Function to calculate NPV with a given rate
+        def npv(rate):
+            return sum(values[i] / (1 + rate) ** (days_values[i] / 365) for i in range(len(values)))
+        
+        # Find IRR (rate where NPV is zero)
+        try:
+            irr = optimize.newton(npv, 0.1)  # Use 10% as initial guess
+            return irr * 100  # Convert to percentage
+        except:
+            try:
+                # Fall back to a more robust but slower method
+                irr = optimize.brentq(npv, -0.999, 5)  # Reasonable range for returns
+                return irr * 100  # Convert to percentage
+            except:
+                # If all else fails
+                return 0
+    
+    return 0
