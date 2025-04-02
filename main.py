@@ -45,10 +45,13 @@ from components.portfolio_analysis import (
     create_correlation_analysis
 )
 
+myTitle = 'AIRS - AI Investment Recommendation System'
+
 # Initialize the Dash app with a Bootstrap theme
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
 server = app.server  # For production deployment
 
+app.title = myTitle
 # Initialize system components
 data_collector = DataCollector()
 market_analyzer = MarketAnalyzer()
@@ -694,8 +697,6 @@ def update_portfolio_graph(n_intervals, period, chart_type):
     # Load portfolio data
     try:
         portfolio = load_portfolio()
-        print(f"Portfolio loaded with {len(portfolio)} investments")
-        print(f"Chart type selected: {chart_type}")
         
         if not portfolio:
             # Return empty figure if no portfolio data
@@ -710,9 +711,15 @@ def update_portfolio_graph(n_intervals, period, chart_type):
         
         # Use the appropriate chart function based on chart_type
         if chart_type == "normalized":
+            # Use the normalized view where all assets start at 100
             from components.portfolio_visualizer import create_normalized_performance_graph
             return create_normalized_performance_graph(portfolio, period)
+        elif chart_type == "relative":
+            # Use the relative percentage change view
+            from components.portfolio_visualizer import create_adaptive_scale_graph
+            return create_adaptive_scale_graph(portfolio, period, relative_view=True)
         else:  # "value" (actual value)
+            # Use the absolute value view
             from components.portfolio_visualizer import create_performance_graph
             return create_performance_graph(portfolio, period)
             
