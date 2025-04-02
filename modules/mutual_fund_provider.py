@@ -1,8 +1,23 @@
 # modules/mutual_fund_provider.py
+"""
+Provider for retrieving and managing Canadian mutual fund price data.
+Uses PostgreSQL database for storage instead of JSON files.
+"""
 import pandas as pd
-import json
-import os
+import logging
 from datetime import datetime, timedelta
+from modules.mutual_fund_db import (
+    add_mutual_fund_price, 
+    get_mutual_fund_prices, 
+    get_latest_mutual_fund_price
+)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 class MutualFundProvider:
     """
@@ -11,45 +26,7 @@ class MutualFundProvider:
     """
     
     def __init__(self):
-        self.data_cache = {}
-        self.cache_file = 'data/mutual_fund_cache.json'
-        self.load_cache()
-    
-    def load_cache(self):
-        """Load cached mutual fund data"""
-        try:
-            if os.path.exists(self.cache_file):
-                with open(self.cache_file, 'r') as f:
-                    cache_data = json.load(f)
-                    
-                # Convert string dates back to datetime
-                for fund_code, entries in cache_data.items():
-                    self.data_cache[fund_code] = {}
-                    for date_str, price in entries.items():
-                        try:
-                            date = datetime.strptime(date_str, '%Y-%m-%d')
-                            self.data_cache[fund_code][date] = float(price)
-                        except:
-                            continue
-        except Exception as e:
-            print(f"Error loading mutual fund cache: {e}")
-            self.data_cache = {}
-    
-    def save_cache(self):
-        """Save mutual fund data to cache"""
-        try:
-            # Create a serializable version of the cache
-            serializable_cache = {}
-            for fund_code, entries in self.data_cache.items():
-                serializable_cache[fund_code] = {}
-                for date, price in entries.items():
-                    serializable_cache[fund_code][date.strftime('%Y-%m-%d')] = price
-            
-            os.makedirs(os.path.dirname(self.cache_file), exist_ok=True)
-            with open(self.cache_file, 'w') as f:
-                json.dump(serializable_cache, f, indent=4)
-        except Exception as e:
-            print(f"Error saving mutual fund cache: {e}")
+        self.data_cache = {}  # Runtime cache to minimize database hits
     
     def get_fund_data_morningstar(self, fund_code):
         """
@@ -60,7 +37,7 @@ class MutualFundProvider:
             # This is a placeholder - real implementation would use Morningstar API
             return None
         except Exception as e:
-            print(f"Error retrieving Morningstar data for {fund_code}: {e}")
+            logger.error(f"Error retrieving Morningstar data for {fund_code}: {e}")
             return None
     
     def get_fund_data_tmx(self, fund_code):
@@ -72,7 +49,7 @@ class MutualFundProvider:
             # This is a placeholder - real implementation would require proper scraping
             return None
         except Exception as e:
-            print(f"Error retrieving TMX data for {fund_code}: {e}")
+            logger.error(f"Error retrieving TMX data for {fund_code}: {e}")
             return None
     
     def add_manual_price(self, fund_code, date, price):
@@ -87,24 +64,22 @@ class MutualFundProvider:
         Returns:
             bool: Success status
         """
-        try:
-            # Convert string date to datetime if needed
-            if isinstance(date, str):
-                date = datetime.strptime(date, '%Y-%m-%d')
-            
+        # Add to database
+        success = add_mutual_fund_price(fund_code, date, price)
+        
+        # If successful, update runtime cache
+        if success:
             # Initialize fund in cache if needed
             if fund_code not in self.data_cache:
                 self.data_cache[fund_code] = {}
             
-            # Add the price point
-            self.data_cache[fund_code][date] = float(price)
+            # Convert date to string for cache key if it's a datetime
+            date_key = date if isinstance(date, str) else date.strftime('%Y-%m-%d')
             
-            # Save the updated cache
-            self.save_cache()
-            return True
-        except Exception as e:
-            print(f"Error adding manual price for {fund_code}: {e}")
-            return False
+            # Add to cache
+            self.data_cache[fund_code][date_key] = float(price)
+        
+        return success
     
     def get_historical_data(self, fund_code, start_date=None, end_date=None):
         """
@@ -128,30 +103,25 @@ class MutualFundProvider:
         external_data = self.get_fund_data_morningstar(fund_code) or self.get_fund_data_tmx(fund_code)
         
         if external_data:
-            # If we got external data, merge it with our cache
+            # If we got external data, add it to our database
             for date, price in external_data.items():
-                if fund_code not in self.data_cache:
-                    self.data_cache[fund_code] = {}
-                self.data_cache[fund_code][date] = price
-            
-            # Save the updated cache
-            self.save_cache()
+                add_mutual_fund_price(fund_code, date, price)
         
-        # Use cached data (which now includes any new external data)
-        if fund_code in self.data_cache:
-            # Filter by date range
-            filtered_data = {
-                date: price for date, price in self.data_cache[fund_code].items()
-                if start_date <= date <= end_date
-            }
-            
+        # Get data from database
+        price_data = get_mutual_fund_prices(fund_code, start_date, end_date)
+        
+        if price_data:
             # Convert to DataFrame
-            if filtered_data:
-                df = pd.DataFrame(
-                    {'Close': [price for price in filtered_data.values()]},
-                    index=[date for date in filtered_data.keys()]
-                )
-                return df.sort_index()
+            df_data = []
+            for item in price_data:
+                df_data.append({
+                    'Date': datetime.strptime(item['date'], '%Y-%m-%d'),
+                    'Close': float(item['price'])
+                })
+            
+            df = pd.DataFrame(df_data)
+            df.set_index('Date', inplace=True)
+            return df.sort_index()
         
         # If we don't have data, return empty DataFrame
         return pd.DataFrame()
@@ -166,10 +136,11 @@ class MutualFundProvider:
         Returns:
             float: Most recent price (or None if not available)
         """
-        if fund_code in self.data_cache:
-            # Get the most recent date
-            if self.data_cache[fund_code]:
-                most_recent_date = max(self.data_cache[fund_code].keys())
-                return self.data_cache[fund_code][most_recent_date]
+        # Check runtime cache first
+        if fund_code in self.data_cache and self.data_cache[fund_code]:
+            # Find the most recent date
+            most_recent_date = max(self.data_cache[fund_code].keys())
+            return self.data_cache[fund_code][most_recent_date]
         
-        return None
+        # Check database
+        return get_latest_mutual_fund_price(fund_code)
