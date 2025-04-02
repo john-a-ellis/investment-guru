@@ -776,12 +776,12 @@ def create_summary_stats(portfolio):
     usd_investments = {k: v for k, v in portfolio.items() if v.get("currency", "USD") == "USD"}
     
     # Calculate total portfolio value and investment in CAD
-    total_value_cad = sum(inv.get("current_value", 0) for inv in cad_investments.values())
-    total_investment_cad = sum(inv.get("shares", 0) * inv.get("purchase_price", 0) for inv in cad_investments.values())
+    total_value_cad = sum(float(inv.get("current_value", 0)) for inv in cad_investments.values())
+    total_investment_cad = sum(float(inv.get("shares", 0)) * float(inv.get("purchase_price", 0)) for inv in cad_investments.values())
     
     # Calculate total portfolio value and investment in USD
-    total_value_usd = sum(inv.get("current_value", 0) for inv in usd_investments.values())
-    total_investment_usd = sum(inv.get("shares", 0) * inv.get("purchase_price", 0) for inv in usd_investments.values())
+    total_value_usd = sum(float(inv.get("current_value", 0)) for inv in usd_investments.values())
+    total_investment_usd = sum(float(inv.get("shares", 0)) * float(inv.get("purchase_price", 0)) for inv in usd_investments.values())
     
     # Get current exchange rate
     usd_to_cad_rate = get_usd_to_cad_rate()
@@ -790,9 +790,9 @@ def create_summary_stats(portfolio):
     total_value_usd_in_cad = total_value_usd * usd_to_cad_rate
     total_investment_usd_in_cad = total_investment_usd * usd_to_cad_rate
     
-    # Calculate totals in CAD
-    total_value = total_value_cad + total_value_usd_in_cad
-    total_investment = total_investment_cad + total_investment_usd_in_cad
+    # Calculate totals in CAD - explicitly convert all values to float to avoid decimal/float mismatch
+    total_value = float(total_value_cad) + float(total_value_usd_in_cad)
+    total_investment = float(total_investment_cad) + float(total_investment_usd_in_cad)
     
     # Calculate gain/loss
     total_gain_loss = total_value - total_investment
@@ -811,10 +811,10 @@ def create_summary_stats(portfolio):
                 "total_current_value": 0
             }
         
-        # Add shares and values to the consolidated investment
-        consolidated_investments[symbol]["total_shares"] += inv.get("shares", 0)
-        consolidated_investments[symbol]["total_investment"] += inv.get("shares", 0) * inv.get("purchase_price", 0)
-        consolidated_investments[symbol]["total_current_value"] += inv.get("current_value", 0)
+        # Add shares and values to the consolidated investment - explicitly convert to float
+        consolidated_investments[symbol]["total_shares"] += float(inv.get("shares", 0))
+        consolidated_investments[symbol]["total_investment"] += float(inv.get("shares", 0)) * float(inv.get("purchase_price", 0))
+        consolidated_investments[symbol]["total_current_value"] += float(inv.get("current_value", 0))
     
     # Calculate consolidated gain/loss percentages
     investments_list = []
