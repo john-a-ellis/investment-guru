@@ -554,6 +554,46 @@ def create_summary_stats(portfolio):
                     html.H3(f"${total_value:.2f}", className="text-primary")
                 ])
             ])
+        ], width=3),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardBody([
+                    html.H5("Total Investment", className="card-title"),
+                    html.H3(f"${total_investment:.2f}", className="text-secondary")
+                ])
+            ])
+        ], width=3),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardBody([
+                    html.H5("Total Gain/Loss", className="card-title"),
+                    html.H3(
+                        f"${total_gain_loss:.2f} ({total_gain_loss_pct:.2f}%)", 
+                        className="text-success" if total_gain_loss >= 0 else "text-danger"
+                    )
+                ])
+            ])
+        ], width=3),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardBody([
+                    html.H5("Best & Worst Performers", className="card-title"),
+                    html.Div([
+                        html.Span(f"Best: {best_investment['symbol']} ", className="font-weight-bold"),
+                        html.Span(
+                            f"+{best_investment['gain_loss_pct']:.2f}%" if best_investment['gain_loss_pct'] >= 0 else f"{best_investment['gain_loss_pct']:.2f}%",
+                            className="text-success" if best_investment['gain_loss_pct'] >= 0 else "text-danger"
+                        ),
+                        html.Br(),
+                        html.Span(f"Worst: {worst_investment['symbol']} ", className="font-weight-bold"),
+                        html.Span(
+                            f"+{worst_investment['gain_loss_pct']:.2f}%" if worst_investment['gain_loss_pct'] >= 0 else f"{worst_investment['gain_loss_pct']:.2f}%",
+                            className="text-success" if worst_investment['gain_loss_pct'] >= 0 else "text-danger"
+                        )
+                    ])
+                ])
+            ])
+        ], width=3)
     ])
 
 def create_normalized_performance_graph(portfolio, period="3m"):
@@ -979,4 +1019,191 @@ def create_comparison_graph(portfolio, benchmark_symbols=None, period="3m"):
         fig.update_xaxes(dtick=dtick)
     
     return fig
- 
+def create_adaptive_scale_graph(portfolio, period="3m", relative_view=False):
+    """
+    Create a performance graph for the portfolio with adaptive scaling
+    
+    Args:
+        portfolio (dict): Portfolio data
+        period (str): Time period to display
+        relative_view (bool): Whether to show relative percentage changes instead of absolute values
+        
+    Returns:
+        Figure: Plotly figure with performance graph
+    """
+    import plotly.graph_objects as go
+    import pandas as pd
+    import numpy as np
+    
+    # Get historical data
+    try:
+        historical_data = get_portfolio_historical_data(portfolio, period)
+    except Exception as e:
+        print(f"Error getting historical data: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Return empty figure with error message
+        fig = go.Figure()
+        fig.update_layout(
+            title=f"Portfolio Performance (Error: {str(e)})",
+            xaxis_title="Date",
+            yaxis_title="Value (%)" if relative_view else "Value ($)",
+            template="plotly_white"
+        )
+        return fig
+    
+    if historical_data.empty or 'Total' not in historical_data.columns:
+        # Return empty figure
+        fig = go.Figure()
+        fig.update_layout(
+            title="Portfolio Performance (No Data Available)",
+            xaxis_title="Date",
+            yaxis_title="Value (%)" if relative_view else "Value ($)",
+            template="plotly_white"
+        )
+        return fig
+    
+    # Create figure
+    fig = go.Figure()
+    
+    # Process the data based on view type
+    if relative_view:
+        # For relative view, convert to percentage change from first value
+        total_series = historical_data['Total'].dropna()
+        if not total_series.empty:
+            first_value = total_series.iloc[0]
+            if first_value > 0:
+                # Calculate percentage change
+                relative_values = ((total_series / first_value) - 1) * 100
+                
+                # Add portfolio total line (bold)
+                fig.add_trace(go.Scatter(
+                    x=relative_values.index,
+                    y=relative_values,
+                    mode='lines',
+                    name='Portfolio Total',
+                    line=dict(color='#2C3E50', width=3)
+                ))
+                
+                # Add zero line for reference
+                fig.add_shape(
+                    type="line",
+                    x0=relative_values.index.min(),
+                    y0=0,
+                    x1=relative_values.index.max(),
+                    y1=0,
+                    line=dict(
+                        color="gray",
+                        width=1,
+                        dash="dot",
+                    )
+                )
+        
+        # Process benchmark (TSX) if available
+        if 'TSX' in historical_data.columns:
+            tsx_series = historical_data['TSX'].dropna()
+            if not tsx_series.empty:
+                first_value = tsx_series.iloc[0]
+                if first_value > 0:
+                    # Calculate percentage change
+                    relative_values = ((tsx_series / first_value) - 1) * 100
+                    
+                    # Add benchmark line (dashed)
+                    fig.add_trace(go.Scatter(
+                        x=relative_values.index,
+                        y=relative_values,
+                        mode='lines',
+                        name='S&P/TSX Composite',
+                        line=dict(color='#3498DB', width=2, dash='dash')
+                    ))
+    else:
+        # Regular value view
+        # Add portfolio total line (bold)
+        fig.add_trace(go.Scatter(
+            x=historical_data.index,
+            y=historical_data['Total'],
+            mode='lines',
+            name='Portfolio Total',
+            line=dict(color='#2C3E50', width=3)
+        ))
+        
+        # Add benchmark line (dashed) if available
+        if 'TSX' in historical_data.columns:
+            fig.add_trace(go.Scatter(
+                x=historical_data.index,
+                y=historical_data['TSX'],
+                mode='lines',
+                name='S&P/TSX Composite',
+                line=dict(color='#3498DB', width=2, dash='dash')
+            ))
+    
+    # Calculate performance metrics for display
+    try:
+        total_series = historical_data['Total'].dropna()
+        
+        if len(total_series) > 1:
+            start_value = total_series.iloc[0]
+            end_value = total_series.iloc[-1]
+            
+            if start_value > 0:
+                performance_pct = ((end_value / start_value) - 1) * 100
+                
+                # Add performance annotation
+                fig.add_annotation(
+                    x=0.02,
+                    y=0.98,
+                    xref="paper",
+                    yref="paper",
+                    text=f"Performance: {performance_pct:.2f}%",
+                    showarrow=False,
+                    font=dict(size=14, color="white"),
+                    align="left",
+                    bgcolor="#2C3E50",
+                    bordercolor="#1ABC9C",
+                    borderwidth=2,
+                    borderpad=4,
+                    opacity=0.8
+                )
+    except Exception as e:
+        print(f"Error calculating performance metrics: {e}")
+    
+    # Format date on x-axis based on period
+    dtick = None
+    if period == "1m":
+        dtick = "d7"  # Weekly ticks for 1 month view
+    elif period == "3m":
+        dtick = "d14"  # Bi-weekly ticks for 3 month view
+    elif period == "6m":
+        dtick = "M1"  # Monthly ticks for 6 month view
+    elif period == "1y":
+        dtick = "M2"  # Bi-monthly ticks for 1 year view
+    
+    # Update layout
+    period_text = {"1m": "1 Month", "3m": "3 Months", "6m": "6 Months", "1y": "1 Year", "all": "All Time"}
+    view_type = "Relative Performance" if relative_view else "Performance"
+    title_text = f"Portfolio {view_type} - {period_text.get(period, period)}"
+    
+    y_title = "Relative Change (%)" if relative_view else "Value ($)"
+    
+    fig.update_layout(
+        title=title_text,
+        xaxis_title="Date",
+        yaxis_title=y_title,
+        template="plotly_white",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        ),
+        margin=dict(l=20, r=20, t=60, b=20),
+        hovermode="x unified"
+    )
+    
+    # Apply date formatting if specified
+    if dtick:
+        fig.update_xaxes(dtick=dtick)
+    
+    return fig
