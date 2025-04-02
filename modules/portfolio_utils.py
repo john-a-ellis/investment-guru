@@ -201,6 +201,8 @@ def save_user_profile(profile):
         logger.error(f"Error saving user profile: {e}")
         return False
 
+# Modified update_portfolio_data function for modules/portfolio_utils.py
+
 def update_portfolio_data():
     """
     Updates portfolio data with current market prices and performance metrics
@@ -240,7 +242,7 @@ def update_portfolio_data():
                         "currency": "CAD"
                     }
                 else:
-                    logger.warning(f"No price data available for mutual fund {symbol}")
+                    print(f"No price data available for mutual fund {symbol}")
                     # Use the purchase price as a fallback (from the first matching investment)
                     purchase_price = next((float(inv['purchase_price']) for inv in investments if inv['symbol'] == symbol), 0)
                     symbol_prices[symbol] = {
@@ -256,6 +258,10 @@ def update_portfolio_data():
                     # Get the price directly from yfinance
                     current_price = price_data['Close'].iloc[-1]
                     
+                    # Convert NumPy types to Python native types
+                    if hasattr(current_price, 'item'):
+                        current_price = current_price.item()
+                    
                     # Determine currency based on symbol
                     is_canadian = symbol.endswith(".TO") or symbol.endswith(".V") or "-CAD" in symbol
                     currency = "CAD" if is_canadian else "USD"
@@ -266,12 +272,11 @@ def update_portfolio_data():
                         "currency": currency
                     }
                 else:
-                    logger.warning(f"No price data available for {symbol}")
+                    print(f"No price data available for {symbol}")
         except Exception as e:
-            logger.error(f"Error getting price for {symbol}: {e}")
+            print(f"Error getting price for {symbol}: {e}")
     
     # Now update each investment with the consistent price
-    updates = []
     for inv in investments:
         symbol = inv['symbol']
         shares = float(inv['shares'])
@@ -291,6 +296,17 @@ def update_portfolio_data():
             gain_loss = current_value - (shares * purchase_price)
             gain_loss_percent = (current_price / purchase_price - 1) * 100 if purchase_price > 0 else 0
             
+            # Convert any NumPy types to Python native types
+            params = [
+                float(current_price),
+                float(current_value),
+                float(gain_loss),
+                float(gain_loss_percent),
+                currency,
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                investment_id
+            ]
+            
             # Update investment details in database
             update_query = """
             UPDATE portfolio SET
@@ -302,16 +318,6 @@ def update_portfolio_data():
                 last_updated = %s
             WHERE id = %s;
             """
-            
-            params = (
-                current_price,
-                current_value,
-                gain_loss,
-                gain_loss_percent,
-                currency,
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                investment_id
-            )
             
             execute_query(update_query, params, commit=True)
     
