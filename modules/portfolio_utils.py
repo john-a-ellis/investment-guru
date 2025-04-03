@@ -41,8 +41,12 @@ def load_portfolio():
             if inv_dict['last_updated']:
                 inv_dict['last_updated'] = inv_dict['last_updated'].strftime("%Y-%m-%d %H:%M:%S")
             
-            # Add to result dictionary
-            result[inv_dict['id']] = inv_dict
+            # Convert ID to string to fix UUID issue
+            investment_id = str(inv_dict['id']) if inv_dict['id'] is not None else None
+            
+            # Add to result dictionary using the string ID
+            if investment_id:
+                result[investment_id] = inv_dict
     
     return result
 
@@ -452,15 +456,22 @@ def remove_investment(investment_id):
     Returns:
         bool: Success status
     """
+    # Convert UUID to string if it's not already a string
+    investment_id_str = str(investment_id) if investment_id is not None else None
+    
+    if not investment_id_str:
+        logger.error("Invalid investment ID: None or empty")
+        return False
+        
     # Delete from portfolio
     delete_query = "DELETE FROM portfolio WHERE id = %s;"
-    result = execute_query(delete_query, (investment_id,), commit=True)
+    result = execute_query(delete_query, (investment_id_str,), commit=True)
     
     if result is not None:
-        logger.info(f"Investment removed successfully: {investment_id}")
+        logger.info(f"Investment removed successfully: {investment_id_str}")
         return True
     
-    logger.error(f"Failed to remove investment: {investment_id}")
+    logger.error(f"Failed to remove investment: {investment_id_str}")
     return False
 
 def record_transaction(symbol, transaction_type, price, shares, date=None, notes=""):
