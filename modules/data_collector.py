@@ -311,8 +311,8 @@ def create_yf_session():
     # Create adapter with the retry strategy and larger pool size
     adapter = HTTPAdapter(
         max_retries=retry_strategy,
-        pool_connections=30,  # Increased from 20
-        pool_maxsize=30  # Increased from 20
+        pool_connections=50,  # Increased from 30
+        pool_maxsize=50  # Increased from 30
     )
     
     # Mount for both http and https

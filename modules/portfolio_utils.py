@@ -252,7 +252,7 @@ def update_portfolio_data():
             else:
                 # For stocks, ETFs, etc., use yfinance
                 ticker = yf.Ticker(symbol)
-                price_data = ticker.history(period="1d")
+                price_data = ticker.history(period="1d", auto_adjust=False)
                 
                 if not price_data.empty:
                     # Get the price directly from yfinance
@@ -298,14 +298,16 @@ def update_portfolio_data():
                 # Calculate current value and gain/loss
                 current_value = shares * current_price
                 gain_loss = current_value - (shares * purchase_price)
+                
+                # Use safe division to avoid division by zero or near-zero
                 def safe_division(numerator, denominator, default=0):
                     """Safe division that returns default value when denominator is zero or close to zero"""
                     if abs(denominator) < 1e-10:  # Check for values very close to zero
                         return default
                     return numerator / denominator
 
-                # Then use it in calculations
-                gain_loss_percent = (safe_division(current_price, purchase_price, 1) - 1) * 100 if purchase_price > 0 else 0
+                # Calculate percentage gain/loss with safe division
+                gain_loss_percent = (safe_division(current_price, purchase_price, 1) - 1) * 100
                 
                 # Update investment details in database
                 update_query = """
@@ -319,23 +321,22 @@ def update_portfolio_data():
                 WHERE id = %s;
                 """
                 
-                params = [
+                params = (
                     current_price,
                     current_value,
                     gain_loss,
                     gain_loss_percent,
                     currency,
                     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    investment_id
-                ]
+                    investment_id  # Already converted to string above
+                )
                 
                 execute_query(update_query, params, commit=True)
         except Exception as e:
-            logger.error(f"Error processing investment {inv.get('id', 'unknown')}: {e}")
+            logger.error(f"Error processing investment {inv.get('id')}: {e}")
     
     # Return updated portfolio
     return load_portfolio()
-
 def add_investment(symbol, shares, purchase_price, purchase_date, asset_type="stock"):
     """
     Add a new investment to the portfolio database

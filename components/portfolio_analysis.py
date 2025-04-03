@@ -179,14 +179,16 @@ def calculate_correlation_matrix(portfolio):
     start_date = end_date - timedelta(days=365)
     
     try:
-        # Download data for all symbols at once
-        data = yf.download(symbols, start=start_date, end=end_date)
+        # Download data for all symbols at once - use auto_adjust=False for consistent column names
+        data = yf.download(symbols, start=start_date, end=end_date, auto_adjust=False)
         
         # If only one symbol, the structure is different
         if len(symbols) == 1:
-            prices = pd.DataFrame(data['Adj Close'], columns=symbols)
+            # Use 'Close' instead of 'Adj Close' for consistency
+            prices = pd.DataFrame(data['Close'], columns=symbols)
         else:
-            prices = data['Adj Close']
+            # Use 'Close' instead of 'Adj Close' for consistency
+            prices = data['Close']
         
         # Calculate daily returns
         returns = prices.pct_change().dropna()
