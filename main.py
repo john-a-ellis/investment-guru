@@ -448,11 +448,11 @@ def update_market_overview(n, timeframe):
     # Format date on x-axis based on timeframe
     dtick = None
     if timeframe == "1w":
-        dtick = "d1"  # Daily ticks for 1 week view
+        dtick = "D1"  # Daily ticks for 1 week view
     elif timeframe == "1m":
-        dtick = "d7"  # Weekly ticks for 1 month view
+        dtick = "D7"  # Weekly ticks for 1 month view
     elif timeframe == "3m":
-        dtick = "d14"  # Bi-weekly ticks for 3 month view
+        dtick = "D14"  # Bi-weekly ticks for 3 month view
     elif timeframe == "6m":
         dtick = "M1"  # Monthly ticks for 6 month view
     elif timeframe == "1y":
