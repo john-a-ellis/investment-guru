@@ -421,6 +421,8 @@ def update_market_overview(n, timeframe):
                     ))
         except Exception as e:
             print(f"Error getting data for {symbol}: {e}")
+            # Import traceback for better error reporting
+            import traceback
             traceback.print_exc()
     
     # Add a benchmark index (S&P/TSX Composite for Canadian focus)
@@ -443,24 +445,26 @@ def update_market_overview(n, timeframe):
                 ))
     except Exception as e:
         print(f"Error getting TSX data: {e}")
+        import traceback
         traceback.print_exc()
     
-    # Format date on x-axis based on timeframe
-    dtick = None
+    # Set appropriate tick spacing based on timeframe
     if timeframe == "1w":
-        dtick = "D1"  # Daily ticks for 1 week view
+        tick_spacing = 1  # Daily for 1 week
     elif timeframe == "1m":
-        dtick = "D7"  # Weekly ticks for 1 month view
+        tick_spacing = 7  # Weekly for 1 month
     elif timeframe == "3m":
-        dtick = "D14"  # Bi-weekly ticks for 3 month view
+        tick_spacing = 14  # Bi-weekly for 3 months
     elif timeframe == "6m":
-        dtick = "M1"  # Monthly ticks for 6 month view
+        tick_spacing = 30  # Monthly for 6 months
     elif timeframe == "1y":
-        dtick = "M2"  # Bi-monthly ticks for 1 year view
+        tick_spacing = 60  # Bi-monthly for 1 year
     elif timeframe == "5y":
-        dtick = "M6"  # Every 6 months for 5 year view
+        tick_spacing = 180  # Every 6 months for 5 years
+    else:
+        tick_spacing = 7  # Default to weekly
     
-    # Update layout
+    # Update layout with explicit tick configuration
     fig.update_layout(
         title=f"Market Performance - {period_label} (Normalized to 100)",
         xaxis_title="Date",
@@ -477,9 +481,12 @@ def update_market_overview(n, timeframe):
         hovermode="x unified"
     )
     
-    # Apply date formatting if specified
-    if dtick:
-        fig.update_xaxes(dtick=dtick)
+    # Apply more explicit tick formatting
+    fig.update_xaxes(
+        tickmode='auto',
+        nticks=int((end_date - start_date).days / tick_spacing),  # Calculate appropriate number of ticks
+        tickformat='%Y-%m-%d'  # Ensure date format is consistent
+    )
     
     return fig
 
@@ -794,7 +801,7 @@ def manage_portfolio(add_clicks, update_interval, remove_clicks, symbol, shares,
 def update_portfolio_graph(n_intervals, period, chart_type, calculation_method):
     """
     Update the portfolio performance graph based on the selected time period,
-    chart type, and calculation method
+    chart type, and calculation method with improved tick spacing
     """
     
     # Load portfolio data
@@ -816,29 +823,73 @@ def update_portfolio_graph(n_intervals, period, chart_type, calculation_method):
         if calculation_method == "twrr":
             # Time-Weighted Rate of Return
             from components.portfolio_visualizer import create_twrr_performance_graph
-            return create_twrr_performance_graph(portfolio, period)
+            fig = create_twrr_performance_graph(portfolio, period)
             
         elif calculation_method == "mwr":
             # Money-Weighted Return / IRR
             # For MWR, we'll show a summary with the IRR percentage,
             # but use the TWRR chart visualization
             from components.portfolio_visualizer import create_twrr_performance_graph
-            return create_twrr_performance_graph(portfolio, period)
+            fig = create_twrr_performance_graph(portfolio, period)
         
         else:  # "simple"
             # Use the original chart functions based on chart_type
             if chart_type == "normalized":
                 # Use the normalized view where all assets start at 100
                 from components.portfolio_visualizer import create_normalized_performance_graph
-                return create_normalized_performance_graph(portfolio, period)
+                fig = create_normalized_performance_graph(portfolio, period)
             elif chart_type == "relative":
                 # Use the relative percentage change view
                 from components.portfolio_visualizer import create_adaptive_scale_graph
-                return create_adaptive_scale_graph(portfolio, period, relative_view=True)
+                fig = create_adaptive_scale_graph(portfolio, period, relative_view=True)
             else:  # "value" (actual value)
                 # Use the absolute value view
                 from components.portfolio_visualizer import create_performance_graph
-                return create_performance_graph(portfolio, period)
+                fig = create_performance_graph(portfolio, period)
+        
+        # Define appropriate tick spacing based on period
+        # Define date range based on period
+        end_date = datetime.now()
+        
+        if period == "1m":
+            start_date = end_date - timedelta(days=30)
+            tick_spacing = 5  # Show a tick every 5 days for 1 month
+        elif period == "3m":
+            start_date = end_date - timedelta(days=90)
+            tick_spacing = 14  # Show a tick every 2 weeks for 3 months
+        elif period == "6m":
+            start_date = end_date - timedelta(days=180)
+            tick_spacing = 30  # Show a tick every month for 6 months
+        elif period == "1y":
+            start_date = end_date - timedelta(days=365)
+            tick_spacing = 60  # Show a tick every 2 months for 1 year
+        else:  # "all"
+            # Find earliest transaction date from the database
+            earliest_date_query = """
+            SELECT MIN(transaction_date) as earliest_date FROM transactions;
+            """
+            earliest_result = execute_query(earliest_date_query, fetchone=True)
+            
+            if earliest_result and earliest_result['earliest_date']:
+                start_date = earliest_result['earliest_date']
+            else:
+                start_date = end_date - timedelta(days=365)  # Default to 1 year
+                
+            # Calculate days between start and end
+            days_range = (end_date - start_date).days
+            if days_range <= 365:
+                tick_spacing = 60  # Every 2 months if less than a year
+            else:
+                tick_spacing = 90  # Every 3 months if over a year
+        
+        # Apply improved tick spacing to the figure
+        fig.update_xaxes(
+            tickmode='auto',
+            nticks=max(5, int((end_date - start_date).days / tick_spacing)),  # Ensure at least 5 ticks
+            tickformat='%b %d, %Y'  # More readable date format
+        )
+        
+        return fig
             
     except Exception as e:
         print(f"Error in update_portfolio_graph: {str(e)}")
