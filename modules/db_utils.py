@@ -39,7 +39,7 @@ if 'DB_PORT' in os.environ:
 # Create a connection pool
 connection_pool = None
 
-def initialize_pool(min_connections=1, max_connections=10):
+def initialize_pool(min_connections=1, max_connections=20):
     """
     Initialize the connection pool.
     Should be called at application startup.

@@ -284,7 +284,9 @@ def update_portfolio_data():
             shares = float(inv['shares'])
             purchase_price = float(inv['purchase_price'])
             asset_type = inv['asset_type']
-            investment_id = inv['id']
+            
+            # Convert UUID to string to ensure it's properly handled
+            investment_id = str(inv['id'])
             
             # Get the price data for this symbol
             symbol_data = symbol_prices.get(symbol)
@@ -296,7 +298,14 @@ def update_portfolio_data():
                 # Calculate current value and gain/loss
                 current_value = shares * current_price
                 gain_loss = current_value - (shares * purchase_price)
-                gain_loss_percent = (current_price / purchase_price - 1) * 100 if purchase_price > 0 else 0
+                def safe_division(numerator, denominator, default=0):
+                    """Safe division that returns default value when denominator is zero or close to zero"""
+                    if abs(denominator) < 1e-10:  # Check for values very close to zero
+                        return default
+                    return numerator / denominator
+
+                # Then use it in calculations
+                gain_loss_percent = (safe_division(current_price, purchase_price, 1) - 1) * 100 if purchase_price > 0 else 0
                 
                 # Update investment details in database
                 update_query = """
