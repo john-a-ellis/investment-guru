@@ -4,6 +4,8 @@ import pandas as pd
 from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Load environment variables from .env file
 load_dotenv()
@@ -61,6 +63,9 @@ class DataCollector:
         data = {}
         base_url = "https://financialmodelingprep.com/api/v3"
         
+        # Create a custom session for Yahoo Finance API calls
+        yf_session = create_yf_session()
+        
         for symbol in symbols:
             try:
                 # Handle indices differently
@@ -71,31 +76,33 @@ class DataCollector:
                     # For stocks and ETFs
                     url = f"{base_url}/historical-price-full/{symbol}?from={days}days&apikey={self.fmp_api_key}"
                 
-                response = requests.get(url)
-                if response.status_code == 200:
-                    json_data = response.json()
-                    if 'historical' in json_data:
-                        # Convert to dataframe
-                        df = pd.DataFrame(json_data['historical'])
-                        # Convert date strings to datetime
-                        df['date'] = pd.to_datetime(df['date'])
-                        # Set date as index
-                        df = df.set_index('date')
-                        # Sort by date
-                        df = df.sort_index()
-                        # Rename columns to match yfinance format
-                        df = df.rename(columns={
-                            'open': 'Open',
-                            'high': 'High',
-                            'low': 'Low',
-                            'close': 'Close',
-                            'volume': 'Volume'
-                        })
-                        data[symbol] = df
+                # Use the custom session
+                with yf_session as session:
+                    response = session.get(url)
+                    if response.status_code == 200:
+                        json_data = response.json()
+                        if 'historical' in json_data:
+                            # Convert to dataframe
+                            df = pd.DataFrame(json_data['historical'])
+                            # Convert date strings to datetime
+                            df['date'] = pd.to_datetime(df['date'])
+                            # Set date as index
+                            df = df.set_index('date')
+                            # Sort by date
+                            df = df.sort_index()
+                            # Rename columns to match yfinance format
+                            df = df.rename(columns={
+                                'open': 'Open',
+                                'high': 'High',
+                                'low': 'Low',
+                                'close': 'Close',
+                                'volume': 'Volume'
+                            })
+                            data[symbol] = df
+                        else:
+                            data[symbol] = pd.DataFrame()
                     else:
                         data[symbol] = pd.DataFrame()
-                else:
-                    data[symbol] = pd.DataFrame()
             except Exception as e:
                 print(f"Error retrieving data for {symbol}: {e}")
                 data[symbol] = pd.DataFrame()
@@ -281,3 +288,35 @@ class DataCollector:
             print(f"Error retrieving economic indicators: {e}")
             
         return indicators
+    
+
+def create_yf_session():
+    """
+    Create a custom session for Yahoo Finance API calls with proper retry logic
+    and connection pool settings to avoid warnings.
+    
+    Returns:
+        requests.Session: Configured session object
+    """
+    session = requests.Session()
+    
+    # Configure retry strategy
+    retry_strategy = Retry(
+        total=3,  # Maximum number of retries
+        backoff_factor=1,  # Time factor between retries
+        status_forcelist=[429, 500, 502, 503, 504],  # Retry on these status codes
+        allowed_methods=["HEAD", "GET", "OPTIONS"]  # Allow retries on these methods
+    )
+    
+    # Create adapter with the retry strategy and larger pool size
+    adapter = HTTPAdapter(
+        max_retries=retry_strategy,
+        pool_connections=20,  # Increase from default 10
+        pool_maxsize=20  # Increase from default 10
+    )
+    
+    # Mount for both http and https
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    
+    return session

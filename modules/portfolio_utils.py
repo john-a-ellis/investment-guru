@@ -238,7 +238,7 @@ def update_portfolio_data():
                 if current_price:
                     # Assume mutual funds are in CAD
                     symbol_prices[symbol] = {
-                        "price": current_price,
+                        "price": float(current_price),  # Convert to float
                         "currency": "CAD"
                     }
                 else:
@@ -246,7 +246,7 @@ def update_portfolio_data():
                     # Use the purchase price as a fallback (from the first matching investment)
                     purchase_price = next((float(inv['purchase_price']) for inv in investments if inv['symbol'] == symbol), 0)
                     symbol_prices[symbol] = {
-                        "price": purchase_price,
+                        "price": float(purchase_price),  # Convert to float
                         "currency": "CAD"
                     }
             else:
@@ -268,7 +268,7 @@ def update_portfolio_data():
                     
                     # Store the price and currency for this symbol
                     symbol_prices[symbol] = {
-                        "price": current_price,
+                        "price": float(current_price),  # Ensure float type
                         "currency": currency
                     }
                 else:
@@ -279,8 +279,8 @@ def update_portfolio_data():
     # Now update each investment with the consistent price
     for inv in investments:
         symbol = inv['symbol']
-        shares = float(inv['shares'])
-        purchase_price = float(inv['purchase_price'])
+        shares = float(inv['shares'])  # Convert to float
+        purchase_price = float(inv['purchase_price'])  # Convert to float
         asset_type = inv['asset_type']
         investment_id = inv['id']
         
@@ -288,7 +288,7 @@ def update_portfolio_data():
         symbol_data = symbol_prices.get(symbol)
         
         if symbol_data:
-            current_price = symbol_data["price"]
+            current_price = float(symbol_data["price"])  # Ensure float type
             currency = symbol_data["currency"]
             
             # Calculate current value and gain/loss
@@ -523,7 +523,7 @@ def get_historical_usd_to_cad_rates(start_date=None, end_date=None):
             rates = data['Close']
             
             # Forward-fill any missing values (weekends, holidays)
-            rates = rates.fillna(method='ffill')
+            rates = rates.ffill()
             
             return rates
         else:
@@ -711,11 +711,29 @@ def calculate_twrr(portfolio, transactions=None, period="3m"):
     for transaction in period_transactions:
         # Only include buys and sells, not dividends or other transaction types
         if transaction['type'].lower() in ['buy', 'sell']:
+            tx_date = transaction['date']
+            
+            # Fix: Convert date object to datetime if needed
+            if isinstance(tx_date, datetime):
+                # Already a datetime object, use it
+                tx_datetime = tx_date
+            else:
+                # If it's a string or date object, convert properly to pandas Timestamp
+                # which is compatible with the DatetimeIndex used in portfolio_values
+                try:
+                    if isinstance(tx_date, str):
+                        tx_datetime = pd.Timestamp(tx_date)
+                    else:  # Assume it's a date object
+                        tx_datetime = pd.Timestamp(tx_date.year, tx_date.month, tx_date.day)
+                except Exception as e:
+                    print(f"Error converting transaction date: {e}")
+                    continue
+                    
             # Find closest date in the data
-            closest_date = portfolio_values.index[portfolio_values.index >= transaction['date']]
-            if len(closest_date) > 0:
+            closest_dates = portfolio_values.index[portfolio_values.index >= tx_datetime]
+            if len(closest_dates) > 0:
                 significant_dates.append({
-                    'date': closest_date[0],
+                    'date': closest_dates[0],
                     'amount': transaction['amount'] if transaction['type'].lower() == 'buy' else -transaction['amount']
                 })
     
@@ -733,6 +751,7 @@ def calculate_twrr(portfolio, transactions=None, period="3m"):
     
     significant_dates = unique_dates
     
+    # Rest of function remains the same...
     # If no significant dates, just calculate the total return
     if not significant_dates:
         if len(portfolio_values) >= 2:
@@ -795,7 +814,7 @@ def calculate_twrr(portfolio, transactions=None, period="3m"):
         
         # Check if there were any cash flows between the last date and current date
         flows_between = [item for item in significant_dates 
-                         if last_date < item['date'] <= current_date]
+                        if last_date < item['date'] <= current_date]
         
         if flows_between:
             # There were cash flows, need to adjust
