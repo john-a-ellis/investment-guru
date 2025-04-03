@@ -287,12 +287,13 @@ def update_portfolio_data():
             asset_type = inv['asset_type']
             
             # Convert UUID to string to ensure it's properly handled
-            investment_id = str(inv['id'])
+            # This is the fix for "'UUID' object is not subscriptable"
+            investment_id = str(inv['id']) if inv['id'] is not None else None
             
             # Get the price data for this symbol
             symbol_data = symbol_prices.get(symbol)
             
-            if symbol_data:
+            if symbol_data and investment_id is not None:
                 current_price = float(symbol_data["price"])
                 currency = symbol_data["currency"]
                 
@@ -329,15 +330,16 @@ def update_portfolio_data():
                     gain_loss_percent,
                     currency,
                     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    investment_id  # Already converted to string above
+                    investment_id  # Using string version of UUID
                 )
                 
                 execute_query(update_query, params, commit=True)
         except Exception as e:
-            logger.error(f"Error processing investment {inv.get('id')}: {e}")
+            logger.error(f"Error processing investment {inv.get('id', 'unknown')}: {e}")
     
     # Return updated portfolio
     return load_portfolio()
+
 def add_investment(symbol, shares, purchase_price, purchase_date, asset_type="stock"):
     """
     Add a new investment to the portfolio database
