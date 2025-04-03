@@ -11,6 +11,7 @@ import os
 from dash.exceptions import PreventUpdate
 import json
 import yfinance as yf
+import pandas as pd
 
 # Add the parent directory to sys.path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -88,6 +89,23 @@ app.layout = dbc.Container([
                 dbc.CardHeader("Market Overview - Tracked Assets"),
                 dbc.CardBody([
                     dcc.Graph(id="market-overview-graph"),
+                    html.Div([
+                        dbc.Label("Time Period:"),
+                        dbc.RadioItems(
+                            id="market-timeframe-selector",
+                            options=[
+                                {"label": "1 Week", "value": "1w"},
+                                {"label": "1 Month", "value": "1m"},
+                                {"label": "3 Months", "value": "3m"},
+                                {"label": "6 Months", "value": "6m"},
+                                {"label": "1 Year", "value": "1y"},
+                                {"label": "5 Years", "value": "5y"}
+                            ],
+                            value="1m",  # Default to 1 month
+                            inline=True,
+                            className="mt-2"
+                        )
+                    ]),
                     dcc.Interval(
                         id="market-interval",
                         interval=300000,  # 5 minutes in milliseconds
@@ -296,9 +314,10 @@ def remove_asset(n_clicks_list):
 
 @app.callback(
     Output("market-overview-graph", "figure"),
-    Input("market-interval", "n_intervals")
+    [Input("market-interval", "n_intervals"),
+     Input("market-timeframe-selector", "value")]
 )
-def update_market_overview(n):
+def update_market_overview(n, timeframe):
     """
     Update the market overview graph with actual historical data for tracked assets
     """
@@ -316,57 +335,134 @@ def update_market_overview(n):
         )
         return fig
     
-    # Define time period (30 days by default)
+    # Define time period based on selected timeframe
     end_date = datetime.now()
-    start_date = end_date - timedelta(days=30)
+    
+    if timeframe == "1w":
+        start_date = end_date - timedelta(days=7)
+        period_label = "Last Week"
+        ticker_period = "1wk"  # For yfinance
+    elif timeframe == "1m":
+        start_date = end_date - timedelta(days=30)
+        period_label = "Last Month"
+        ticker_period = "1mo"
+    elif timeframe == "3m":
+        start_date = end_date - timedelta(days=90)
+        period_label = "Last 3 Months"
+        ticker_period = "3mo"
+    elif timeframe == "6m":
+        start_date = end_date - timedelta(days=180)
+        period_label = "Last 6 Months"
+        ticker_period = "6mo"
+    elif timeframe == "1y":
+        start_date = end_date - timedelta(days=365)
+        period_label = "Last Year"
+        ticker_period = "1y"
+    elif timeframe == "5y":
+        start_date = end_date - timedelta(days=365*5)
+        period_label = "Last 5 Years"
+        ticker_period = "5y"
+    else:
+        # Default to 1 month
+        start_date = end_date - timedelta(days=30)
+        period_label = "Last Month"
+        ticker_period = "1mo"
     
     # Create a figure
     fig = go.Figure()
     
-    # Add data for each tracked asset
+    # Import the session manager from yf_utils to improve yfinance connections
+    from modules.yf_utils import get_ticker_history, download_yf_data
+    
+    # For longer timeframes, use a more appropriate interval
+    data_interval = "1d"  # Default daily for shorter timeframes
+    if timeframe in ["1y", "5y"]:
+        data_interval = "1wk"  # Use weekly for 1y and 5y
+    
+    # Try bulk download for better performance
+    symbols = list(tracked_assets.keys())
+    try:
+        all_data = download_yf_data(symbols, start=start_date, end=end_date, period=ticker_period)
+        bulk_download_success = not all_data.empty
+    except Exception as e:
+        print(f"Bulk download failed: {e}")
+        bulk_download_success = False
+    
+    # Process data for each asset
     for symbol, details in tracked_assets.items():
         try:
-            # Get historical data from yfinance
-            ticker = yf.Ticker(symbol)
-            hist = ticker.history(start=start_date, end=end_date)
+            # Try to get data from bulk download first
+            if bulk_download_success and 'Adj Close' in all_data.columns:
+                if len(symbols) > 1:  # MultiIndex for multiple symbols
+                    if ('Adj Close', symbol) in all_data.columns:
+                        hist = pd.DataFrame({'Close': all_data['Adj Close'][symbol]})
+                        hist.index = all_data.index
+                    else:
+                        continue  # Skip if symbol data not available
+                else:  # Single index for one symbol
+                    hist = pd.DataFrame({'Close': all_data['Adj Close']})
+                    hist.index = all_data.index
+            else:
+                # Fall back to individual download
+                hist = get_ticker_history(symbol, start=start_date, end=end_date, period=ticker_period)
             
-            if not hist.empty:
+            if not hist.empty and 'Close' in hist.columns:
                 # Normalize values to start at 100 for better comparison
-                normalized = hist['Close'] / hist['Close'].iloc[0] * 100
-                
-                # Add to chart
-                fig.add_trace(go.Scatter(
-                    x=hist.index,
-                    y=normalized,
-                    mode='lines',
-                    name=f"{symbol} - {details.get('name', '')}"
-                ))
+                first_valid_close = hist['Close'].dropna().iloc[0] if not hist['Close'].dropna().empty else 1
+                if first_valid_close > 0:  # Avoid division by zero
+                    normalized = hist['Close'] / first_valid_close * 100
+                    
+                    # Add to chart
+                    fig.add_trace(go.Scatter(
+                        x=hist.index,
+                        y=normalized,
+                        mode='lines',
+                        name=f"{symbol} - {details.get('name', '')}"
+                    ))
         except Exception as e:
             print(f"Error getting data for {symbol}: {e}")
+            traceback.print_exc()
     
     # Add a benchmark index (S&P/TSX Composite for Canadian focus)
     try:
-        tsx = yf.Ticker("^GSPTSE")
-        tsx_hist = tsx.history(start=start_date, end=end_date)
+        tsx_hist = get_ticker_history("^GSPTSE", start=start_date, end=end_date, period=ticker_period)
         
-        if not tsx_hist.empty:
+        if not tsx_hist.empty and 'Close' in tsx_hist.columns:
             # Normalize TSX values
-            tsx_normalized = tsx_hist['Close'] / tsx_hist['Close'].iloc[0] * 100
-            
-            # Add to chart with dashed line
-            fig.add_trace(go.Scatter(
-                x=tsx_hist.index,
-                y=tsx_normalized,
-                mode='lines',
-                name="S&P/TSX Composite",
-                line=dict(dash='dash', width=3)
-            ))
+            first_valid_tsx = tsx_hist['Close'].dropna().iloc[0] if not tsx_hist['Close'].dropna().empty else 1
+            if first_valid_tsx > 0:  # Avoid division by zero
+                tsx_normalized = tsx_hist['Close'] / first_valid_tsx * 100
+                
+                # Add to chart with dashed line
+                fig.add_trace(go.Scatter(
+                    x=tsx_hist.index,
+                    y=tsx_normalized,
+                    mode='lines',
+                    name="S&P/TSX Composite",
+                    line=dict(dash='dash', width=3)
+                ))
     except Exception as e:
         print(f"Error getting TSX data: {e}")
+        traceback.print_exc()
+    
+    # Format date on x-axis based on timeframe
+    dtick = None
+    if timeframe == "1w":
+        dtick = "d1"  # Daily ticks for 1 week view
+    elif timeframe == "1m":
+        dtick = "d7"  # Weekly ticks for 1 month view
+    elif timeframe == "3m":
+        dtick = "d14"  # Bi-weekly ticks for 3 month view
+    elif timeframe == "6m":
+        dtick = "M1"  # Monthly ticks for 6 month view
+    elif timeframe == "1y":
+        dtick = "M2"  # Bi-monthly ticks for 1 year view
+    elif timeframe == "5y":
+        dtick = "M6"  # Every 6 months for 5 year view
     
     # Update layout
     fig.update_layout(
-        title="Market Performance - Last 30 Days (Normalized to 100)",
+        title=f"Market Performance - {period_label} (Normalized to 100)",
         xaxis_title="Date",
         yaxis_title="Value (Normalized)",
         template="plotly_white",
@@ -380,6 +476,10 @@ def update_market_overview(n):
         margin=dict(l=20, r=20, t=60, b=20),
         hovermode="x unified"
     )
+    
+    # Apply date formatting if specified
+    if dtick:
+        fig.update_xaxes(dtick=dtick)
     
     return fig
 
