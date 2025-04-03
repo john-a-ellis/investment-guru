@@ -136,21 +136,33 @@ def create_portfolio_table(portfolio):
     # Convert to DataFrame for easier processing
     investments_list = []
     for investment_id, details in portfolio.items():
-        currency = details.get("currency", "USD")
-        
-        investments_list.append({
-            "id": investment_id,
-            "symbol": details.get("symbol", ""),
-            "shares": details.get("shares", 0),
-            "purchase_price": details.get("purchase_price", 0),
-            "purchase_date": details.get("purchase_date", ""),
-            "current_price": details.get("current_price", 0),
-            "current_value": details.get("current_value", 0),
-            "gain_loss": details.get("gain_loss", 0),
-            "gain_loss_percent": details.get("gain_loss_percent", 0),
-            "currency": currency,
-            "asset_type": details.get("asset_type", "stock")
-        })
+        try:
+            # Ensure all numeric values are converted to float
+            shares = float(details.get("shares", 0))
+            purchase_price = float(details.get("purchase_price", 0))
+            current_price = float(details.get("current_price", 0))
+            current_value = float(details.get("current_value", 0))
+            gain_loss = float(details.get("gain_loss", 0))
+            gain_loss_percent = float(details.get("gain_loss_percent", 0))
+            
+            currency = details.get("currency", "USD")
+            
+            investments_list.append({
+                "id": investment_id,
+                "symbol": details.get("symbol", ""),
+                "shares": shares,
+                "purchase_price": purchase_price,
+                "purchase_date": details.get("purchase_date", ""),
+                "current_price": current_price,
+                "current_value": current_value,
+                "gain_loss": gain_loss,
+                "gain_loss_percent": gain_loss_percent,
+                "currency": currency,
+                "asset_type": details.get("asset_type", "stock")
+            })
+        except Exception as e:
+            print(f"Error converting investment data: {e}")
+            continue
     
     df = pd.DataFrame(investments_list)
     
@@ -173,30 +185,39 @@ def create_portfolio_table(portfolio):
         # Add this investment to the group
         grouped_investments[symbol]["investments"].append(row)
         
-        # Update group totals
-        grouped_investments[symbol]["total_shares"] += row["shares"]
-        grouped_investments[symbol]["total_book_value"] += row["shares"] * row["purchase_price"]
-        grouped_investments[symbol]["total_current_value"] += row["current_value"]
+        # Update group totals - ensure all values are float
+        grouped_investments[symbol]["total_shares"] += float(row["shares"])
+        grouped_investments[symbol]["total_book_value"] += float(row["shares"]) * float(row["purchase_price"])
+        grouped_investments[symbol]["total_current_value"] += float(row["current_value"])
     
     # Add transactions to each symbol group
     for transaction_id, transaction in transactions.items():
         symbol = transaction.get("symbol", "").upper().strip()
         if symbol in grouped_investments:
-            grouped_investments[symbol]["transactions"].append({
-                "id": transaction_id,
-                "date": transaction.get("date", ""),
-                "type": transaction.get("type", ""),
-                "shares": transaction.get("shares", 0),
-                "price": transaction.get("price", 0),
-                "amount": transaction.get("amount", 0),
-                "notes": transaction.get("notes", "")
-            })
+            # Convert any Decimal values to float
+            try:
+                transaction_shares = float(transaction.get("shares", 0))
+                transaction_price = float(transaction.get("price", 0))
+                transaction_amount = float(transaction.get("amount", 0))
+                
+                grouped_investments[symbol]["transactions"].append({
+                    "id": transaction_id,
+                    "date": transaction.get("date", ""),
+                    "type": transaction.get("type", ""),
+                    "shares": transaction_shares,
+                    "price": transaction_price,
+                    "amount": transaction_amount,
+                    "notes": transaction.get("notes", "")
+                })
+            except Exception as e:
+                print(f"Error converting transaction data: {e}")
+                continue
     
     # Calculate group gain/loss
     for symbol, group in grouped_investments.items():
-        group["total_gain_loss"] = group["total_current_value"] - group["total_book_value"]
-        if group["total_book_value"] > 0:
-            group["total_gain_loss_percent"] = (group["total_gain_loss"] / group["total_book_value"]) * 100
+        group["total_gain_loss"] = float(group["total_current_value"]) - float(group["total_book_value"])
+        if float(group["total_book_value"]) > 0:
+            group["total_gain_loss_percent"] = (float(group["total_gain_loss"]) / float(group["total_book_value"])) * 100
         else:
             group["total_gain_loss_percent"] = 0
         
@@ -208,6 +229,7 @@ def create_portfolio_table(portfolio):
                 reverse=True
             )
     
+    # Rest of function remains the same...
     # Create accordion items for each symbol group
     accordion_items = []
     
@@ -393,7 +415,7 @@ def create_portfolio_table(portfolio):
                     html.Td(
                         dbc.Button(
                             "Remove", 
-                            # Convert UUID to string here - THIS IS THE FIX
+                            # Convert ID to string to ensure it's properly passed
                             id={"type": "remove-investment-button", "index": str(inv["id"])},
                             color="danger",
                             size="sm"
@@ -428,8 +450,8 @@ def create_portfolio_table(portfolio):
     )
     
     # Add portfolio summary
-    total_book_value = sum(group["total_book_value"] for group in grouped_investments.values())
-    total_current_value = sum(group["total_current_value"] for group in grouped_investments.values())
+    total_book_value = sum(float(group["total_book_value"]) for group in grouped_investments.values())
+    total_current_value = sum(float(group["total_current_value"]) for group in grouped_investments.values())
     total_gain_loss = total_current_value - total_book_value
     total_gain_loss_percent = (total_gain_loss / total_book_value * 100) if total_book_value > 0 else 0
     

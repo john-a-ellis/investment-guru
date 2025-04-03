@@ -9,11 +9,24 @@ import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import yfinance as yf
+import traceback
+import plotly.graph_objects as go
+from modules.portfolio_utils import calculate_twrr
+from modules.portfolio_utils import get_money_weighted_return
+from modules.transaction_tracker import load_transactions
+from modules.portfolio_utils import get_usd_to_cad_rate, get_historical_usd_to_cad_rates
+from modules.mutual_fund_provider import MutualFundProvider
+from components.portfolio_visualizer import get_portfolio_historical_data
 
-# Import from consolidated utilities
-from modules.portfolio_utils import (
-    get_usd_to_cad_rate, get_historical_usd_to_cad_rates
-)
+
+# # Import from consolidated utilities
+# from modules.portfolio_utils import (
+#     get_usd_to_cad_rate, 
+#     get_historical_usd_to_cad_rates,
+#     calculate_twrr, 
+#     get_money_weighted_return, 
+#     load_transactions
+# )
 def create_portfolio_visualizer_component():
     """
     Creates a component for visualizing portfolio performance with
@@ -96,8 +109,6 @@ def create_twrr_performance_graph(portfolio, period="3m"):
     Returns:
         Figure: Plotly figure with TWRR performance graph
     """
-    import plotly.graph_objects as go
-    from modules.portfolio_utils import calculate_twrr
     
     try:
         # Calculate TWRR
@@ -127,7 +138,7 @@ def create_twrr_performance_graph(portfolio, period="3m"):
         ))
         
         # Add TSX benchmark for comparison (if available)
-        from components.portfolio_visualizer import get_portfolio_historical_data
+        
         historical_data = get_portfolio_historical_data(portfolio, period)
         
         if not historical_data.empty and 'TSX' in historical_data.columns:
@@ -225,7 +236,7 @@ def create_twrr_performance_graph(portfolio, period="3m"):
         
     except Exception as e:
         print(f"Error creating TWRR graph: {e}")
-        import traceback
+        
         traceback.print_exc()
         
         # Return empty figure with error message
@@ -250,9 +261,6 @@ def create_mwr_summary(portfolio, period="3m"):
     Returns:
         html.Div: Dash component with MWR summary and cash flow details
     """
-    from dash import html
-    import dash_bootstrap_components as dbc
-    from modules.portfolio_utils import get_money_weighted_return, load_transactions
     
     try:
         # Calculate Money-Weighted Return
@@ -368,7 +376,7 @@ def get_portfolio_historical_data(portfolio, period="3m"):
     Returns:
         DataFrame: Historical portfolio data
     """
-    from modules.mutual_fund_provider import MutualFundProvider
+    
     
     if not portfolio:
         return pd.DataFrame()
@@ -433,13 +441,15 @@ def get_portfolio_historical_data(portfolio, period="3m"):
         # Use yfinance download for better performance with multiple symbols
         if len(regular_symbols) > 1:
             try:
-                all_data = yf.download(regular_symbols, start=start_date, end=end_date + timedelta(days=1), progress=False)
-                if not all_data.empty and 'Close' in all_data.columns:
+                # Fix for yfinance auto_adjust=True default
+                all_data = yf.download(regular_symbols, start=start_date, end=end_date + timedelta(days=1), 
+                                      progress=False, auto_adjust=False)
+                if not all_data.empty and 'Adj Close' in all_data.columns:
                     if len(regular_symbols) == 1:
                         # Handle single symbol case where yfinance returns 1D DataFrame
-                        closes = pd.DataFrame(all_data['Close'], columns=regular_symbols)
+                        closes = pd.DataFrame(all_data['Adj Close'], columns=regular_symbols)
                     else:
-                        closes = all_data['Close']
+                        closes = all_data['Adj Close']
                         
                     for symbol in regular_symbols:
                         if symbol in closes.columns:
@@ -450,9 +460,9 @@ def get_portfolio_historical_data(portfolio, period="3m"):
                 for symbol in regular_symbols:
                     try:
                         ticker = yf.Ticker(symbol)
-                        hist = ticker.history(start=start_date, end=end_date + timedelta(days=1))
-                        if not hist.empty and 'Close' in hist.columns:
-                            regular_symbol_data[symbol] = hist['Close']
+                        hist = ticker.history(start=start_date, end=end_date + timedelta(days=1), auto_adjust=False)
+                        if not hist.empty and 'Adj Close' in hist.columns:
+                            regular_symbol_data[symbol] = hist['Adj Close']
                     except Exception as e:
                         print(f"Error getting historical data for {symbol}: {e}")
         else:
@@ -460,9 +470,9 @@ def get_portfolio_historical_data(portfolio, period="3m"):
             for symbol in regular_symbols:
                 try:
                     ticker = yf.Ticker(symbol)
-                    hist = ticker.history(start=start_date, end=end_date + timedelta(days=1))
-                    if not hist.empty and 'Close' in hist.columns:
-                        regular_symbol_data[symbol] = hist['Close']
+                    hist = ticker.history(start=start_date, end=end_date + timedelta(days=1), auto_adjust=False)
+                    if not hist.empty and 'Adj Close' in hist.columns:
+                        regular_symbol_data[symbol] = hist['Adj Close']
                 except Exception as e:
                     print(f"Error getting historical data for {symbol}: {e}")
     
@@ -499,10 +509,11 @@ def get_portfolio_historical_data(portfolio, period="3m"):
     # Process all investments
     for investment_id, investment in portfolio.items():
         symbol = investment.get("symbol")
-        shares = investment.get("shares", 0)
+        # Convert any Decimal types to float
+        shares = float(investment.get("shares", 0))
         currency = investment.get("currency", "USD")
         
-        if not symbol or not shares or symbol not in price_df.columns:
+        if not symbol or shares <= 0 or symbol not in price_df.columns:
             continue
         
         try:
@@ -539,7 +550,6 @@ def get_portfolio_historical_data(portfolio, period="3m"):
     
     # Get historical USD to CAD exchange rates
     try:
-        from modules.portfolio_utils import get_historical_usd_to_cad_rates
         exchange_rates = get_historical_usd_to_cad_rates(start_date, end_date)
         
         # Convert USD to CAD
@@ -567,7 +577,6 @@ def get_portfolio_historical_data(portfolio, period="3m"):
             portfolio_values['Total'] = portfolio_values['Total_CAD']
     except Exception as e:
         print(f"Error converting currencies: {e}")
-        import traceback
         traceback.print_exc()
         
         # Fallback - just use CAD values
@@ -577,10 +586,10 @@ def get_portfolio_historical_data(portfolio, period="3m"):
     try:
         # Get TSX data
         tsx = yf.Ticker("^GSPTSE")
-        tsx_hist = tsx.history(start=start_date, end=end_date + timedelta(days=1))
+        tsx_hist = tsx.history(start=start_date, end=end_date + timedelta(days=1), auto_adjust=False)
         
         if not tsx_hist.empty:
-            portfolio_values['TSX'] = tsx_hist['Close']
+            portfolio_values['TSX'] = tsx_hist['Adj Close']
     except Exception as e:
         print(f"Error adding benchmark data: {e}")
     
@@ -606,7 +615,6 @@ def create_performance_graph(portfolio, period="3m"):
         historical_data = get_portfolio_historical_data(portfolio, period)
     except Exception as e:
         print(f"Error getting historical data: {e}")
-        import traceback
         traceback.print_exc()
         
         # Return empty figure with error message
@@ -764,9 +772,7 @@ def create_summary_stats(portfolio):
     Returns:
         Component: Dash component with summary statistics
     """
-    import dash_bootstrap_components as dbc
-    from dash import html
-    from modules.portfolio_utils import get_usd_to_cad_rate
+    
     
     if not portfolio:
         return html.Div("No investments to display.")
@@ -900,7 +906,6 @@ def create_normalized_performance_graph(portfolio, period="3m"):
         historical_data = get_portfolio_historical_data(portfolio, period)
     except Exception as e:
         print(f"Error getting historical data: {e}")
-        import traceback
         traceback.print_exc()
         
         # Return empty figure with error message
@@ -1144,7 +1149,6 @@ def create_comparison_graph(portfolio, benchmark_symbols=None, period="3m"):
     Returns:
         Figure: Plotly figure with comparison graph
     """
-    import plotly.graph_objects as go
     
     # Default benchmark symbols if none provided
     if benchmark_symbols is None:
@@ -1317,17 +1321,12 @@ def create_adaptive_scale_graph(portfolio, period="3m", relative_view=False):
         
     Returns:
         Figure: Plotly figure with performance graph
-    """
-    import plotly.graph_objects as go
-    import pandas as pd
-    import numpy as np
-    
+    """    
     # Get historical data
     try:
         historical_data = get_portfolio_historical_data(portfolio, period)
     except Exception as e:
         print(f"Error getting historical data: {e}")
-        import traceback
         traceback.print_exc()
         
         # Return empty figure with error message

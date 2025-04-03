@@ -36,8 +36,12 @@ def record_transaction(symbol, transaction_type, shares, price, date=None, notes
     # Standardize symbol format
     symbol = symbol.upper().strip()
         
+    # Convert values to Python float to ensure type consistency
+    shares_float = float(shares)
+    price_float = float(price)
+    
     # Calculate total amount
-    amount = float(price) * float(shares)
+    amount = price_float * shares_float
     
     # Generate a UUID for the transaction
     transaction_id = str(uuid.uuid4())
@@ -56,8 +60,8 @@ def record_transaction(symbol, transaction_type, shares, price, date=None, notes
         transaction_id,
         transaction_type.lower(),
         symbol,
-        float(price),
-        float(shares),
+        price_float,
+        shares_float,
         amount,
         date,
         notes,
@@ -68,11 +72,11 @@ def record_transaction(symbol, transaction_type, shares, price, date=None, notes
     
     if result is not None:
         # Update portfolio based on transaction
-        update_portfolio_for_transaction(transaction_type, symbol, price, shares, date)
-        logger.info(f"Transaction recorded successfully: {transaction_type} {shares} shares of {symbol}")
+        update_portfolio_for_transaction(transaction_type, symbol, price_float, shares_float, date)
+        logger.info(f"Transaction recorded successfully: {transaction_type} {shares_float} shares of {symbol}")
         return True
     
-    logger.error(f"Failed to record transaction: {symbol} {transaction_type} {shares} shares")
+    logger.error(f"Failed to record transaction: {symbol} {transaction_type} {shares_float} shares")
     return False
 
 def update_portfolio_for_transaction(transaction_type, symbol, price, shares, date):
@@ -373,18 +377,27 @@ def load_transactions(symbol=None, start_date=None, end_date=None):
     result = {}
     if transactions:
         for tx in transactions:
-            # Convert RealDictRow to regular dict
-            tx_dict = dict(tx)
-            
-            # Format dates as strings
-            tx_dict['date'] = tx_dict['transaction_date'].strftime("%Y-%m-%d")
-            tx_dict['transaction_date'] = tx_dict['transaction_date'].strftime("%Y-%m-%d")
-            tx_dict['recorded_at'] = tx_dict['recorded_at'].strftime("%Y-%m-%d %H:%M:%S")
-            
-            # Ensure ID is converted to string
-            tx_dict['id'] = str(tx_dict['id'])
-            
-            # Add to result dictionary
-            result[tx_dict['id']] = tx_dict
+            try:
+                # Convert RealDictRow to regular dict
+                tx_dict = dict(tx)
+                
+                # Convert Decimal values to float
+                for key in ['shares', 'price', 'amount']:
+                    if key in tx_dict and tx_dict[key] is not None:
+                        tx_dict[key] = float(tx_dict[key])
+                
+                # Format dates as strings
+                tx_dict['date'] = tx_dict['transaction_date'].strftime("%Y-%m-%d")
+                tx_dict['transaction_date'] = tx_dict['transaction_date'].strftime("%Y-%m-%d")
+                tx_dict['recorded_at'] = tx_dict['recorded_at'].strftime("%Y-%m-%d %H:%M:%S")
+                
+                # Ensure ID is converted to string
+                tx_dict['id'] = str(tx_dict['id'])
+                
+                # Add to result dictionary
+                result[tx_dict['id']] = tx_dict
+            except Exception as e:
+                logger.error(f"Error processing transaction: {e}")
+                continue
     
     return result

@@ -278,48 +278,51 @@ def update_portfolio_data():
     
     # Now update each investment with the consistent price
     for inv in investments:
-        symbol = inv['symbol']
-        shares = float(inv['shares'])  # Convert to float
-        purchase_price = float(inv['purchase_price'])  # Convert to float
-        asset_type = inv['asset_type']
-        investment_id = inv['id']
-        
-        # Get the price data for this symbol
-        symbol_data = symbol_prices.get(symbol)
-        
-        if symbol_data:
-            current_price = float(symbol_data["price"])  # Ensure float type
-            currency = symbol_data["currency"]
+        try:
+            symbol = inv['symbol']
+            # Explicitly convert Decimal values to float
+            shares = float(inv['shares'])
+            purchase_price = float(inv['purchase_price'])
+            asset_type = inv['asset_type']
+            investment_id = inv['id']
             
-            # Calculate current value and gain/loss
-            current_value = shares * current_price
-            gain_loss = current_value - (shares * purchase_price)
-            gain_loss_percent = (current_price / purchase_price - 1) * 100 if purchase_price > 0 else 0
+            # Get the price data for this symbol
+            symbol_data = symbol_prices.get(symbol)
             
-            # Convert any NumPy types to Python native types
-            params = [
-                float(current_price),
-                float(current_value),
-                float(gain_loss),
-                float(gain_loss_percent),
-                currency,
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                investment_id
-            ]
-            
-            # Update investment details in database
-            update_query = """
-            UPDATE portfolio SET
-                current_price = %s,
-                current_value = %s,
-                gain_loss = %s,
-                gain_loss_percent = %s,
-                currency = %s,
-                last_updated = %s
-            WHERE id = %s;
-            """
-            
-            execute_query(update_query, params, commit=True)
+            if symbol_data:
+                current_price = float(symbol_data["price"])
+                currency = symbol_data["currency"]
+                
+                # Calculate current value and gain/loss
+                current_value = shares * current_price
+                gain_loss = current_value - (shares * purchase_price)
+                gain_loss_percent = (current_price / purchase_price - 1) * 100 if purchase_price > 0 else 0
+                
+                # Update investment details in database
+                update_query = """
+                UPDATE portfolio SET
+                    current_price = %s,
+                    current_value = %s,
+                    gain_loss = %s,
+                    gain_loss_percent = %s,
+                    currency = %s,
+                    last_updated = %s
+                WHERE id = %s;
+                """
+                
+                params = [
+                    current_price,
+                    current_value,
+                    gain_loss,
+                    gain_loss_percent,
+                    currency,
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    investment_id
+                ]
+                
+                execute_query(update_query, params, commit=True)
+        except Exception as e:
+            logger.error(f"Error processing investment {inv.get('id', 'unknown')}: {e}")
     
     # Return updated portfolio
     return load_portfolio()
