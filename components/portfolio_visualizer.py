@@ -16,6 +16,7 @@ from modules.portfolio_utils import get_money_weighted_return
 from modules.transaction_tracker import load_transactions
 from modules.portfolio_utils import get_usd_to_cad_rate, get_historical_usd_to_cad_rates
 from modules.mutual_fund_provider import MutualFundProvider
+from modules.yf_utils import download_yf_data, get_ticker_history
 
 # Import functions directly to avoid circular imports
 # We're already importing these individually above, so this commented code is just for reference
@@ -103,9 +104,13 @@ def get_portfolio_historical_data(portfolio, period="3m"):
         # Use yfinance download for better performance with multiple symbols
         if len(regular_symbols) > 1:
             try:
-                # Fix for yfinance auto_adjust=True default
-                all_data = yf.download(regular_symbols, start=start_date, end=end_date + timedelta(days=1), 
-                                      progress=False, auto_adjust=False)
+                # Use our custom download function with session management
+                all_data = download_yf_data(
+                    regular_symbols, 
+                    start=start_date, 
+                    end=end_date + timedelta(days=1), 
+                    auto_adjust=False
+                )
                 if not all_data.empty and 'Adj Close' in all_data.columns:
                     if len(regular_symbols) == 1:
                         # Handle single symbol case where yfinance returns 1D DataFrame
@@ -121,8 +126,12 @@ def get_portfolio_historical_data(portfolio, period="3m"):
                 # Fall back to individual downloads if bulk download fails
                 for symbol in regular_symbols:
                     try:
-                        ticker = yf.Ticker(symbol)
-                        hist = ticker.history(start=start_date, end=end_date + timedelta(days=1), auto_adjust=False)
+                        hist = get_ticker_history(
+                            symbol, 
+                            start=start_date, 
+                            end=end_date + timedelta(days=1), 
+                            auto_adjust=False
+                        )
                         if not hist.empty and 'Adj Close' in hist.columns:
                             regular_symbol_data[symbol] = hist['Adj Close']
                     except Exception as e:
@@ -131,8 +140,12 @@ def get_portfolio_historical_data(portfolio, period="3m"):
             # Just use individual download for a single symbol
             for symbol in regular_symbols:
                 try:
-                    ticker = yf.Ticker(symbol)
-                    hist = ticker.history(start=start_date, end=end_date + timedelta(days=1), auto_adjust=False)
+                    hist = get_ticker_history(
+                        symbol, 
+                        start=start_date, 
+                        end=end_date + timedelta(days=1), 
+                        auto_adjust=False
+                    )
                     if not hist.empty and 'Adj Close' in hist.columns:
                         regular_symbol_data[symbol] = hist['Adj Close']
                 except Exception as e:

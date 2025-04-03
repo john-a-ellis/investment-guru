@@ -9,6 +9,7 @@ import numpy as np
 from datetime import datetime, timedelta
 import uuid
 from modules.db_utils import execute_query
+from modules.yf_utils import get_ticker_history, download_yf_data
 
 # Configure logging
 logging.basicConfig(
@@ -487,9 +488,8 @@ def get_usd_to_cad_rate():
         float: Current USD to CAD exchange rate
     """
     try:
-        # Get exchange rate data from Yahoo Finance
-        ticker = yf.Ticker("CAD=X")  # Yahoo Finance symbol for USD/CAD rate
-        data = ticker.history(period="1d")
+        # Get exchange rate data using our session manager
+        data = get_ticker_history("CAD=X", period="1d")
         
         if not data.empty:
             rate = data['Close'].iloc[-1]
@@ -502,6 +502,7 @@ def get_usd_to_cad_rate():
         # Default rate if an exception occurs
         return 1.33
 
+# And replace the get_historical_usd_to_cad_rates function with this:
 def get_historical_usd_to_cad_rates(start_date=None, end_date=None):
     """
     Get historical USD to CAD exchange rates for a date range
@@ -527,9 +528,8 @@ def get_historical_usd_to_cad_rates(start_date=None, end_date=None):
         start_date_buffer = start_date - timedelta(days=5)
         end_date_buffer = end_date + timedelta(days=1)
         
-        # Get exchange rate data from Yahoo Finance
-        ticker = yf.Ticker("CAD=X")
-        data = ticker.history(start=start_date_buffer, end=end_date_buffer)
+        # Get exchange rate data using our session manager
+        data = get_ticker_history("CAD=X", start=start_date_buffer, end=end_date_buffer)
         
         if not data.empty:
             # Extract just the close prices as our exchange rates

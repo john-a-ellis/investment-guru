@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
 import yfinance as yf
+from modules.yf_utils import get_ticker_info, download_yf_data
 
 def create_portfolio_analysis_component():
     """
@@ -123,8 +124,7 @@ def get_sector_breakdown(portfolio):
         
         try:
             # Get sector information from yfinance
-            ticker = yf.Ticker(symbol)
-            ticker_info = ticker.info
+            ticker_info = get_ticker_info(symbol)
             
             sector = ticker_info.get("sector", "Unknown")
             if not sector or sector == "":
@@ -180,7 +180,7 @@ def calculate_correlation_matrix(portfolio):
     
     try:
         # Download data for all symbols at once - use auto_adjust=False for consistent column names
-        data = yf.download(symbols, start=start_date, end=end_date, auto_adjust=False)
+        data = download_yf_data(symbols, start=start_date, end=end_date, auto_adjust=False)
         
         # If only one symbol, the structure is different
         if len(symbols) == 1:
