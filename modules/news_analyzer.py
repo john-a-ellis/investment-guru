@@ -291,3 +291,58 @@ class NewsAnalyzer:
                     })
         
         return events
+    
+def analyze_news_sentiment(article_text):
+    """
+    Perform basic sentiment analysis on news article text.
+    
+    Args:
+        article_text (str): Combined title and description text
+        
+    Returns:
+        dict: Sentiment analysis result with sentiment and score
+    """
+    # Simple keyword-based sentiment analysis
+    positive_words = [
+        'gain', 'gains', 'rise', 'rises', 'rising', 'up', 'upward', 'growth', 'grew', 'growing',
+        'positive', 'profit', 'profitable', 'success', 'successful', 'bullish', 'strong', 'stronger',
+        'rally', 'rallies', 'recover', 'recovery', 'climb', 'climbs', 'climbing', 'surge', 'surges',
+        'high', 'higher', 'record', 'exceed', 'exceeds', 'beat', 'beats', 'outperform', 'increase',
+        'increases', 'boost', 'boosts', 'upgrade', 'upgrades', 'buy', 'opportunity', 'opportunities'
+    ]
+    
+    negative_words = [
+        'loss', 'losses', 'fall', 'falls', 'falling', 'down', 'downward', 'decline', 'declines',
+        'negative', 'deficit', 'weak', 'weaker', 'bearish', 'poor', 'plunge', 'plunges', 'drop',
+        'drops', 'shrink', 'shrinks', 'shrinking', 'slump', 'slumps', 'slide', 'slides', 'tumble',
+        'tumbles', 'low', 'lower', 'miss', 'misses', 'fail', 'fails', 'disappoint', 'disappoints',
+        'underperform', 'decrease', 'decreases', 'cut', 'cuts', 'downgrade', 'downgrades', 'sell',
+        'warning', 'warnings', 'risk', 'risks', 'concern', 'concerns', 'worried', 'worry', 'worries'
+    ]
+    
+    # Convert text to lowercase and split into words
+    words = article_text.lower().split()
+    
+    # Count positive and negative words
+    positive_count = sum(1 for word in words if word in positive_words)
+    negative_count = sum(1 for word in words if word in negative_words)
+    
+    # Calculate sentiment score (-1 to 1)
+    total_count = positive_count + negative_count
+    if total_count > 0:
+        sentiment_score = (positive_count - negative_count) / total_count
+    else:
+        sentiment_score = 0
+    
+    # Determine sentiment category
+    if sentiment_score > 0.2:
+        sentiment = "positive"
+    elif sentiment_score < -0.2:
+        sentiment = "negative"
+    else:
+        sentiment = "neutral"
+    
+    return {
+        "sentiment": sentiment,
+        "score": sentiment_score
+    }

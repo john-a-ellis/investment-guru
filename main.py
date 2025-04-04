@@ -488,6 +488,8 @@ def update_market_overview(n, timeframe):
     
     return fig
 
+    
+    # Create news cards
 @app.callback(
     Output("news-analysis-content", "children"),
     Input("news-interval", "n_intervals")
@@ -495,6 +497,7 @@ def update_market_overview(n, timeframe):
 def update_news_analysis(n):
     """
     Update news analysis with relevant stories about tracked assets and portfolio holdings
+    using the Financial Modeling Prep API, including sentiment analysis
     """
     # Load tracked assets and portfolio
     tracked_assets = load_tracked_assets()
@@ -511,48 +514,147 @@ def update_news_analysis(n):
     # Collect all symbols from both tracked assets and portfolio
     all_symbols = set(tracked_assets.keys()) | set(inv.get("symbol", "") for inv in portfolio.values())
     
-    # Create search terms for companies
-    search_terms = []
-    company_names = {}
+    # Remove any None values that might have crept in
+    all_symbols = {symbol for symbol in all_symbols if symbol}
     
-    for symbol in all_symbols:
-        # Add the symbol itself
-        search_terms.append(symbol)
+    # Split symbols into Canadian and US for better news targeting
+    canadian_symbols = [s for s in all_symbols if s.endswith(".TO") or s.endswith(".V")]
+    us_symbols = [s for s in all_symbols if not s.endswith(".TO") and not s.endswith(".V") and not s.startswith("MAW")]
+    
+    # Import FMP API
+    from modules.fmp_api import fmp_api
+    
+    # Get news for Canadian symbols (focusing on TSX for Canadian market news)
+    canadian_news = []
+    if canadian_symbols:
+        try:
+            # Add TSX index to improve Canadian market news coverage
+            if "^GSPTSE" not in canadian_symbols:
+                canadian_symbols.append("^GSPTSE")
+                
+            canadian_news = fmp_api.get_news(tickers=canadian_symbols, limit=15)
+        except Exception as e:
+            print(f"Error fetching Canadian news: {e}")
+    
+    # Get news for US symbols
+    us_news = []
+    if us_symbols:
+        try:
+            us_news = fmp_api.get_news(tickers=us_symbols, limit=15)
+        except Exception as e:
+            print(f"Error fetching US news: {e}")
+    
+    # Get general market news if we don't have enough specific news
+    general_news = []
+    if len(canadian_news) + len(us_news) < 5:
+        try:
+            general_news = fmp_api.get_news(limit=10)
+        except Exception as e:
+            print(f"Error fetching general news: {e}")
+    
+    # Combine all news sources and eliminate duplicates (by title)
+    all_news = []
+    seen_titles = set()
+    
+    for article in canadian_news + us_news + general_news:
+        title = article.get("title", "")
+        if title and title not in seen_titles:
+            seen_titles.add(title)
+            all_news.append(article)
+    
+    # Sort by date (most recent first)
+    all_news.sort(key=lambda x: x.get("publishedAt", ""), reverse=True)
+    
+    # Limit to 10 most recent articles
+    news_articles = all_news[:10]
+    
+    # If we still have no news (API issues), use fallback news
+    if not news_articles:
+        news_articles = [
+            {"title": "Market Update: TSX Gains on Energy Rally", "url": "#", "publishedAt": datetime.now().strftime("%Y-%m-%d"), "source": {"name": "Sample Source (API Unavailable)"}},
+            {"title": "Bank of Canada Holds Interest Rates Steady", "url": "#", "publishedAt": datetime.now().strftime("%Y-%m-%d"), "source": {"name": "Sample Source (API Unavailable)"}},
+            {"title": "Tech Stocks Lead Market Recovery", "url": "#", "publishedAt": datetime.now().strftime("%Y-%m-%d"), "source": {"name": "Sample Source (API Unavailable)"}}
+        ]
+    
+    # Import the sentiment analysis function
+    def analyze_news_sentiment(article_text):
+        """
+        Perform basic sentiment analysis on news article text.
         
-        # Add the company name if available
-        if symbol in tracked_assets:
-            name = tracked_assets[symbol].get("name", "")
-            if name:
-                # Extract the main company name without suffixes
-                main_name = name.split(" ")[0]
-                if len(main_name) > 3:  # Avoid short names that might cause too many false matches
-                    search_terms.append(main_name)
-                    company_names[symbol] = name
+        Args:
+            article_text (str): Combined title and description text
+            
+        Returns:
+            dict: Sentiment analysis result with sentiment and score
+        """
+        # Simple keyword-based sentiment analysis
+        positive_words = [
+            'gain', 'gains', 'rise', 'rises', 'rising', 'up', 'upward', 'growth', 'grew', 'growing',
+            'positive', 'profit', 'profitable', 'success', 'successful', 'bullish', 'strong', 'stronger',
+            'rally', 'rallies', 'recover', 'recovery', 'climb', 'climbs', 'climbing', 'surge', 'surges',
+            'high', 'higher', 'record', 'exceed', 'exceeds', 'beat', 'beats', 'outperform', 'increase',
+            'increases', 'boost', 'boosts', 'upgrade', 'upgrades', 'buy', 'opportunity', 'opportunities'
+        ]
+        
+        negative_words = [
+            'loss', 'losses', 'fall', 'falls', 'falling', 'down', 'downward', 'decline', 'declines',
+            'negative', 'deficit', 'weak', 'weaker', 'bearish', 'poor', 'plunge', 'plunges', 'drop',
+            'drops', 'shrink', 'shrinks', 'shrinking', 'slump', 'slumps', 'slide', 'slides', 'tumble',
+            'tumbles', 'low', 'lower', 'miss', 'misses', 'fail', 'fails', 'disappoint', 'disappoints',
+            'underperform', 'decrease', 'decreases', 'cut', 'cuts', 'downgrade', 'downgrades', 'sell',
+            'warning', 'warnings', 'risk', 'risks', 'concern', 'concerns', 'worried', 'worry', 'worries'
+        ]
+        
+        # Convert text to lowercase and split into words
+        words = article_text.lower().split()
+        
+        # Count positive and negative words
+        positive_count = sum(1 for word in words if word in positive_words)
+        negative_count = sum(1 for word in words if word in negative_words)
+        
+        # Calculate sentiment score (-1 to 1)
+        total_count = positive_count + negative_count
+        if total_count > 0:
+            sentiment_score = (positive_count - negative_count) / total_count
+        else:
+            sentiment_score = 0
+        
+        # Determine sentiment category
+        if sentiment_score > 0.2:
+            sentiment = "positive"
+        elif sentiment_score < -0.2:
+            sentiment = "negative"
+        else:
+            sentiment = "neutral"
+        
+        return {
+            "sentiment": sentiment,
+            "score": sentiment_score
+        }
     
-    # Default news items if API call fails
-    fallback_news = [
-        {"title": "Market Update: TSX Gains on Energy Rally", "url": "#", "publishedAt": datetime.now().strftime("%Y-%m-%d"), "source": {"name": "Sample Source"}},
-        {"title": "Bank of Canada Holds Interest Rates Steady", "url": "#", "publishedAt": datetime.now().strftime("%Y-%m-%d"), "source": {"name": "Sample Source"}},
-        {"title": "Tech Stocks Lead Market Recovery", "url": "#", "publishedAt": datetime.now().strftime("%Y-%m-%d"), "source": {"name": "Sample Source"}}
-    ]
-    
-    # Since we don't have a functional news API here, we'll use the fallback news
-    news_articles = fallback_news
-    
-    # Find relevant symbols in each article
+    # Find relevant symbols and analyze sentiment for each article
     for article in news_articles:
         article["relevant_symbols"] = []
         article_title = article.get("title", "") or ""
         article_description = article.get("description", "") or ""
+        article_content = (article_title + " " + article_description).lower()
         
+        # Find relevant symbols
         for symbol in all_symbols:
-            if symbol in article_title or symbol in article_description:
+            # Check if symbol is directly mentioned
+            if symbol.lower() in article_content:
                 article["relevant_symbols"].append(symbol)
-            # Check company name
-            elif symbol in company_names and company_names[symbol] in article_title:
+            # Check company name if available
+            elif symbol in tracked_assets and tracked_assets[symbol].get("name", "").lower() in article_content:
                 article["relevant_symbols"].append(symbol)
+            # For Canadian stocks, check without .TO suffix
+            elif symbol.endswith(".TO") and symbol[:-3].lower() in article_content:
+                article["relevant_symbols"].append(symbol)
+        
+        # Analyze sentiment
+        article["sentiment"] = analyze_news_sentiment(article_title + " " + article_description)
     
-    # Create news cards
+    # Create news cards with sentiment indicators
     news_cards = []
     for article in news_articles:
         # Create tags for relevant symbols
@@ -562,11 +664,34 @@ def update_news_analysis(n):
                 dbc.Badge(symbol, color="info", className="me-1")
             )
         
+        # If no specific symbols are relevant, add a general market badge
+        if not symbol_badges:
+            symbol_badges.append(
+                dbc.Badge("Market", color="secondary", className="me-1")
+            )
+        
+        # Add sentiment badge with appropriate color
+        sentiment = article.get("sentiment", {}).get("sentiment", "neutral")
+        sentiment_color = {
+            "positive": "success",
+            "negative": "danger",
+            "neutral": "secondary"
+        }.get(sentiment, "secondary")
+        
+        sentiment_badge = dbc.Badge(
+            sentiment.capitalize(), 
+            color=sentiment_color,
+            className="ms-1"
+        )
+        
         # Format date
         published_date = article.get("publishedAt", "")
         if published_date:
             try:
-                date_obj = datetime.strptime(published_date, "%Y-%m-%dT%H:%M:%SZ")
+                if 'T' in published_date:  # ISO format with time
+                    date_obj = datetime.strptime(published_date, "%Y-%m-%dT%H:%M:%SZ")
+                else:  # Just date
+                    date_obj = datetime.strptime(published_date, "%Y-%m-%d")
                 formatted_date = date_obj.strftime("%Y-%m-%d %H:%M")
             except:
                 formatted_date = published_date
@@ -583,22 +708,84 @@ def update_news_analysis(n):
         if len(description) > 200:
             description = description[:200] + "..."
         
-        # Create card
+        # Create card with improved styling
         news_cards.append(
             dbc.Card([
                 dbc.CardHeader([
-                    html.Div(symbol_badges, className="mb-1") if symbol_badges else "",
+                    html.Div([
+                        html.Span(symbol_badges),
+                        html.Span(sentiment_badge, className="float-end")
+                    ], className="mb-1"),
                     html.Small(f"{source_name} - {formatted_date}", className="text-muted")
                 ]),
                 dbc.CardBody([
                     html.H5(article.get("title", "No title"), className="card-title"),
-                    html.P(description),
+                    html.P(description, className="card-text"),
                     html.A("Read more", href=article.get("url", "#"), target="_blank", className="btn btn-sm btn-outline-primary")
                 ])
-            ], className="mb-3")
+            ], className="mb-3", outline=True, color=sentiment_color)
         )
     
-    return news_cards
+    # Create summary of news sentiment
+    positive_count = sum(1 for article in news_articles if article.get("sentiment", {}).get("sentiment") == "positive")
+    negative_count = sum(1 for article in news_articles if article.get("sentiment", {}).get("sentiment") == "negative")
+    neutral_count = sum(1 for article in news_articles if article.get("sentiment", {}).get("sentiment") == "neutral")
+    
+    # Determine overall market sentiment
+    if positive_count > negative_count:
+        overall_sentiment = "Positive"
+        overall_color = "success"
+    elif negative_count > positive_count:
+        overall_sentiment = "Negative"
+        overall_color = "danger"
+    else:
+        overall_sentiment = "Neutral"
+        overall_color = "secondary"
+    
+    # Create sentiment summary component with separate progress bars (compatible with DBC 2.0.0)
+    total_articles = positive_count + negative_count + neutral_count
+    
+    # Calculate percentages for each sentiment category
+    positive_pct = (positive_count / total_articles * 100) if total_articles > 0 else 0
+    neutral_pct = (neutral_count / total_articles * 100) if total_articles > 0 else 0
+    negative_pct = (negative_count / total_articles * 100) if total_articles > 0 else 0
+    
+    sentiment_summary = dbc.Card([
+        dbc.CardBody([
+            html.H5("Market Sentiment Analysis", className="card-title"),
+            html.P([
+                f"Based on recent news, overall market sentiment appears to be ",
+                html.Span(overall_sentiment, className=f"text-{overall_color} fw-bold")
+            ]),
+            
+            # Use separate progress bars instead of the multi parameter
+            html.Div([
+                html.Div([
+                    html.Span(f"Positive: {positive_count}", className="text-white px-2"),
+                    dbc.Progress(value=positive_pct, color="success", style={"height": "24px"})
+                ], className="mb-1"),
+                html.Div([
+                    html.Span(f"Neutral: {neutral_count}", className="text-white px-2"),
+                    dbc.Progress(value=neutral_pct, color="secondary", style={"height": "24px"})
+                ], className="mb-1"),
+                html.Div([
+                    html.Span(f"Negative: {negative_count}", className="text-white px-2"),
+                    dbc.Progress(value=negative_pct, color="danger", style={"height": "24px"})
+                ])
+            ])
+        ])
+    ], className="mb-3")
+    
+    # Add a loading indicator and timestamp
+    news_component = [
+        sentiment_summary,
+        html.Div([
+            html.Small(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", className="text-muted mb-3 d-block"),
+            *news_cards
+        ])
+    ]
+    
+    return news_component
 
 @app.callback(
     Output("recommendations-content", "children"),
