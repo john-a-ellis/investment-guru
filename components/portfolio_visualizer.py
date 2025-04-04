@@ -31,6 +31,7 @@ from modules.yf_utils import download_yf_data, get_ticker_history
 def get_portfolio_historical_data(portfolio, period="3m"):
     """
     Get historical performance data for the portfolio with robust timezone handling
+    using FMP API instead of yfinance
     
     Args:
         portfolio (dict): Portfolio data
@@ -84,6 +85,9 @@ def get_portfolio_historical_data(portfolio, period="3m"):
     # Initialize mutual fund provider
     mutual_fund_provider = MutualFundProvider()
     
+    # Import FMP API
+    from modules.fmp_api import fmp_api
+    
     # Separate investments by type to handle them differently
     regular_investments = []  # Stocks, ETFs, etc.
     mutual_fund_investments = []  # Mutual funds
@@ -95,61 +99,21 @@ def get_portfolio_historical_data(portfolio, period="3m"):
         else:
             regular_investments.append((inv_id, inv))
     
-    # Get historical data for regular investments using yfinance
+    # Get historical data for regular investments using FMP API
     regular_symbol_data = {}
     regular_symbols = list(set(inv["symbol"] for _, inv in regular_investments))
     
     # Process regular investments (stocks, ETFs, etc.)
     if regular_symbols:
-        # Use yfinance download for better performance with multiple symbols
-        if len(regular_symbols) > 1:
+        for symbol in regular_symbols:
             try:
-                # Use our custom download function with session management
-                all_data = download_yf_data(
-                    regular_symbols, 
-                    start=start_date, 
-                    end=end_date + timedelta(days=1), 
-                    auto_adjust=False
-                )
-                if not all_data.empty and 'Adj Close' in all_data.columns:
-                    if len(regular_symbols) == 1:
-                        # Handle single symbol case where yfinance returns 1D DataFrame
-                        closes = pd.DataFrame(all_data['Adj Close'], columns=regular_symbols)
-                    else:
-                        closes = all_data['Adj Close']
-                        
-                    for symbol in regular_symbols:
-                        if symbol in closes.columns:
-                            regular_symbol_data[symbol] = closes[symbol]
+                # Get historical price data from FMP API
+                hist = fmp_api.get_historical_price(symbol, start_date=start_date, end_date=end_date)
+                
+                if not hist.empty and 'Close' in hist.columns:
+                    regular_symbol_data[symbol] = hist['Close']
             except Exception as e:
-                print(f"Error in bulk download: {e}, falling back to individual downloads")
-                # Fall back to individual downloads if bulk download fails
-                for symbol in regular_symbols:
-                    try:
-                        hist = get_ticker_history(
-                            symbol, 
-                            start=start_date, 
-                            end=end_date + timedelta(days=1), 
-                            auto_adjust=False
-                        )
-                        if not hist.empty and 'Adj Close' in hist.columns:
-                            regular_symbol_data[symbol] = hist['Adj Close']
-                    except Exception as e:
-                        print(f"Error getting historical data for {symbol}: {e}")
-        else:
-            # Just use individual download for a single symbol
-            for symbol in regular_symbols:
-                try:
-                    hist = get_ticker_history(
-                        symbol, 
-                        start=start_date, 
-                        end=end_date + timedelta(days=1), 
-                        auto_adjust=False
-                    )
-                    if not hist.empty and 'Adj Close' in hist.columns:
-                        regular_symbol_data[symbol] = hist['Adj Close']
-                except Exception as e:
-                    print(f"Error getting historical data for {symbol}: {e}")
+                print(f"Error getting historical data for {symbol}: {e}")
     
     # Process mutual fund investments
     mutual_fund_data = {}
@@ -223,8 +187,10 @@ def get_portfolio_historical_data(portfolio, period="3m"):
         except Exception as e:
             print(f"Error processing investment {investment_id}: {e}")
     
-    # Get historical USD to CAD exchange rates
+    # Get historical USD to CAD exchange rates using FMP API
     try:
+        # Use our portfolio_utils function which now uses FMP API
+        from modules.portfolio_utils import get_historical_usd_to_cad_rates
         exchange_rates = get_historical_usd_to_cad_rates(start_date, end_date)
         
         # Convert USD to CAD
@@ -257,14 +223,13 @@ def get_portfolio_historical_data(portfolio, period="3m"):
         # Fallback - just use CAD values
         portfolio_values['Total'] = portfolio_values['Total_CAD']
     
-    # Get benchmark data - S&P/TSX Composite (already in CAD)
+    # Get benchmark data - S&P/TSX Composite (already in CAD) using FMP API
     try:
-        # Get TSX data
-        tsx = yf.Ticker("^GSPTSE")
-        tsx_hist = tsx.history(start=start_date, end=end_date + timedelta(days=1), auto_adjust=False)
+        # Get TSX data from FMP API
+        tsx_hist = fmp_api.get_historical_price("^GSPTSE", start_date=start_date, end_date=end_date)
         
-        if not tsx_hist.empty:
-            portfolio_values['TSX'] = tsx_hist['Adj Close']
+        if not tsx_hist.empty and 'Close' in tsx_hist.columns:
+            portfolio_values['TSX'] = tsx_hist['Close']
     except Exception as e:
         print(f"Error adding benchmark data: {e}")
     

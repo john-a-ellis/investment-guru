@@ -1,14 +1,25 @@
-# data_collector.py
-import requests
+# modules/data_collector.py
+"""
+Data collection module using Financial Modeling Prep API.
+"""
 import pandas as pd
 from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+import logging
+
+# Import the FMP API module
+from modules.fmp_api import fmp_api
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 class DataCollector:
     """
@@ -17,8 +28,6 @@ class DataCollector:
     """
     
     def __init__(self):
-        self.fmp_api_key = os.getenv("FMP_API_KEY")
-        
         # Initialize caches
         self.market_data_cache = {}
         self.financial_data_cache = {}
@@ -27,6 +36,13 @@ class DataCollector:
     def get_market_data(self, symbols=None, timeframe="1mo"):
         """
         Retrieve market data for specified symbols over the given timeframe.
+        
+        Args:
+            symbols (list): List of stock symbols
+            timeframe (str): Time period ('1d', '1w', '1mo', '3mo', '6mo', '1y')
+            
+        Returns:
+            dict: Dictionary of DataFrames with market data for each symbol
         """
         if symbols is None:
             # Load tracked assets
@@ -38,19 +54,6 @@ class DataCollector:
             if not symbols:
                 symbols = ['^GSPTSE', '^TXCX', 'XIU.TO', 'XIC.TO']
         
-        # Convert timeframe to days for FMP API
-        days = 30  # default for 1mo
-        if timeframe == "1d":
-            days = 1
-        elif timeframe == "1w":
-            days = 7
-        elif timeframe == "3mo":
-            days = 90
-        elif timeframe == "6mo":
-            days = 180
-        elif timeframe == "1y":
-            days = 365
-            
         # Check cache first
         cache_key = f"{'-'.join(symbols)}_{timeframe}"
         if cache_key in self.market_data_cache:
@@ -61,50 +64,19 @@ class DataCollector:
         
         # Get fresh data
         data = {}
-        base_url = "https://financialmodelingprep.com/api/v3"
-        
-        # Create a custom session for Yahoo Finance API calls
-        yf_session = create_yf_session()
         
         for symbol in symbols:
             try:
-                # Handle indices differently
-                if symbol.startswith('^'):
-                    # For indices, use the historical price endpoint
-                    url = f"{base_url}/historical-price-full/{symbol}?from={days}days&apikey={self.fmp_api_key}"
-                else:
-                    # For stocks and ETFs
-                    url = f"{base_url}/historical-price-full/{symbol}?from={days}days&apikey={self.fmp_api_key}"
+                # Get historical price data from FMP API
+                df = fmp_api.get_historical_price(symbol, period=timeframe)
                 
-                # Use the custom session
-                with yf_session as session:
-                    response = session.get(url)
-                    if response.status_code == 200:
-                        json_data = response.json()
-                        if 'historical' in json_data:
-                            # Convert to dataframe
-                            df = pd.DataFrame(json_data['historical'])
-                            # Convert date strings to datetime
-                            df['date'] = pd.to_datetime(df['date'])
-                            # Set date as index
-                            df = df.set_index('date')
-                            # Sort by date
-                            df = df.sort_index()
-                            # Rename columns to match yfinance format
-                            df = df.rename(columns={
-                                'open': 'Open',
-                                'high': 'High',
-                                'low': 'Low',
-                                'close': 'Close',
-                                'volume': 'Volume'
-                            })
-                            data[symbol] = df
-                        else:
-                            data[symbol] = pd.DataFrame()
-                    else:
-                        data[symbol] = pd.DataFrame()
+                if not df.empty:
+                    data[symbol] = df
+                else:
+                    logger.warning(f"No data found for symbol: {symbol}")
+                    data[symbol] = pd.DataFrame()
             except Exception as e:
-                print(f"Error retrieving data for {symbol}: {e}")
+                logger.error(f"Error retrieving data for {symbol}: {e}")
                 data[symbol] = pd.DataFrame()
         
         # Update cache
@@ -114,9 +86,14 @@ class DataCollector:
     def get_company_financials(self, symbols):
         """
         Retrieve financial statements for specified companies using FMP.
+        
+        Args:
+            symbols (list): List of stock symbols
+            
+        Returns:
+            dict: Dictionary of financial data for each symbol
         """
         financial_data = {}
-        base_url = "https://financialmodelingprep.com/api/v3"
         
         for symbol in symbols:
             try:
@@ -129,33 +106,29 @@ class DataCollector:
                         continue
                 
                 # Get income statement
-                income_url = f"{base_url}/income-statement/{symbol}?limit=4&apikey={self.fmp_api_key}"
-                income_response = requests.get(income_url)
+                income_statement = fmp_api.get_income_statement(symbol, limit=4)
                 
                 # Get balance sheet
-                balance_url = f"{base_url}/balance-sheet-statement/{symbol}?limit=4&apikey={self.fmp_api_key}"
-                balance_response = requests.get(balance_url)
+                balance_sheet = fmp_api.get_balance_sheet(symbol, limit=4)
                 
                 # Get cash flow
-                cashflow_url = f"{base_url}/cash-flow-statement/{symbol}?limit=4&apikey={self.fmp_api_key}"
-                cashflow_response = requests.get(cashflow_url)
+                cash_flow = fmp_api.get_cash_flow(symbol, limit=4)
                 
                 # Get key metrics
-                metrics_url = f"{base_url}/key-metrics/{symbol}?limit=1&apikey={self.fmp_api_key}"
-                metrics_response = requests.get(metrics_url)
+                key_metrics = fmp_api.get_key_metrics(symbol, limit=1)
                 
                 # Combine all data
                 financial_data[symbol] = {
-                    'income_statement': income_response.json() if income_response.status_code == 200 else [],
-                    'balance_sheet': balance_response.json() if balance_response.status_code == 200 else [],
-                    'cash_flow': cashflow_response.json() if cashflow_response.status_code == 200 else [],
-                    'key_metrics': metrics_response.json() if metrics_response.status_code == 200 else []
+                    'income_statement': income_statement,
+                    'balance_sheet': balance_sheet,
+                    'cash_flow': cash_flow,
+                    'key_metrics': key_metrics
                 }
                 
                 # Update cache
                 self.financial_data_cache[symbol] = (datetime.now(), financial_data[symbol])
             except Exception as e:
-                print(f"Error retrieving financial data for {symbol}: {e}")
+                logger.error(f"Error retrieving financial data for {symbol}: {e}")
                 financial_data[symbol] = {}
                 
         return financial_data
@@ -182,65 +155,44 @@ class DataCollector:
             if datetime.now() - cache_time < timedelta(hours=3):
                 return data
         
-        # Using FMP for news data
-        base_url = "https://financialmodelingprep.com/api/v3/stock_news"
-        
-        articles = []
+        # Get news data from FMP
         try:
-            # Get general stock news
-            params = {
-                'limit': 50,  # Get more articles to have enough after filtering
-                'apikey': self.fmp_api_key
-            }
+            # First try to get news for specific symbols related to keywords
+            # For Canadian focus, we'll add some TSX symbols
+            canadian_tickers = ['XIU.TO', '^GSPTSE', 'XIC.TO', 'RY.TO', 'TD.TO', 'ENB.TO']
             
-            response = requests.get(base_url, params=params)
-            if response.status_code == 200:
-                all_articles = response.json()
-                
-                # Filter articles based on keywords
-                for article in all_articles:
-                    if any(keyword.lower() in article.get('text', '').lower() or 
-                        keyword.lower() in article.get('title', '').lower() 
-                        for keyword in keywords):
-                        # Transform to match expected format in news_analyzer
-                        transformed_article = {
-                            'title': article.get('title', ''),
-                            'description': article.get('text', ''),
-                            'publishedAt': article.get('publishedDate', ''),
-                            'url': article.get('url', ''),
-                            'source': {'name': article.get('site', '')}
-                        }
-                        articles.append(transformed_article)
+            # Get general financial news
+            articles = fmp_api.get_news(limit=50)
             
-            # If we want more Canadian-specific news, we can also get news for Canadian indices
-            canadian_tickers = ['XIU.TO', '^GSPTSE']  # iShares S&P/TSX 60 ETF and TSX Composite Index
-            for ticker in canadian_tickers:
-                ticker_url = f"https://financialmodelingprep.com/api/v3/stock_news/{ticker}?limit=20&apikey={self.fmp_api_key}"
-                ticker_response = requests.get(ticker_url)
-                if ticker_response.status_code == 200:
-                    ticker_articles = ticker_response.json()
-                    for article in ticker_articles:
-                        # Transform to match expected format in news_analyzer
-                        transformed_article = {
-                            'title': article.get('title', ''),
-                            'description': article.get('text', ''),
-                            'publishedAt': article.get('publishedDate', ''),
-                            'url': article.get('url', ''),
-                            'source': {'name': article.get('site', '')}
-                        }
-                        # Check if this is a duplicate
-                        if not any(existing['title'] == transformed_article['title'] for existing in articles):
-                            articles.append(transformed_article)
+            # Get Canada-specific news using Canadian tickers
+            canadian_articles = fmp_api.get_news(tickers=canadian_tickers, limit=20)
+            
+            # Combine and remove duplicates
+            all_articles = articles + canadian_articles
+            unique_articles = []
+            seen_titles = set()
+            
+            for article in all_articles:
+                title = article.get('title', '')
+                if title and title not in seen_titles:
+                    seen_titles.add(title)
+                    # Filter based on keywords
+                    if any(keyword.lower() in article.get('description', '').lower() or 
+                           keyword.lower() in title.lower() 
+                           for keyword in keywords):
+                        unique_articles.append(article)
+            
+            # Limit to 20 articles
+            unique_articles = unique_articles[:20]
+            
+            # Update cache
+            self.news_cache[cache_key] = (datetime.now(), unique_articles)
+            
+            return unique_articles
             
         except Exception as e:
-            print(f"Error retrieving news: {e}")
-        
-        # Limit to 20 articles
-        articles = articles[:20]
-        
-        # Update cache
-        self.news_cache[cache_key] = (datetime.now(), articles)
-        return articles
+            logger.error(f"Error retrieving news: {e}")
+            return []
     
     def get_economic_indicators(self):
         """
@@ -250,73 +202,89 @@ class DataCollector:
             dict: Dictionary of economic indicators
         """
         indicators = {}
-        base_url = "https://financialmodelingprep.com/api/v4"
         
         try:
-            # Get economic indicators
-            indicators_url = f"{base_url}/economic?apikey={self.fmp_api_key}"
-            response = requests.get(indicators_url)
+            # Get broad economic indicators
+            all_indicators = fmp_api.get_economic_indicators()
             
-            if response.status_code == 200:
-                all_indicators = response.json()
+            # Process indicators into categories
+            for indicator in all_indicators:
+                name = indicator.get('name', '')
                 
-                # Process indicators into categories
-                for indicator in all_indicators:
-                    name = indicator.get('name', '')
-                    
-                    # Categorize indicators
-                    if 'gdp' in name.lower():
-                        category = 'gdp'
-                    elif 'inflation' in name.lower() or 'cpi' in name.lower():
-                        category = 'inflation'
-                    elif 'unemployment' in name.lower():
-                        category = 'unemployment'
-                    elif 'interest rate' in name.lower():
-                        category = 'interest_rates'
-                    elif 'housing' in name.lower() or 'home' in name.lower():
-                        category = 'housing'
-                    else:
-                        category = 'other'
-                    
-                    # Add to appropriate category
-                    if category not in indicators:
-                        indicators[category] = []
-                    
-                    indicators[category].append(indicator)
-                    
+                # Categorize indicators
+                if 'gdp' in name.lower():
+                    category = 'gdp'
+                elif 'inflation' in name.lower() or 'cpi' in name.lower():
+                    category = 'inflation'
+                elif 'unemployment' in name.lower():
+                    category = 'unemployment'
+                elif 'interest rate' in name.lower():
+                    category = 'interest_rates'
+                elif 'housing' in name.lower() or 'home' in name.lower():
+                    category = 'housing'
+                else:
+                    category = 'other'
+                
+                # Add to appropriate category
+                if category not in indicators:
+                    indicators[category] = []
+                
+                indicators[category].append(indicator)
+                
         except Exception as e:
-            print(f"Error retrieving economic indicators: {e}")
+            logger.error(f"Error retrieving economic indicators: {e}")
             
         return indicators
     
-
-def create_yf_session():
-    """
-    Create a custom session for Yahoo Finance API calls with proper retry logic
-    and connection pool settings to avoid warnings.
+    def get_exchange_rate(self, from_currency="USD", to_currency="CAD"):
+        """
+        Get the current exchange rate between two currencies.
+        
+        Args:
+            from_currency (str): Base currency code
+            to_currency (str): Target currency code
+            
+        Returns:
+            float: Exchange rate
+        """
+        try:
+            rate = fmp_api.get_exchange_rate(from_currency, to_currency)
+            
+            if rate is not None:
+                return rate
+            else:
+                # Default rate if API call fails
+                logger.warning(f"Failed to get exchange rate, using default")
+                return 1.33 if from_currency == "USD" and to_currency == "CAD" else 1.0
+        except Exception as e:
+            logger.error(f"Error retrieving exchange rate: {e}")
+            # Default rate as fallback
+            return 1.33 if from_currency == "USD" and to_currency == "CAD" else 1.0
     
-    Returns:
-        requests.Session: Configured session object
-    """
-    session = requests.Session()
-    
-    # Configure retry strategy
-    retry_strategy = Retry(
-        total=3,  # Maximum number of retries
-        backoff_factor=1,  # Time factor between retries
-        status_forcelist=[429, 500, 502, 503, 504],  # Retry on these status codes
-        allowed_methods=["HEAD", "GET", "OPTIONS"]  # Allow retries on these methods
-    )
-    
-    # Create adapter with the retry strategy and larger pool size
-    adapter = HTTPAdapter(
-        max_retries=retry_strategy,
-        pool_connections=50,  # Increased from 30
-        pool_maxsize=50  # Increased from 30
-    )
-    
-    # Mount for both http and https
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    
-    return session
+    def get_historical_exchange_rates(self, from_currency="USD", to_currency="CAD", days=365):
+        """
+        Get historical exchange rates between two currencies.
+        
+        Args:
+            from_currency (str): Base currency code
+            to_currency (str): Target currency code
+            days (int): Number of days of historical data
+            
+        Returns:
+            DataFrame: Historical exchange rates
+        """
+        try:
+            df = fmp_api.get_historical_exchange_rates(from_currency, to_currency, days)
+            
+            if not df.empty:
+                return df
+            else:
+                # Create a default series if API call fails
+                logger.warning(f"Failed to get historical exchange rates, using default")
+                date_range = pd.date_range(end=datetime.now(), periods=days)
+                return pd.Series([1.33] * len(date_range), index=date_range)
+        except Exception as e:
+            logger.error(f"Error retrieving historical exchange rates: {e}")
+            # Default series as fallback
+            date_range = pd.date_range(end=datetime.now(), periods=days)
+            return pd.Series([1.33] * len(date_range), index=date_range)

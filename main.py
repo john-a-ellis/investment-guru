@@ -320,6 +320,7 @@ def remove_asset(n_clicks_list):
 def update_market_overview(n, timeframe):
     """
     Update the market overview graph with actual historical data for tracked assets
+    using FMP API instead of yfinance
     """
     # Load tracked assets
     tracked_assets = load_tracked_assets()
@@ -335,76 +336,48 @@ def update_market_overview(n, timeframe):
         )
         return fig
     
+    # Import FMP API
+    from modules.fmp_api import fmp_api
+    
     # Define time period based on selected timeframe
     end_date = datetime.now()
     
     if timeframe == "1w":
         start_date = end_date - timedelta(days=7)
         period_label = "Last Week"
-        ticker_period = "1wk"  # For yfinance
     elif timeframe == "1m":
         start_date = end_date - timedelta(days=30)
         period_label = "Last Month"
-        ticker_period = "1mo"
     elif timeframe == "3m":
         start_date = end_date - timedelta(days=90)
         period_label = "Last 3 Months"
-        ticker_period = "3mo"
     elif timeframe == "6m":
         start_date = end_date - timedelta(days=180)
         period_label = "Last 6 Months"
-        ticker_period = "6mo"
     elif timeframe == "1y":
         start_date = end_date - timedelta(days=365)
         period_label = "Last Year"
-        ticker_period = "1y"
     elif timeframe == "5y":
         start_date = end_date - timedelta(days=365*5)
         period_label = "Last 5 Years"
-        ticker_period = "5y"
     else:
         # Default to 1 month
         start_date = end_date - timedelta(days=30)
         period_label = "Last Month"
-        ticker_period = "1mo"
     
     # Create a figure
     fig = go.Figure()
-    
-    # Import the session manager from yf_utils to improve yfinance connections
-    from modules.yf_utils import get_ticker_history, download_yf_data
     
     # For longer timeframes, use a more appropriate interval
     data_interval = "1d"  # Default daily for shorter timeframes
     if timeframe in ["1y", "5y"]:
         data_interval = "1wk"  # Use weekly for 1y and 5y
     
-    # Try bulk download for better performance
-    symbols = list(tracked_assets.keys())
-    try:
-        all_data = download_yf_data(symbols, start=start_date, end=end_date, period=ticker_period)
-        bulk_download_success = not all_data.empty
-    except Exception as e:
-        print(f"Bulk download failed: {e}")
-        bulk_download_success = False
-    
     # Process data for each asset
     for symbol, details in tracked_assets.items():
         try:
-            # Try to get data from bulk download first
-            if bulk_download_success and 'Adj Close' in all_data.columns:
-                if len(symbols) > 1:  # MultiIndex for multiple symbols
-                    if ('Adj Close', symbol) in all_data.columns:
-                        hist = pd.DataFrame({'Close': all_data['Adj Close'][symbol]})
-                        hist.index = all_data.index
-                    else:
-                        continue  # Skip if symbol data not available
-                else:  # Single index for one symbol
-                    hist = pd.DataFrame({'Close': all_data['Adj Close']})
-                    hist.index = all_data.index
-            else:
-                # Fall back to individual download
-                hist = get_ticker_history(symbol, start=start_date, end=end_date, period=ticker_period)
+            # Get historical price data from FMP API
+            hist = fmp_api.get_historical_price(symbol, start_date=start_date, end_date=end_date)
             
             if not hist.empty and 'Close' in hist.columns:
                 # Normalize values to start at 100 for better comparison
@@ -421,13 +394,12 @@ def update_market_overview(n, timeframe):
                     ))
         except Exception as e:
             print(f"Error getting data for {symbol}: {e}")
-            # Import traceback for better error reporting
             import traceback
             traceback.print_exc()
     
     # Add a benchmark index (S&P/TSX Composite for Canadian focus)
     try:
-        tsx_hist = get_ticker_history("^GSPTSE", start=start_date, end=end_date, period=ticker_period)
+        tsx_hist = fmp_api.get_historical_price("^GSPTSE", start_date=start_date, end_date=end_date)
         
         if not tsx_hist.empty and 'Close' in tsx_hist.columns:
             # Normalize TSX values

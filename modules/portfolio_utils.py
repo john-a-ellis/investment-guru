@@ -211,6 +211,7 @@ def save_user_profile(profile):
 def update_portfolio_data():
     """
     Updates portfolio data with current market prices and performance metrics
+    using FMP API instead of yfinance
     
     Returns:
         dict: Updated portfolio data
@@ -225,6 +226,9 @@ def update_portfolio_data():
     # Import mutual fund provider
     from modules.mutual_fund_provider import MutualFundProvider
     mutual_fund_provider = MutualFundProvider()
+    
+    # Import FMP API
+    from modules.fmp_api import fmp_api
     
     # First, get current prices for all unique symbols
     unique_symbols = {inv['symbol'] for inv in investments}
@@ -247,7 +251,7 @@ def update_portfolio_data():
                         "currency": "CAD"
                     }
                 else:
-                    print(f"No price data available for mutual fund {symbol}")
+                    logger.warning(f"No price data available for mutual fund {symbol}")
                     # Use the purchase price as a fallback (from the first matching investment)
                     purchase_price = next((float(inv['purchase_price']) for inv in investments if inv['symbol'] == symbol), 0)
                     symbol_prices[symbol] = {
@@ -255,13 +259,11 @@ def update_portfolio_data():
                         "currency": "CAD"
                     }
             else:
-                # For stocks, ETFs, etc., use yfinance
-                ticker = yf.Ticker(symbol)
-                price_data = ticker.history(period="1d", auto_adjust=False)
+                # For stocks, ETFs, etc., use FMP API
+                quote = fmp_api.get_quote(symbol)
                 
-                if not price_data.empty:
-                    # Get the price directly from yfinance
-                    current_price = price_data['Close'].iloc[-1]
+                if quote and 'price' in quote:
+                    current_price = quote['price']
                     
                     # Convert NumPy types to Python native types
                     if hasattr(current_price, 'item'):
@@ -277,9 +279,18 @@ def update_portfolio_data():
                         "currency": currency
                     }
                 else:
-                    print(f"No price data available for {symbol}")
+                    logger.warning(f"No price data available from FMP for {symbol}")
+                    # Use existing price as fallback
+                    purchase_price = next((float(inv['purchase_price']) for inv in investments if inv['symbol'] == symbol), 0)
+                    is_canadian = symbol.endswith(".TO") or symbol.endswith(".V") or "-CAD" in symbol
+                    currency = "CAD" if is_canadian else "USD"
+                    
+                    symbol_prices[symbol] = {
+                        "price": float(purchase_price),
+                        "currency": currency
+                    }
         except Exception as e:
-            print(f"Error getting price for {symbol}: {e}")
+            logger.error(f"Error getting price for {symbol}: {e}")
     
     # Now update each investment with the consistent price
     for inv in investments:
@@ -291,7 +302,6 @@ def update_portfolio_data():
             asset_type = inv['asset_type']
             
             # Convert UUID to string to ensure it's properly handled
-            # This is the fix for "'UUID' object is not subscriptable"
             investment_id = str(inv['id']) if inv['id'] is not None else None
             
             # Get the price data for this symbol
@@ -495,30 +505,30 @@ def record_transaction(symbol, transaction_type, price, shares, date=None, notes
 
 def get_usd_to_cad_rate():
     """
-    Get the current USD to CAD exchange rate
+    Get the current USD to CAD exchange rate using FMP API
     
     Returns:
         float: Current USD to CAD exchange rate
     """
     try:
-        # Get exchange rate data using our session manager
-        data = get_ticker_history("CAD=X", period="1d")
+        # Use FMP API to get exchange rate
+        from modules.fmp_api import fmp_api
+        rate = fmp_api.get_exchange_rate("USD", "CAD")
         
-        if not data.empty:
-            rate = data['Close'].iloc[-1]
+        if rate is not None:
             return rate
         else:
             # Default rate if data retrieval fails
+            logger.warning("Failed to get USD to CAD rate from FMP API, using default")
             return 1.33
     except Exception as e:
         logger.error(f"Error getting USD to CAD rate: {e}")
         # Default rate if an exception occurs
         return 1.33
 
-# And replace the get_historical_usd_to_cad_rates function with this:
 def get_historical_usd_to_cad_rates(start_date=None, end_date=None):
     """
-    Get historical USD to CAD exchange rates for a date range
+    Get historical USD to CAD exchange rates for a date range using FMP API
     
     Args:
         start_date (datetime or str): Start date
@@ -537,23 +547,27 @@ def get_historical_usd_to_cad_rates(start_date=None, end_date=None):
         elif isinstance(end_date, str):
             end_date = datetime.strptime(end_date, "%Y-%m-%d")
         
-        # Add a buffer day before and after to ensure we have data
-        start_date_buffer = start_date - timedelta(days=5)
-        end_date_buffer = end_date + timedelta(days=1)
+        # Calculate days between start and end dates
+        days = (end_date - start_date).days + 5  # Add buffer days
         
-        # Get exchange rate data using our session manager
-        data = get_ticker_history("CAD=X", start=start_date_buffer, end=end_date_buffer)
+        # Get historical exchange rate data from FMP API
+        from modules.fmp_api import fmp_api
+        exchange_data = fmp_api.get_historical_exchange_rates("USD", "CAD", days=days)
         
-        if not data.empty:
-            # Extract just the close prices as our exchange rates
-            rates = data['Close']
+        if not exchange_data.empty and 'rate' in exchange_data.columns:
+            # Extract just the exchange rates
+            rates = exchange_data['rate']
             
-            # Forward-fill any missing values (weekends, holidays)
+            # Filter to desired date range
+            rates = rates.loc[(rates.index >= start_date) & (rates.index <= end_date)]
+            
+            # Forward-fill any missing values
             rates = rates.ffill()
             
             return rates
         else:
             # Create a default series if data retrieval fails
+            logger.warning("Failed to get historical USD to CAD rates from FMP API, using default")
             date_range = pd.date_range(start=start_date, end=end_date)
             return pd.Series([1.33] * len(date_range), index=date_range)
     except Exception as e:

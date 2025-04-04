@@ -1,7 +1,7 @@
 # modules/mutual_fund_provider.py
 """
 Provider for retrieving and managing Canadian mutual fund price data.
-Uses PostgreSQL database for storage instead of JSON files.
+Now uses FMP API as the primary data source, with database fallback.
 """
 import pandas as pd
 import logging
@@ -11,6 +11,7 @@ from modules.mutual_fund_db import (
     get_mutual_fund_prices, 
     get_latest_mutual_fund_price
 )
+from modules.fmp_api import fmp_api
 
 # Configure logging
 logging.basicConfig(
@@ -22,34 +23,55 @@ logger = logging.getLogger(__name__)
 class MutualFundProvider:
     """
     Provider for retrieving and managing Canadian mutual fund price data.
-    Falls back to manual entry if no data source is available.
+    Uses FMP API as primary source, with fallback to manual entries.
     """
     
     def __init__(self):
         self.data_cache = {}  # Runtime cache to minimize database hits
     
+    def get_fund_data_fmp(self, fund_code):
+        """
+        Retrieve mutual fund data from Financial Modeling Prep API
+        
+        Args:
+            fund_code (str): Fund code/symbol
+            
+        Returns:
+            dict: Fund data or None if not available
+        """
+        try:
+            # Try to get historical price data for the fund
+            hist_data = fmp_api.get_historical_price(fund_code, period="1y")
+            
+            if not hist_data.empty:
+                # Create a dictionary of date -> price
+                result = {}
+                for date, row in hist_data.iterrows():
+                    result[date.strftime('%Y-%m-%d')] = float(row['Close'])
+                return result
+            else:
+                # Try to get just the current quote
+                quote = fmp_api.get_quote(fund_code)
+                
+                if quote and 'price' in quote:
+                    # Create a single entry with today's date
+                    return {datetime.now().strftime('%Y-%m-%d'): float(quote['price'])}
+                
+                return None
+        except Exception as e:
+            logger.error(f"Error retrieving FMP data for {fund_code}: {e}")
+            return None
+    
     def get_fund_data_morningstar(self, fund_code):
         """
         Attempt to retrieve mutual fund data from Morningstar
-        Note: This is a simplified example, in production might use a licensed API
+        Note: This is a placeholder fallback, in production might use a licensed API
         """
         try:
             # This is a placeholder - real implementation would use Morningstar API
             return None
         except Exception as e:
             logger.error(f"Error retrieving Morningstar data for {fund_code}: {e}")
-            return None
-    
-    def get_fund_data_tmx(self, fund_code):
-        """
-        Attempt to retrieve mutual fund data from TMX Money
-        Note: Web scraping in production would require proper permission
-        """
-        try:
-            # This is a placeholder - real implementation would require proper scraping
-            return None
-        except Exception as e:
-            logger.error(f"Error retrieving TMX data for {fund_code}: {e}")
             return None
     
     def add_manual_price(self, fund_code, date, price):
@@ -99,8 +121,12 @@ class MutualFundProvider:
         if start_date is None:
             start_date = end_date - timedelta(days=365)
         
-        # Try to get data from external source first
-        external_data = self.get_fund_data_morningstar(fund_code) or self.get_fund_data_tmx(fund_code)
+        # Try to get data from FMP API first
+        external_data = self.get_fund_data_fmp(fund_code)
+        
+        if not external_data:
+            # If FMP fails, try Morningstar
+            external_data = self.get_fund_data_morningstar(fund_code)
         
         if external_data:
             # If we got external data, add it to our database
@@ -142,5 +168,20 @@ class MutualFundProvider:
             most_recent_date = max(self.data_cache[fund_code].keys())
             return self.data_cache[fund_code][most_recent_date]
         
-        # Check database
+        # Try to get current price from FMP API
+        try:
+            quote = fmp_api.get_quote(fund_code)
+            if quote and 'price' in quote:
+                price = float(quote['price'])
+                
+                # Store in cache
+                if fund_code not in self.data_cache:
+                    self.data_cache[fund_code] = {}
+                self.data_cache[fund_code][datetime.now().strftime('%Y-%m-%d')] = price
+                
+                return price
+        except Exception as e:
+            logger.error(f"Error getting FMP price for {fund_code}: {e}")
+        
+        # Fall back to database
         return get_latest_mutual_fund_price(fund_code)
