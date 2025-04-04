@@ -108,7 +108,7 @@ def create_allocation_sliders(current_targets):
     """
     slider_components = []
     
-    # Add a slider for each asset type
+    # Add a slider for each asset type, sorted alphabetically for consistency
     for asset_type, percentage in sorted(current_targets.items()):
         # Format the label with proper capitalization
         label = asset_type.replace('_', ' ').title()
@@ -130,7 +130,8 @@ def create_allocation_sliders(current_targets):
                     )
                 ], width=8),
                 dbc.Col([
-                    html.Div(id={"type": "slider-output", "asset_type": asset_type})
+                    html.Div(id={"type": "slider-output", "asset_type": asset_type}, 
+                            children=f"{percentage:.1f}%")  # Initialize with current value
                 ], width=1)
             ], className="mb-2")
         )
@@ -222,6 +223,47 @@ def create_target_allocation_chart(target_allocation):
             template="plotly_white"
         )
         return fig
+    
+    # Prepare data for pie chart
+    labels = []
+    values = []
+    
+    # Process each asset type and its value
+    for asset_type, percentage in target_allocation.items():
+        # Format asset type label for display
+        display_label = asset_type.replace('_', ' ').title()
+        
+        # Add to chart data
+        labels.append(display_label)
+        values.append(percentage)
+    
+    # Create figure
+    fig = px.pie(
+        names=labels,
+        values=values,
+        title="Target Allocation",
+        hole=0.4,
+        template="plotly_white"
+    )
+    
+    # Update layout
+    fig.update_layout(
+        margin=dict(l=20, r=20, t=40, b=20),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.2,
+            xanchor="center",
+            x=0.5
+        )
+    )
+    
+    # Update hover template to show percentages
+    fig.update_traces(
+        hovertemplate="<b>%{label}</b><br>Target: %{value:.1f}%<extra></extra>"
+    )
+    
+    return fig
     
     # Prepare data for pie chart
     labels = [asset_type.replace('_', ' ').title() for asset_type in target_allocation.keys()]

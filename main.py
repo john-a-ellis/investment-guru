@@ -1277,20 +1277,27 @@ def initialize_target_sliders(active_tab):
 @app.callback(
     [Output("target-allocation-chart", "figure"),
      Output("slider-total-warning", "children")],
-    [Input({"type": "target-slider", "asset_type": ALL}, "value")]
+    [Input({"type": "target-slider", "asset_type": ALL}, "value"),
+     Input({"type": "target-slider", "asset_type": ALL}, "id")]
 )
-def update_target_chart(slider_values):
+def update_target_chart(slider_values, slider_ids):
     """
     Update the target allocation chart based on slider values
-    """
-    # Get current target allocation to match sliders with asset types
-    target_allocation = load_target_allocation()
-    asset_types = list(target_allocation.keys())
     
-    # Create new target allocation based on slider values
+    Args:
+        slider_values (list): List of slider values
+        slider_ids (list): List of slider IDs containing asset types
+    
+    Returns:
+        tuple: (figure, warning)
+    """
+    # Create new target allocation using slider values and their corresponding asset types
     new_target = {}
-    for i, asset_type in enumerate(asset_types):
+    
+    # Map each slider value to its corresponding asset type from the slider ID
+    for i, slider_id in enumerate(slider_ids):
         if i < len(slider_values):
+            asset_type = slider_id["asset_type"]
             new_target[asset_type] = slider_values[i]
     
     # Calculate total allocation
@@ -1307,17 +1314,6 @@ def update_target_chart(slider_values):
     
     # Create and return the chart
     return create_target_allocation_chart(new_target), warning
-
-# Callback to update slider output text
-@app.callback(
-    Output({"type": "slider-output", "asset_type": MATCH}, "children"),
-    Input({"type": "target-slider", "asset_type": MATCH}, "value")
-)
-def update_slider_output(value):
-    """
-    Update the output text for a slider
-    """
-    return f"{value}%"
 
 # Callback to save target allocation
 @app.callback(
