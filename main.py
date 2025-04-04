@@ -58,7 +58,7 @@ from modules.portfolio_rebalancer import (
     analyze_current_vs_target, load_target_allocation, save_target_allocation, 
     create_rebalance_plan
 )
-
+from components.ml_prediction_component import create_ml_prediction_component, register_ml_prediction_callbacks
 
 myTitle = 'AIRS - AI Investment Recommendation System'
 
@@ -187,6 +187,13 @@ app.layout = dbc.Container([
     dbc.Row([
         dbc.Col([
             create_portfolio_management_component()
+        ], width=12)
+    ], className="mb-4"),
+
+    # ML Prediction Component
+    dbc.Row([
+        dbc.Col([
+            create_ml_prediction_component()
         ], width=12)
     ], className="mb-4"),
 
@@ -1543,6 +1550,8 @@ def save_target_settings(n_clicks, slider_ids, slider_values):
             "Error saving target allocation.",
             color="danger"
         )
+
+register_ml_prediction_callbacks(app)
     
 if __name__ == "__main__":
     app.run(debug=True)
