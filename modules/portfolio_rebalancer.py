@@ -106,9 +106,12 @@ def load_target_allocation():
         # Convert RealDictRow to regular dict
         target_dict = dict(result)
         
-        # Parse the JSON stored in the allocation column
-        import json
-        allocation = json.loads(target_dict.get('allocation', '{}'))
+        # Check if allocation is already a dict or needs to be parsed from JSON
+        allocation = target_dict.get('allocation', {})
+        if isinstance(allocation, str):
+            # Parse the JSON stored in the allocation column
+            import json
+            allocation = json.loads(allocation)
         
         return allocation
     
@@ -121,6 +124,7 @@ def load_target_allocation():
         "mutual_fund": 5,
         "crypto": 0
     }
+
 
 def save_target_allocation(allocation):
     """

@@ -29,7 +29,7 @@ from modules.mutual_fund_provider import MutualFundProvider
 from modules.portfolio_utils import (
     load_portfolio, update_portfolio_data, add_investment, 
     remove_investment, load_tracked_assets, save_tracked_assets, 
-    save_user_profile, record_transaction
+    save_user_profile, record_transaction, load_user_profile
 )
 
 from components.risk_metrics_component import create_risk_visualization_component
@@ -158,10 +158,12 @@ app.layout = dbc.Container([
             create_portfolio_analysis_component()
         ], width=12)
     ], className="mb-4"),
+    
     dbc.Row([
         dbc.Col([
             create_risk_visualization_component()
         ], width=12)
+
     ], className="mb-4"),
     dbc.Row([
         dbc.Col([
