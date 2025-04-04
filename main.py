@@ -158,7 +158,7 @@ app.layout = dbc.Container([
             create_portfolio_analysis_component()
         ], width=12)
     ], className="mb-4"),
-    
+
     dbc.Row([
         dbc.Col([
             create_risk_visualization_component()
@@ -1235,7 +1235,7 @@ def update_rebalance_recommendations(n_intervals, active_tab):
     Update the rebalance recommendations
     """
     # Only update when on the Rebalancing Plan tab
-    if active_tab != "tab-1":  # tab-1 is the index of the Rebalancing Plan tab
+    if active_tab == "rebalancing-plan-tab":
         # Load portfolio data
         portfolio = load_portfolio()
         
@@ -1253,6 +1253,7 @@ def update_rebalance_recommendations(n_intervals, active_tab):
     return html.Div()
 
 # Callback to initialize target allocation sliders
+# Callback to initialize target allocation sliders
 @app.callback(
     Output("target-allocation-sliders", "children"),
     [Input("rebalancing-tabs", "active_tab")]
@@ -1262,7 +1263,7 @@ def initialize_target_sliders(active_tab):
     Initialize the target allocation sliders with current values
     """
     # Only update when on the Target Settings tab
-    if active_tab == "tab-2":  # tab-2 is the index of the Target Settings tab
+    if active_tab == "target-settings-tab":  # Using the new tab ID instead of "tab-2"
         # Load current target allocation
         target_allocation = load_target_allocation()
         

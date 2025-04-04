@@ -345,7 +345,7 @@ def create_risk_metrics_component(portfolio, period="1y"):
     
     gauge_fig.update_layout(
         height=200,
-        margin=dict(l=20, r=20, t=30, b=20)
+        margin=dict(l=20, r=20, t=50, b=10)
     )
     
     # Create drawdown chart

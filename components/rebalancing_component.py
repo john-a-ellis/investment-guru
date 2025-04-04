@@ -44,7 +44,7 @@ def create_rebalancing_component():
                             ], width=12)
                         ])
                     ])
-                ], label="Allocation Analysis"),
+                ], label="Allocation Analysis", tab_id="allocation-analysis-tab"),
                 
                 dbc.Tab([
                     # Rebalancing Recommendations
@@ -60,7 +60,7 @@ def create_rebalancing_component():
                             ], width=12)
                         ])
                     ])
-                ], label="Rebalancing Plan"),
+                ], label="Rebalancing Plan", tab_id="rebalancing-plan-tab"),
                 
                 dbc.Tab([
                     # Target Allocation Settings
@@ -85,7 +85,7 @@ def create_rebalancing_component():
                             ], width=6)
                         ])
                     ])
-                ], label="Target Settings")
+                ], label="Target Settings", tab_id="target-settings-tab")
             ], id="rebalancing-tabs"),
             
             dcc.Interval(
