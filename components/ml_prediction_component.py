@@ -493,7 +493,7 @@ def create_trend_analysis_display(analysis_data):
                         html.Td(f"{pattern['strength']:.1f}%"),
                         html.Td(f"{pattern['date']} ({pattern['days_ago']} days ago)")
                     ]) for pattern in patterns[:3]  # Show top 3 patterns
-                ] if patterns else [html.Tr([html.Td("No patterns detected", colSpan=4)])]
+                ] if patterns else [html.Tr([html.Td("No patterns detected", colSpan=4)])])
             ], size="sm", bordered=True, striped=True)
         ])
     ], className="mb-3")
@@ -909,8 +909,9 @@ def register_ml_prediction_callbacks(app):
     # Handle buy recommendation clicks
     @app.callback(
         Output("ml-portfolio-insights", "children", allow_duplicate=True),
-        [Input({"type": "buy-rec-button", "symbol": dash.ALL}, "n_clicks")],
-        [State({"type": "buy-rec-button", "symbol": dash.ALL}, "id")]
+        Input({"type": "buy-rec-button", "symbol": dash.ALL}, "n_clicks"),
+        State({"type": "buy-rec-button", "symbol": dash.ALL}, "id"),
+        prevent_initial_call='initial_duplicate'
     )
     def handle_buy_recommendation(n_clicks_list, button_ids):
         # Check if any button was clicked
@@ -954,8 +955,9 @@ def register_ml_prediction_callbacks(app):
     # Handle sell recommendation clicks
     @app.callback(
         Output("ml-portfolio-insights", "children", allow_duplicate=True),
-        [Input({"type": "sell-rec-button", "symbol": dash.ALL}, "n_clicks")],
-        [State({"type": "sell-rec-button", "symbol": dash.ALL}, "id")]
+        Input({"type": "sell-rec-button", "symbol": dash.ALL}, "n_clicks"),
+        State({"type": "sell-rec-button", "symbol": dash.ALL}, "id"),
+        prevent_initial_call='initial_duplicate'
     )
     def handle_sell_recommendation(n_clicks_list, button_ids):
         # Check if any button was clicked

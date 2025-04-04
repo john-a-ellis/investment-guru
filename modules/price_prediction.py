@@ -806,6 +806,8 @@ def train_price_prediction_models(symbol, lookback_period="1y"):
     try:
         # Get historical data
         from modules.fmp_api import fmp_api
+        import logging
+        logger = logging.getLogger(__name__)
         
         # Convert lookback period to days for FMP API
         if lookback_period == "1y":
@@ -863,27 +865,21 @@ def train_price_prediction_models(symbol, lookback_period="1y"):
             # Use inverse MAPE as weights (lower error = higher weight)
             weights = [1 / (results[name]['metrics'].get('mape', 100) + 1) for name in results]
             
-            ensemble = EnsembleModel(prediction_days=days)
-        if ensemble.load_model():
-            # Make predictions using ensemble
-            predictions = ensemble.predict(historical_data, days=days)
+            ensemble = EnsembleModel(prediction_days=30, models=trained_models, weights=weights)
             
-            if not predictions.empty:
-                logger.info(f"Made ensemble predictions for {symbol}")
-                
-                # Format results
-                result = {
-                    'symbol': symbol,
-                    'model': 'ensemble',
-                    'dates': predictions.index.strftime('%Y-%m-%d').tolist(),
-                    'values': predictions['Close'].tolist(),
-                    'confidence': {
-                        'upper': None,  # Ensemble doesn't provide confidence intervals
-                        'lower': None
-                    }
-                }
-                
-                return result
+            # The ensemble model doesn't need separate training as it uses already trained models
+            ensemble.is_trained = True
+            
+            # Evaluate ensemble
+            ensemble_metrics = ensemble.evaluate(test_data)
+            
+            results['ensemble'] = {
+                'model': ensemble,
+                'metrics': ensemble_metrics.get('ensemble', {})
+            }
+            
+            # Save ensemble model configuration
+            ensemble.save_model()
         
         # If ensemble model not available, try individual models in order of typical accuracy
         model_types = ['prophet', 'lstm', 'arima']
@@ -953,30 +949,7 @@ def train_price_prediction_models(symbol, lookback_period="1y"):
         logger.error(f"Error getting price predictions for {symbol}: {e}")
         import traceback
         traceback.print_exc()
-        return Nonedays=30, models=trained_models, weights=weights)
-            
-            # The ensemble model doesn't need separate training as it uses already trained models
-            ensemble.is_trained = True
-            
-            # Evaluate ensemble
-            ensemble_metrics = ensemble.evaluate(test_data)
-            
-            results['ensemble'] = {
-                'model': ensemble,
-                'metrics': ensemble_metrics.get('ensemble', {})
-            }
-            
-            # Save ensemble model configuration
-            ensemble.save_model()
-        
-        return results
-    
-    except Exception as e:
-        logger.error(f"Error training price prediction models for {symbol}: {e}")
-        import traceback
-        traceback.print_exc()
         return None
-
 
 def get_price_predictions(symbol, days=30):
     """
@@ -999,4 +972,91 @@ def get_price_predictions(symbol, days=30):
             return None
         
         # Try to load ensemble model first
-        ensemble = EnsembleModel(prediction_
+        ensemble = EnsembleModel(prediction_days=days)
+        
+        if ensemble.load_model():
+            # Make predictions using ensemble
+            predictions = ensemble.predict(historical_data, days=days)
+            
+            if not predictions.empty:
+                # Format results
+                result = {
+                    'symbol': symbol,
+                    'model': 'ensemble',
+                    'dates': predictions.index.strftime('%Y-%m-%d').tolist(),
+                    'values': predictions['Close'].tolist(),
+                    'confidence': {
+                        'upper': predictions.get('Upper', None),
+                        'lower': predictions.get('Lower', None)
+                    }
+                }
+                
+                return result
+        
+        # If ensemble model not available, try individual models in order of typical accuracy
+        model_types = ['prophet', 'lstm', 'arima']
+        
+        for model_type in model_types:
+            if model_type == 'prophet':
+                model = ProphetModel(prediction_days=days)
+            elif model_type == 'lstm':
+                model = LSTMModel(prediction_days=days)
+            else:  # arima
+                model = ARIMAModel(prediction_days=days)
+            
+            if model.load_model():
+                # Make predictions
+                predictions = model.predict(historical_data, days=days)
+                
+                if not predictions.empty:
+                    # Format results
+                    result = {
+                        'symbol': symbol,
+                        'model': model_type,
+                        'dates': predictions.index.strftime('%Y-%m-%d').tolist(),
+                        'values': predictions['Close'].tolist(),
+                        'confidence': {
+                            'upper': predictions.get('Upper', None),
+                            'lower': predictions.get('Lower', None)
+                        }
+                    }
+                    
+                    # Convert confidence intervals to lists if they exist
+                    if result['confidence']['upper'] is not None:
+                        result['confidence']['upper'] = predictions['Upper'].tolist()
+                    if result['confidence']['lower'] is not None:
+                        result['confidence']['lower'] = predictions['Lower'].tolist()
+                    
+                    return result
+        
+        # If no models are available, train a new one (Prophet is fastest to train)
+        logger.info(f"No trained models available for {symbol}, training new Prophet model")
+        model = ProphetModel(prediction_days=days)
+        
+        if model.train(historical_data):
+            model.save_model()
+            predictions = model.predict(historical_data, days=days)
+            
+            if not predictions.empty:
+                # Format results
+                result = {
+                    'symbol': symbol,
+                    'model': 'prophet',
+                    'dates': predictions.index.strftime('%Y-%m-%d').tolist(),
+                    'values': predictions['Close'].tolist(),
+                    'confidence': {
+                        'upper': predictions['Upper'].tolist() if 'Upper' in predictions.columns else None,
+                        'lower': predictions['Lower'].tolist() if 'Lower' in predictions.columns else None
+                    }
+                }
+                
+                return result
+        
+        logger.error(f"Could not make predictions for {symbol}")
+        return None
+    
+    except Exception as e:
+        logger.error(f"Error getting price predictions for {symbol}: {e}")
+        import traceback
+        traceback.print_exc()
+        return None

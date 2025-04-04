@@ -1552,6 +1552,6 @@ def save_target_settings(n_clicks, slider_ids, slider_values):
         )
 
 register_ml_prediction_callbacks(app)
-    
+
 if __name__ == "__main__":
     app.run(debug=True)
