@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import logging
 import pickle
 import os
+import traceback
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
@@ -121,25 +122,48 @@ class PricePredictionModel:
     
     def load_model(self):
         """
-        Load model from disk.
+        Load model from disk with improved error handling.
         
         Returns:
             bool: Success status
         """
         try:
-            model_path = os.path.join(self.model_dir, f"{self.model_name}.pkl")
-            if not os.path.exists(model_path):
-                logger.warning(f"Model file {model_path} not found")
-                return False
+            model_path = os.path.join(self.model_dir, f"{self.model_name}_{self.symbol}.pkl")
+            standard_path = os.path.join(self.model_dir, f"{self.model_name}.pkl")
             
-            with open(model_path, 'rb') as f:
-                self.model = pickle.load(f)
-            self.is_trained = True
-            logger.info(f"Model {self.model_name} loaded from {model_path}")
-            return True
-        except Exception as e:
-            logger.error(f"Error loading model {self.model_name}: {e}")
+            print(f"Attempting to load model from: {os.path.abspath(model_path)}")
+            
+            # First try the symbol-specific path
+            if os.path.exists(model_path):
+                with open(model_path, 'rb') as f:
+                    self.model = pickle.load(f)
+                self.is_trained = True
+                print(f"Successfully loaded model from {os.path.abspath(model_path)}")
+                return True
+                
+            # Try the standard path as fallback
+            elif os.path.exists(standard_path):
+                print(f"Trying fallback path: {os.path.abspath(standard_path)}")
+                with open(standard_path, 'rb') as f:
+                    self.model = pickle.load(f)
+                self.is_trained = True
+                print(f"Successfully loaded model from {os.path.abspath(standard_path)}")
+                return True
+            
+            # List available model files
+            model_files = [f for f in os.listdir(self.model_dir) if f.endswith('.pkl')]
+            print(f"Available model files: {model_files}")
+            
+            # Model file not found
+            print(f"Model file not found for {self.symbol}")
             return False
+            
+        except Exception as e:
+            print(f"Error loading model for {self.symbol}: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
 
 
 class ARIMAModel(PricePredictionModel):
@@ -268,6 +292,7 @@ class ProphetModel(PricePredictionModel):
     """
     def __init__(self, prediction_days=30):
         super().__init__(model_name="prophet", prediction_days=prediction_days)
+        self.symbol = symbol
     
     def train(self, historical_data):
         """
@@ -792,6 +817,75 @@ class EnsembleModel(PricePredictionModel):
         return model_metrics
 
 
+def calculate_prophet_metrics(model, test_data):
+    """
+    Calculate evaluation metrics for a Prophet model
+    
+    Args:
+        model: Trained Prophet model
+        test_data (DataFrame): Test data with actual prices
+        
+    Returns:
+        dict: Evaluation metrics
+    """
+    try:
+        from sklearn.metrics import mean_absolute_error, mean_squared_error
+        import numpy as np
+        
+        # Create dataframe for model prediction on test data
+        prophet_data = pd.DataFrame({
+            'ds': test_data.index
+        })
+        
+        # Make predictions
+        predictions = model.predict(prophet_data)
+        
+        # Get actual values
+        actual = test_data['Close'].values
+        
+        # Get predicted values (align indices)
+        predicted = []
+        for date in test_data.index:
+            pred_row = predictions[predictions['ds'] == pd.Timestamp(date)]
+            if not pred_row.empty:
+                predicted.append(pred_row['yhat'].iloc[0])
+            else:
+                # If no prediction for this date, use the last known prediction
+                predicted.append(predicted[-1] if predicted else actual[0])
+        
+        # Calculate metrics
+        mae = mean_absolute_error(actual, predicted)
+        mse = mean_squared_error(actual, predicted)
+        rmse = np.sqrt(mse)
+        
+        # Calculate MAPE (Mean Absolute Percentage Error)
+        # Handle division by zero by excluding zero values
+        non_zero_indices = actual != 0
+        if np.any(non_zero_indices):
+            mape = np.mean(np.abs((actual[non_zero_indices] - np.array(predicted)[non_zero_indices]) / actual[non_zero_indices])) * 100
+        else:
+            mape = 0.0
+        
+        return {
+            'mae': float(mae),
+            'mse': float(mse),
+            'rmse': float(rmse),
+            'mape': float(mape)
+        }
+    
+    except Exception as e:
+        print(f"Error calculating Prophet metrics: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            'mae': 0.0,
+            'mse': 0.0,
+            'rmse': 0.0,
+            'mape': 0.0,
+            'error': str(e)
+        }
+
+# Make sure this is AFTER the function definition, not before
 def train_price_prediction_models(symbol, lookback_period="1y"):
     """
     Train price prediction models for a specific symbol.
@@ -812,6 +906,7 @@ def train_price_prediction_models(symbol, lookback_period="1y"):
         from modules.fmp_api import fmp_api
         import logging
         logger = logging.getLogger(__name__)
+
         
         # Get historical price data using the period directly
         # The FMP API wrapper should handle period conversion
@@ -850,7 +945,6 @@ def train_price_prediction_models(symbol, lookback_period="1y"):
         logger.info(f"Training data: {len(train_data)} days, Testing data: {len(test_data)} days")
         
         # Make sure 'models' directory exists
-        import os
         os.makedirs("models", exist_ok=True)
         
         # For simplified version, just return a basic Prophet model prediction
@@ -902,20 +996,10 @@ def train_price_prediction_models(symbol, lookback_period="1y"):
             }
             
             # Also return a structured model result for compatibility
-            model_result = {
-                'prophet': {
-                    'model': model,
-                    'metrics': {
-                        'mae': 0.0,  # Placeholder metrics
-                        'mse': 0.0,
-                        'rmse': 0.0,
-                        'mape': 0.0
-                    }
-                }
-            }
+            model_result = calculate_prophet_metrics(model, test_data)
+        
             
             # Save the model
-            import pickle
             os.makedirs("models", exist_ok=True)
             with open(f"models/prophet_{symbol}.pkl", 'wb') as f:
                 pickle.dump(model, f)
@@ -993,11 +1077,11 @@ def get_price_predictions(symbol, days=30):
         
         for model_type in model_types:
             if model_type == 'prophet':
-                model = ProphetModel(prediction_days=days)
+                model = ProphetModel(prediction_days=days, symbol=symbol)
             elif model_type == 'lstm':
-                model = LSTMModel(prediction_days=days)
+                model = LSTMModel(prediction_days=days, symbol=symbol)
             else:  # arima
-                model = ARIMAModel(prediction_days=days)
+                model = ARIMAModel(prediction_days=days, symbol=symbol)
             
             if model.load_model():
                 # Make predictions
@@ -1255,3 +1339,146 @@ def get_price_predictions(symbol, days=30):
         except:
             logger.error(f"Even fallback prediction failed for {symbol}")
             return None
+        
+def train_price_prediction_models(symbol, lookback_period="1y"):
+    """
+    Train price prediction models for a specific symbol.
+    
+    Args:
+        symbol (str): Stock symbol to train models for
+        lookback_period (str): Historical period to use for training (e.g., "1y", "2y")
+    
+    Returns:
+        dict: Trained models and performance metrics
+    """
+    try:
+        # Check if Prophet is installed
+        if not check_prophet_installed():
+            raise ImportError("Prophet package is required for model training")
+            
+        # Get historical data
+        from modules.fmp_api import fmp_api
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Get historical price data
+        historical_data = fmp_api.get_historical_price(symbol, period=lookback_period)
+        
+        if historical_data.empty:
+            logger.error(f"No historical data available for {symbol}")
+            return None
+        
+        # Make sure we have the necessary columns
+        required_columns = ['Close', 'Open', 'High', 'Low']
+        for col in required_columns:
+            if col not in historical_data.columns:
+                # Try to map column names from lowercase if necessary
+                lowercase_map = {'close': 'Close', 'open': 'Open', 'high': 'High', 'low': 'Low'}
+                for lcol, ucol in lowercase_map.items():
+                    if lcol in historical_data.columns:
+                        historical_data[ucol] = historical_data[lcol]
+        
+        # Check if we have the required columns after mapping
+        missing_cols = [col for col in required_columns if col not in historical_data.columns]
+        if missing_cols:
+            logger.error(f"Missing required columns: {missing_cols}")
+            return None
+        
+        # Ensure we have enough data for training (at least 60 days)
+        if len(historical_data) < 60:
+            logger.error(f"Not enough historical data for {symbol} (got {len(historical_data)} rows, need at least 60)")
+            return None
+            
+        # Split data into training and testing sets (80/20 split)
+        split_idx = int(len(historical_data) * 0.8)
+        train_data = historical_data.iloc[:split_idx]
+        test_data = historical_data.iloc[split_idx:]
+        
+        logger.info(f"Training data: {len(train_data)} days, Testing data: {len(test_data)} days")
+        
+        # Make sure 'models' directory exists
+        import os
+        os.makedirs("models", exist_ok=True)
+        
+        # Train Prophet model
+        try:
+            from prophet import Prophet
+            
+            # Prophet requires 'ds' (date) and 'y' (target) columns
+            prophet_data = pd.DataFrame({
+                'ds': train_data.index,
+                'y': train_data['Close']
+            })
+            
+            # Train Prophet model with basic settings
+            model = Prophet(
+                daily_seasonality=True,
+                yearly_seasonality=True,
+                weekly_seasonality=True,
+                changepoint_prior_scale=0.05
+            )
+            model.fit(prophet_data)
+            
+            # Create future dataframe for 30 days
+            future = model.make_future_dataframe(periods=30)
+            
+            # Make predictions
+            forecast = model.predict(future)
+            
+            # Extract predictions for future dates
+            predictions = forecast[forecast['ds'] > historical_data.index[-1]][['ds', 'yhat', 'yhat_lower', 'yhat_upper']]
+            
+            # Convert to DataFrame with date index
+            result = pd.DataFrame({
+                'Close': predictions['yhat'],
+                'Lower': predictions['yhat_lower'],
+                'Upper': predictions['yhat_upper']
+            }, index=pd.DatetimeIndex(predictions['ds']))
+            
+            # Calculate actual metrics using the test data
+            metrics = calculate_prophet_metrics(model, test_data)
+            
+            # Create a structured model result
+            model_result = {
+                'prophet': {
+                    'model': model,
+                    'metrics': metrics
+                }
+            }
+            
+            # Save the model
+            import pickle
+            os.makedirs("models", exist_ok=True)
+            with open(f"models/prophet_{symbol}.pkl", 'wb') as f:
+                pickle.dump(model, f)
+            
+            logger.info(f"Successfully trained and saved Prophet model for {symbol}")
+            logger.info(f"Metrics for {symbol}: {metrics}")
+            
+            return model_result
+            
+        except Exception as prophet_error:
+            logger.error(f"Error training Prophet model: {prophet_error}")
+            import traceback
+            traceback.print_exc()
+            
+            # If Prophet fails, return a simplified non-dictionary result
+            # that can be handled by the ModelIntegration class
+            return {
+                'prophet': {
+                    'model': None,
+                    'metrics': {
+                        'mae': 0.0,
+                        'mse': 0.0,
+                        'rmse': 0.0,
+                        'mape': 0.0,
+                        'error': str(prophet_error)
+                    }
+                }
+            }
+    
+    except Exception as e:
+        logger.error(f"Error in train_price_prediction_models for {symbol}: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
