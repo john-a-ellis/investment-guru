@@ -37,8 +37,10 @@ class ModelIntegration:
         self.trend_cache = {}
         self.model_training_status = {}
         
-        # Create a directory for storing model-related data
+        # Create directories for storing model-related data
+        self.model_dir = "models"
         self.data_dir = "data/model_data"
+        os.makedirs(self.model_dir, exist_ok=True)
         os.makedirs(self.data_dir, exist_ok=True)
         
         # Initialize background thread for model training

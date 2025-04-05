@@ -263,8 +263,6 @@ def create_target_allocation_chart(target_allocation):
         hovertemplate="<b>%{label}</b><br>Target: %{value:.1f}%<extra></extra>"
     )
     
-    return fig
-    
     # Prepare data for pie chart
     labels = [asset_type.replace('_', ' ').title() for asset_type in target_allocation.keys()]
     values = list(target_allocation.values())

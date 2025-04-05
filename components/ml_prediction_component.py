@@ -419,7 +419,7 @@ def create_trend_analysis_display(analysis_data):
                                 }
                             )),
                             config={'displayModeBar': False},
-                            style={'height': '200px'}
+                            style={'height': '50px'}
                         )
                     ])
                 ], width=6)
