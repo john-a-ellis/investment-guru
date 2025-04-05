@@ -129,6 +129,9 @@ def create_prediction_chart(prediction_data, historical_data=None):
     Returns:
         Figure: Plotly figure with prediction chart
     """
+    # Debug output to see what's in prediction_data
+    print(f"Prediction data keys: {prediction_data.keys() if prediction_data else 'None'}")
+    
     if not prediction_data or 'values' not in prediction_data:
         # Return empty figure if no prediction data
         fig = go.Figure()
@@ -157,6 +160,11 @@ def create_prediction_chart(prediction_data, historical_data=None):
     # Add predicted values
     predicted_dates = pd.to_datetime(prediction_data['dates'])
     predicted_values = prediction_data['values']
+    
+    # Debug to see the prediction horizon
+    print(f"Prediction horizon: {len(predicted_dates)} days")
+    print(f"First prediction date: {predicted_dates[0] if len(predicted_dates) > 0 else 'None'}")
+    print(f"Last prediction date: {predicted_dates[-1] if len(predicted_dates) > 0 else 'None'}")
     
     fig.add_trace(go.Scatter(
         x=predicted_dates,
@@ -200,8 +208,9 @@ def create_prediction_chart(prediction_data, historical_data=None):
         future_price = predicted_values[-1]
         expected_return = ((future_price / current_price) - 1) * 100
         
-        # Add current price and expected return to title
-        title_text = f"Price Prediction - <b>{prediction_data['symbol']}</b>"
+        # Add prediction horizon to title
+        prediction_horizon = len(predicted_dates)
+        title_text = f"Price Prediction ({prediction_horizon}-Day Horizon) - <b>{prediction_data['symbol']}</b>"
         title_text += f" (Current: ${current_price:.2f}, Expected: ${future_price:.2f}, Return: {expected_return:.2f}%)"
         
         # Show expected return as positive or negative
@@ -210,7 +219,8 @@ def create_prediction_chart(prediction_data, historical_data=None):
         else:
             title_color = "red"
     else:
-        title_text = f"Price Prediction - {prediction_data['symbol']}"
+        prediction_horizon = len(predicted_dates)
+        title_text = f"Price Prediction ({prediction_horizon}-Day Horizon) - {prediction_data['symbol']}"
         title_color = "black"
     
     # Update layout
@@ -233,6 +243,7 @@ def create_prediction_chart(prediction_data, historical_data=None):
     )
     
     return fig
+
 
 def create_prediction_details(prediction_data, historical_data=None):
     """
@@ -270,6 +281,9 @@ def create_prediction_details(prediction_data, historical_data=None):
         expected_return_str = "N/A"
         expected_return_color = "secondary"
     
+    # Get prediction horizon
+    prediction_horizon = len(prediction_data.get('dates', []))
+    
     return html.Div([
         dbc.Card([
             dbc.CardBody([
@@ -286,7 +300,7 @@ def create_prediction_details(prediction_data, historical_data=None):
                         ]),
                         html.P([
                             html.Strong("Prediction Horizon: "), 
-                            f"{len(prediction_data.get('dates', []))} days"
+                            f"{prediction_horizon} days"
                         ])
                     ], width=6),
                     dbc.Col([
@@ -319,6 +333,7 @@ def create_prediction_details(prediction_data, historical_data=None):
             ])
         ])
     ])
+
 
 def create_trend_analysis_display(analysis_data):
     """
@@ -766,13 +781,13 @@ def register_ml_prediction_callbacks(app):
     
     # Generate price prediction when analyze button is clicked
     @app.callback(
-        [Output("ml-prediction-chart", "figure"),
-        Output("ml-prediction-details", "children"),
-        Output("ml-prediction-data", "data")],
-        [Input("ml-analyze-button", "n_clicks")],
-        [State("ml-asset-selector", "value"),
-        State("ml-horizon-selector", "value")]
-    )
+    [Output("ml-prediction-chart", "figure"),
+     Output("ml-prediction-details", "children"),
+     Output("ml-prediction-data", "data")],
+    [Input("ml-analyze-button", "n_clicks")],
+    [State("ml-asset-selector", "value"),
+     State("ml-horizon-selector", "value")]
+)
     def update_prediction(n_clicks, symbol, days):
         # Check if button click is triggered
         if n_clicks is None or not symbol:
@@ -784,8 +799,8 @@ def register_ml_prediction_callbacks(app):
             if not symbol or not isinstance(symbol, str):
                 raise ValueError(f"Invalid symbol: {symbol}")
                 
-            # Log the symbol we're processing for debugging
-            print(f"Processing prediction for symbol: {symbol}")
+            # Log the symbol and days we're processing for debugging
+            print(f"Processing prediction for symbol: {symbol}, days: {days}")
             
             # Import FMP API
             from modules.fmp_api import fmp_api
@@ -793,7 +808,7 @@ def register_ml_prediction_callbacks(app):
             # Get historical data for context
             historical_data = fmp_api.get_historical_price(symbol, period="1y")
             
-            # Get price predictions - explicitly pass the symbol
+            # Get price predictions - explicitly pass the symbol and days
             from modules.price_prediction import get_price_predictions
             prediction_data = get_price_predictions(symbol=symbol, days=days)
             
