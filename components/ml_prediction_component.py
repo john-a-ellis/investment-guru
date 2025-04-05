@@ -846,7 +846,7 @@ def register_ml_prediction_callbacks(app):
     # Generate portfolio insights
     @app.callback(
         Output("ml-portfolio-insights", "children"),
-        [Input("ml-portfolio-insights-button", "n_clicks")]
+        Input("ml-portfolio-insights-button", "n_clicks")
     )
     def update_portfolio_insights(n_clicks):
         # Check if button click is triggered

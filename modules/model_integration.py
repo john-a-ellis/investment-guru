@@ -145,30 +145,51 @@ class ModelIntegration:
             try:
                 logger.info(f"Starting model training for {symbol} with {lookback_period} data")
                 
-                # Train models
-                results = train_price_prediction_models(symbol, lookback_period)
+                # Import here to avoid circular imports
+                from modules.price_prediction import train_price_prediction_models
+                
+                # Ensure model directory exists
+                os.makedirs(self.model_dir, exist_ok=True)
+                
+                # Train models - pass period in the correct format for the API
+                if lookback_period == "1y":
+                    api_period = "365days"
+                elif lookback_period == "2y":
+                    api_period = "730days"
+                elif lookback_period == "5y":
+                    api_period = "1825days"
+                else:
+                    api_period = "365days"  # Default
+                    
+                results = train_price_prediction_models(symbol, api_period)
                 
                 if results:
                     # Log training results
-                    for model_name, model_data in results.items():
-                        metrics = model_data.get('metrics', {})
-                        logger.info(f"Trained {model_name} model for {symbol} with metrics: {metrics}")
-                    
-                    # Update status
-                    self.model_training_status[symbol] = "completed"
-                    self.model_training_status[f"{symbol}_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    
-                    # Save metrics to file
-                    metrics_file = os.path.join(self.data_dir, f"{symbol}_metrics.json")
-                    
-                    metrics_data = {}
-                    for model_name, model_data in results.items():
-                        metrics_data[model_name] = model_data.get('metrics', {})
-                    
-                    with open(metrics_file, 'w') as f:
-                        json.dump(metrics_data, f, indent=4)
-                    
-                    logger.info(f"Saved metrics for {symbol} models to {metrics_file}")
+                    if isinstance(results, dict):
+                        for model_name, model_data in results.items():
+                            metrics = model_data.get('metrics', {})
+                            logger.info(f"Trained {model_name} model for {symbol} with metrics: {metrics}")
+                        
+                        # Update status
+                        self.model_training_status[symbol] = "completed"
+                        self.model_training_status[f"{symbol}_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        
+                        # Save metrics to file
+                        metrics_file = os.path.join(self.data_dir, f"{symbol}_metrics.json")
+                        
+                        metrics_data = {}
+                        for model_name, model_data in results.items():
+                            metrics_data[model_name] = model_data.get('metrics', {})
+                        
+                        with open(metrics_file, 'w') as f:
+                            json.dump(metrics_data, f, indent=4)
+                        
+                        logger.info(f"Saved metrics for {symbol} models to {metrics_file}")
+                    else:
+                        # Handle case where results is not a dictionary (e.g., from simple predict function)
+                        self.model_training_status[symbol] = "completed"
+                        self.model_training_status[f"{symbol}_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        logger.info(f"Model training completed for {symbol} with non-dictionary result")
                 else:
                     # Update status
                     self.model_training_status[symbol] = "failed"
@@ -189,7 +210,7 @@ class ModelIntegration:
             _do_training()
             status = self.model_training_status.get(symbol, "unknown")
             return f"Completed training for {symbol} with status: {status}"
-    
+        
     def get_portfolio_recommendations(self, use_ml=True):
         """
         Generate portfolio recommendations based on ML models and trend analysis.
