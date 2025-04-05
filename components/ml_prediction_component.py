@@ -765,57 +765,68 @@ def register_ml_prediction_callbacks(app):
         return options, options
     
     # Generate price prediction when analyze button is clicked
-    @app.callback(
-        [Output("ml-prediction-chart", "figure"),
-         Output("ml-prediction-details", "children"),
-         Output("ml-prediction-data", "data")],
-        [Input("ml-analyze-button", "n_clicks")],
-        [State("ml-asset-selector", "value"),
-         State("ml-horizon-selector", "value")]
-    )
-    def update_prediction(n_clicks, symbol, days):
-        # Check if button click is triggered
-        if n_clicks is None or not symbol:
-            # Return empty components on initial load
-            return go.Figure(), None, None
+@app.callback(
+    [Output("ml-prediction-chart", "figure"),
+     Output("ml-prediction-details", "children"),
+     Output("ml-prediction-data", "data")],
+    [Input("ml-analyze-button", "n_clicks")],
+    [State("ml-asset-selector", "value"),
+     State("ml-horizon-selector", "value")]
+)
+def update_prediction(n_clicks, symbol, days):
+    # Check if button click is triggered
+    if n_clicks is None or not symbol:
+        # Return empty components on initial load
+        return go.Figure(), None, None
+    
+    try:
+        # Ensure symbol is not None and is a valid string
+        if not symbol or not isinstance(symbol, str):
+            raise ValueError(f"Invalid symbol: {symbol}")
+            
+        # Log the symbol we're processing for debugging
+        print(f"Processing prediction for symbol: {symbol}")
         
-        try:
-            # Import FMP API
-            from modules.fmp_api import fmp_api
-            
-            # Get historical data for context
-            historical_data = fmp_api.get_historical_price(symbol, period="1y")
-            
-            # Get price predictions
-            prediction_data = get_price_predictions(symbol, days=days)
-            
-            if prediction_data:
-                # Create prediction chart
-                chart = create_prediction_chart(prediction_data, historical_data)
-                
-                # Create prediction details
-                details = create_prediction_details(prediction_data, historical_data)
-                
-                return chart, details, prediction_data
-            else:
-                # Return empty figure with error message
-                fig = go.Figure()
-                fig.update_layout(
-                    title=f"Error: Could not generate predictions for {symbol}",
-                    template="plotly_white"
-                )
-                
-                return fig, html.Div(f"Could not generate predictions for {symbol}. Try training a model first."), None
+        # Import FMP API
+        from modules.fmp_api import fmp_api
         
-        except Exception as e:
-            # Return error message
+        # Get historical data for context
+        historical_data = fmp_api.get_historical_price(symbol, period="1y")
+        
+        # Get price predictions - explicitly pass the symbol
+        from modules.price_prediction import get_price_predictions
+        prediction_data = get_price_predictions(symbol=symbol, days=days)
+        
+        if prediction_data:
+            # Create prediction chart
+            chart = create_prediction_chart(prediction_data, historical_data)
+            
+            # Create prediction details
+            details = create_prediction_details(prediction_data, historical_data)
+            
+            return chart, details, prediction_data
+        else:
+            # Return empty figure with error message
             fig = go.Figure()
             fig.update_layout(
-                title=f"Error: {str(e)}",
+                title=f"Error: Could not generate predictions for {symbol}",
                 template="plotly_white"
             )
             
-            return fig, html.Div(f"Error: {str(e)}"), None
+            return fig, html.Div(f"Could not generate predictions for {symbol}. Try training a model first."), None
+    
+    except Exception as e:
+        # Return error message
+        fig = go.Figure()
+        fig.update_layout(
+            title=f"Error: {str(e)}",
+            template="plotly_white"
+        )
+        
+        import traceback
+        traceback.print_exc()
+        
+        return fig, html.Div(f"Error: {str(e)}"), None
     
     # Generate trend analysis when asset selected
     @app.callback(

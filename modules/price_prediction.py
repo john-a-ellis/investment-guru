@@ -901,24 +901,28 @@ def train_price_prediction_models(symbol, lookback_period="1y"):
     Returns:
         dict: Trained models and performance metrics
     """
+    # Input validation for symbol parameter
+    if not symbol:
+        error_msg = "Symbol parameter cannot be None or empty"
+        logger.error(error_msg)
+        return {"error": error_msg}
+        
     try:
         # Check if Prophet is installed
         if not check_prophet_installed():
             raise ImportError("Prophet package is required for model training")
             
+        logger.info(f"Starting model training for symbol: {symbol}")
+            
         # Get historical data
         from modules.fmp_api import fmp_api
-        import logging
-        logger = logging.getLogger(__name__)
-
         
-        # Get historical price data using the period directly
-        # The FMP API wrapper should handle period conversion
+        # Get historical price data
         historical_data = fmp_api.get_historical_price(symbol, period=lookback_period)
         
         if historical_data.empty:
             logger.error(f"No historical data available for {symbol}")
-            return None
+            return {"error": f"No historical data available for {symbol}"}
         
         # Make sure we have the necessary columns
         required_columns = ['Close', 'Open', 'High', 'Low']
@@ -934,12 +938,12 @@ def train_price_prediction_models(symbol, lookback_period="1y"):
         missing_cols = [col for col in required_columns if col not in historical_data.columns]
         if missing_cols:
             logger.error(f"Missing required columns: {missing_cols}")
-            return None
+            return {"error": f"Missing required columns: {missing_cols}"}
         
         # Ensure we have enough data for training (at least 60 days)
         if len(historical_data) < 60:
             logger.error(f"Not enough historical data for {symbol} (got {len(historical_data)} rows, need at least 60)")
-            return None
+            return {"error": f"Not enough historical data (got {len(historical_data)} rows, need at least 60)"}
             
         # Split data into training and testing sets (80/20 split)
         split_idx = int(len(historical_data) * 0.8)
@@ -949,17 +953,17 @@ def train_price_prediction_models(symbol, lookback_period="1y"):
         logger.info(f"Training data: {len(train_data)} days, Testing data: {len(test_data)} days")
         
         # Make sure 'models' directory exists
+        import os
         os.makedirs("models", exist_ok=True)
         
-        # For simplified version, just return a basic Prophet model prediction
-        # This is more reliable and doesn't require TensorFlow to be installed
+        # Train Prophet model
         try:
             from prophet import Prophet
             
             # Prophet requires 'ds' (date) and 'y' (target) columns
             prophet_data = pd.DataFrame({
-                'ds': historical_data.index,
-                'y': historical_data['Close']
+                'ds': train_data.index,
+                'y': train_data['Close']
             })
             
             # Train Prophet model with basic settings
@@ -987,44 +991,49 @@ def train_price_prediction_models(symbol, lookback_period="1y"):
                 'Upper': predictions['yhat_upper']
             }, index=pd.DatetimeIndex(predictions['ds']))
             
-            # Create a simplified result to return
-            simplified_result = {
-                'symbol': symbol,
-                'model': 'prophet',
-                'dates': result.index.strftime('%Y-%m-%d').tolist(),
-                'values': result['Close'].tolist(),
-                'confidence': {
-                    'upper': result['Upper'].tolist(),
-                    'lower': result['Lower'].tolist()
+            # Calculate actual metrics using the test data
+            metrics = calculate_prophet_metrics(model, test_data)
+            
+            # Create a structured model result
+            model_result = {
+                'prophet': {
+                    'model': model,
+                    'metrics': metrics
                 }
             }
             
-            # Also return a structured model result for compatibility
-            model_result = calculate_prophet_metrics(model, test_data)
-        
+            # Save the model WITH THE SYMBOL in the filename (this is critical)
+            import pickle
+            model_filename = f"prophet_{symbol}.pkl"
+            model_path = os.path.join("models", model_filename)
             
-            # Save the model
-            os.makedirs("models", exist_ok=True)
-            with open(f"models/prophet_{symbol}.pkl", 'wb') as f:
+            # Log the exact path we're saving to
+            logger.info(f"Saving model to path: {os.path.abspath(model_path)}")
+            
+            with open(model_path, 'wb') as f:
                 pickle.dump(model, f)
             
-            logger.info(f"Successfully trained and saved Prophet model for {symbol}")
+            logger.info(f"Successfully trained and saved Prophet model for {symbol} as {model_filename}")
+            logger.info(f"Metrics for {symbol}: {metrics}")
             
             return model_result
             
         except Exception as prophet_error:
             logger.error(f"Error training Prophet model: {prophet_error}")
+            import traceback
+            traceback.print_exc()
             
-            # If Prophet fails, return a simplified non-dictionary result
-            # that can be handled by the ModelIntegration class
+            # If Prophet fails, return a simplified result with error information
             return {
-                'symbol': symbol,
-                'model': 'simple',
-                'dates': historical_data.index[-30:].strftime('%Y-%m-%d').tolist(),
-                'values': historical_data['Close'].iloc[-30:].tolist(),
-                'confidence': {
-                    'upper': None,
-                    'lower': None
+                'prophet': {
+                    'model': None,
+                    'metrics': {
+                        'mae': 0.0,
+                        'mse': 0.0,
+                        'rmse': 0.0,
+                        'mape': 0.0,
+                        'error': str(prophet_error)
+                    }
                 }
             }
     
@@ -1032,7 +1041,7 @@ def train_price_prediction_models(symbol, lookback_period="1y"):
         logger.error(f"Error in train_price_prediction_models for {symbol}: {e}")
         import traceback
         traceback.print_exc()
-        return None
+        return {"error": str(e)}
 
 def get_price_predictions(symbol, days=30):
     """
@@ -1045,6 +1054,10 @@ def get_price_predictions(symbol, days=30):
     Returns:
         dict: Predictions with dates, values, and confidence intervals
     """
+    if not symbol:
+        logger.error("Symbol parameter cannot be None or empty")
+        return None
+        
     try:
         # Get recent historical data
         from modules.fmp_api import fmp_api
@@ -1054,8 +1067,8 @@ def get_price_predictions(symbol, days=30):
             logger.error(f"No historical data available for {symbol}")
             return None
         
-        # Try to load ensemble model first
-        ensemble = EnsembleModel(prediction_days=days, symbol=symbol)  # Pass the symbol here
+        # Try to load ensemble model first (pass symbol)
+        ensemble = EnsembleModel(prediction_days=days, symbol=symbol)
         
         if ensemble.load_model():
             # Make predictions using ensemble
@@ -1118,6 +1131,52 @@ def get_price_predictions(symbol, days=30):
                     
                     return result
         
+        # Check specifically if the exact model exists
+        import os
+        model_dir = "models"
+        prophet_model_path = os.path.join(model_dir, f"prophet_{symbol}.pkl")
+        
+        if os.path.exists(prophet_model_path):
+            logger.info(f"Found specific model file for {symbol}: {prophet_model_path}")
+            
+            # Use the ProphetModel with the exact symbol
+            prophet_model = ProphetModel(prediction_days=days, symbol=symbol)
+            # Force the model path to use the exact symbol file
+            prophet_model.model_path = prophet_model_path
+            
+            # Try to load the model directly (custom approach)
+            import pickle
+            try:
+                with open(prophet_model_path, 'rb') as f:
+                    prophet_model.model = pickle.load(f)
+                    prophet_model.is_trained = True
+                    
+                    # Make predictions
+                    predictions = prophet_model.predict(historical_data, days=days)
+                    
+                    if not predictions.empty:
+                        # Format results
+                        result = {
+                            'symbol': symbol,
+                            'model': 'prophet',
+                            'dates': predictions.index.strftime('%Y-%m-%d').tolist(),
+                            'values': predictions['Close'].tolist(),
+                            'confidence': {
+                                'upper': predictions.get('Upper', None),
+                                'lower': predictions.get('Lower', None)
+                            }
+                        }
+                        
+                        # Convert confidence intervals to lists if they exist
+                        if result['confidence']['upper'] is not None:
+                            result['confidence']['upper'] = predictions['Upper'].tolist()
+                        if result['confidence']['lower'] is not None:
+                            result['confidence']['lower'] = predictions['Lower'].tolist()
+                        
+                        return result
+            except Exception as direct_load_error:
+                logger.error(f"Error directly loading model from {prophet_model_path}: {direct_load_error}")
+        
         # Use fallback prediction if no models are available
         logger.info(f"No trained models available for {symbol}, using fallback prediction")
         return create_fallback_prediction(symbol, days)
@@ -1128,9 +1187,77 @@ def get_price_predictions(symbol, days=30):
         # Try the fallback as a last resort
         try:
             return create_fallback_prediction(symbol, days)
-        except:
-            logger.error(f"Even fallback prediction failed for {symbol}")
+        except Exception as fallback_error:
+            logger.error(f"Even fallback prediction failed for {symbol}: {fallback_error}")
             return None
+
+# Fix the load_model method in PricePredictionModel class and its subclasses
+class PricePredictionModel:
+    # (other code unchanged)
+    
+    def load_model(self):
+        """
+        Load model from disk with improved error handling.
+        
+        Returns:
+            bool: Success status
+        """
+        try:
+            if not hasattr(self, 'symbol') or not self.symbol:
+                logger.warning(f"Symbol not provided for {self.model_name} model")
+                return False
+            
+            # Create symbol-specific model path
+            model_path = os.path.join(self.model_dir, f"{self.model_name}_{self.symbol}.pkl")
+            # Also try the standard path as a fallback
+            standard_path = os.path.join(self.model_dir, f"{self.model_name}.pkl")
+            
+            logger.debug(f"Attempting to load model from: {os.path.abspath(model_path)}")
+            
+            # First try the symbol-specific path
+            if os.path.exists(model_path):
+                with open(model_path, 'rb') as f:
+                    self.model = pickle.load(f)
+                self.is_trained = True
+                logger.info(f"Successfully loaded model from {os.path.abspath(model_path)}")
+                return True
+                
+            # Try the standard path as fallback
+            elif os.path.exists(standard_path):
+                logger.debug(f"Trying fallback path: {os.path.abspath(standard_path)}")
+                with open(standard_path, 'rb') as f:
+                    self.model = pickle.load(f)
+                self.is_trained = True
+                logger.info(f"Successfully loaded model from {os.path.abspath(standard_path)}")
+                return True
+            
+            # List available model files for debugging
+            model_files = [f for f in os.listdir(self.model_dir) if f.endswith('.pkl')]
+            logger.debug(f"Available model files: {model_files}")
+            
+            # Try to find any model for this symbol
+            symbol_models = [f for f in model_files if self.symbol in f]
+            if symbol_models:
+                symbol_model_path = os.path.join(self.model_dir, symbol_models[0])
+                logger.info(f"Found model for symbol {self.symbol}: {symbol_models[0]}")
+                try:
+                    with open(symbol_model_path, 'rb') as f:
+                        self.model = pickle.load(f)
+                    self.is_trained = True
+                    logger.info(f"Successfully loaded model from {os.path.abspath(symbol_model_path)}")
+                    return True
+                except Exception as symbol_load_error:
+                    logger.error(f"Error loading symbol-specific model: {symbol_load_error}")
+            
+            # Model file not found
+            logger.warning(f"Model file not found for {self.symbol}")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error loading model for {self.symbol}: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
     
 def check_prophet_installed():
     """
@@ -1332,145 +1459,3 @@ def get_price_predictions(symbol, days=30):
             logger.error(f"Even fallback prediction failed for {symbol}")
             return None
         
-def train_price_prediction_models(symbol, lookback_period="1y"):
-    """
-    Train price prediction models for a specific symbol.
-    
-    Args:
-        symbol (str): Stock symbol to train models for
-        lookback_period (str): Historical period to use for training (e.g., "1y", "2y")
-    
-    Returns:
-        dict: Trained models and performance metrics
-    """
-    try:
-        # Check if Prophet is installed
-        if not check_prophet_installed():
-            raise ImportError("Prophet package is required for model training")
-            
-        # Get historical data
-        from modules.fmp_api import fmp_api
-        import logging
-        logger = logging.getLogger(__name__)
-        
-        # Get historical price data
-        historical_data = fmp_api.get_historical_price(symbol, period=lookback_period)
-        
-        if historical_data.empty:
-            logger.error(f"No historical data available for {symbol}")
-            return None
-        
-        # Make sure we have the necessary columns
-        required_columns = ['Close', 'Open', 'High', 'Low']
-        for col in required_columns:
-            if col not in historical_data.columns:
-                # Try to map column names from lowercase if necessary
-                lowercase_map = {'close': 'Close', 'open': 'Open', 'high': 'High', 'low': 'Low'}
-                for lcol, ucol in lowercase_map.items():
-                    if lcol in historical_data.columns:
-                        historical_data[ucol] = historical_data[lcol]
-        
-        # Check if we have the required columns after mapping
-        missing_cols = [col for col in required_columns if col not in historical_data.columns]
-        if missing_cols:
-            logger.error(f"Missing required columns: {missing_cols}")
-            return None
-        
-        # Ensure we have enough data for training (at least 60 days)
-        if len(historical_data) < 60:
-            logger.error(f"Not enough historical data for {symbol} (got {len(historical_data)} rows, need at least 60)")
-            return None
-            
-        # Split data into training and testing sets (80/20 split)
-        split_idx = int(len(historical_data) * 0.8)
-        train_data = historical_data.iloc[:split_idx]
-        test_data = historical_data.iloc[split_idx:]
-        
-        logger.info(f"Training data: {len(train_data)} days, Testing data: {len(test_data)} days")
-        
-        # Make sure 'models' directory exists
-        import os
-        os.makedirs("models", exist_ok=True)
-        
-        # Train Prophet model
-        try:
-            from prophet import Prophet
-            
-            # Prophet requires 'ds' (date) and 'y' (target) columns
-            prophet_data = pd.DataFrame({
-                'ds': train_data.index,
-                'y': train_data['Close']
-            })
-            
-            # Train Prophet model with basic settings
-            model = Prophet(
-                daily_seasonality=True,
-                yearly_seasonality=True,
-                weekly_seasonality=True,
-                changepoint_prior_scale=0.05
-            )
-            model.fit(prophet_data)
-            
-            # Create future dataframe for 30 days
-            future = model.make_future_dataframe(periods=30)
-            
-            # Make predictions
-            forecast = model.predict(future)
-            
-            # Extract predictions for future dates
-            predictions = forecast[forecast['ds'] > historical_data.index[-1]][['ds', 'yhat', 'yhat_lower', 'yhat_upper']]
-            
-            # Convert to DataFrame with date index
-            result = pd.DataFrame({
-                'Close': predictions['yhat'],
-                'Lower': predictions['yhat_lower'],
-                'Upper': predictions['yhat_upper']
-            }, index=pd.DatetimeIndex(predictions['ds']))
-            
-            # Calculate actual metrics using the test data
-            metrics = calculate_prophet_metrics(model, test_data)
-            
-            # Create a structured model result
-            model_result = {
-                'prophet': {
-                    'model': model,
-                    'metrics': metrics
-                }
-            }
-            
-            # Save the model
-            import pickle
-            os.makedirs("models", exist_ok=True)
-            with open(f"models/prophet_{symbol}.pkl", 'wb') as f:
-                pickle.dump(model, f)
-            
-            logger.info(f"Successfully trained and saved Prophet model for {symbol}")
-            logger.info(f"Metrics for {symbol}: {metrics}")
-            
-            return model_result
-            
-        except Exception as prophet_error:
-            logger.error(f"Error training Prophet model: {prophet_error}")
-            import traceback
-            traceback.print_exc()
-            
-            # If Prophet fails, return a simplified non-dictionary result
-            # that can be handled by the ModelIntegration class
-            return {
-                'prophet': {
-                    'model': None,
-                    'metrics': {
-                        'mae': 0.0,
-                        'mse': 0.0,
-                        'rmse': 0.0,
-                        'mape': 0.0,
-                        'error': str(prophet_error)
-                    }
-                }
-            }
-    
-    except Exception as e:
-        logger.error(f"Error in train_price_prediction_models for {symbol}: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
