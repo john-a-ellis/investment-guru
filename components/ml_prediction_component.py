@@ -132,11 +132,11 @@ def create_prediction_chart(prediction_data, historical_data=None):
     # Debug output to see what's in prediction_data
     print(f"Prediction data keys: {prediction_data.keys() if prediction_data else 'None'}")
     
-    if not prediction_data or 'values' not in prediction_data:
+    if not prediction_data or 'values' not in prediction_data or not prediction_data.get('values'):
         # Return empty figure if no prediction data
         fig = go.Figure()
         fig.update_layout(
-            title="Price Prediction (No Data Available)",
+            title="Price Prediction (No Valid Prediction Data Available)",
             template="plotly_white"
         )
         return fig
@@ -157,71 +157,141 @@ def create_prediction_chart(prediction_data, historical_data=None):
             line=dict(color='#2C3E50', width=2)
         ))
     
-    # Add predicted values
-    predicted_dates = pd.to_datetime(prediction_data['dates'])
-    predicted_values = prediction_data['values']
-    
-    # Debug to see the prediction horizon
-    print(f"Prediction horizon: {len(predicted_dates)} days")
-    print(f"First prediction date: {predicted_dates[0] if len(predicted_dates) > 0 else 'None'}")
-    print(f"Last prediction date: {predicted_dates[-1] if len(predicted_dates) > 0 else 'None'}")
-    
-    fig.add_trace(go.Scatter(
-        x=predicted_dates,
-        y=predicted_values,
-        mode='lines',
-        name='Predicted Price',
-        line=dict(color='#2980B9', width=3, dash='dash')
-    ))
-    
-    # Add confidence intervals if available
-    if 'confidence' in prediction_data:
-        confidence = prediction_data['confidence']
-        
-        if confidence['upper'] is not None and confidence['lower'] is not None:
-            upper_values = confidence['upper']
-            lower_values = confidence['lower']
+    # Add predicted values - handle all types of date formats
+    try:
+        # First ensure dates are datetime objects
+        if 'dates' in prediction_data and prediction_data['dates']:
+            if isinstance(prediction_data['dates'][0], str):
+                import pandas as pd
+                predicted_dates = pd.to_datetime(prediction_data['dates'])
+            else:
+                predicted_dates = prediction_data['dates']
+                
+            # Ensure values are valid numbers
+            import numpy as np
+            values = prediction_data['values']
+            predicted_values = []
             
-            fig.add_trace(go.Scatter(
-                x=predicted_dates,
-                y=upper_values,
-                mode='lines',
-                name='Upper Bound',
-                line=dict(width=0),
-                showlegend=False
-            ))
+            for val in values:
+                try:
+                    float_val = float(val)
+                    if not np.isnan(float_val):
+                        predicted_values.append(float_val)
+                    else:
+                        # Skip NaN values
+                        continue
+                except (ValueError, TypeError):
+                    # Skip invalid values
+                    continue
             
-            fig.add_trace(go.Scatter(
-                x=predicted_dates,
-                y=lower_values,
-                mode='lines',
-                name='Lower Bound',
-                line=dict(width=0),
-                fillcolor='rgba(41, 128, 185, 0.2)',
-                fill='tonexty',
-                showlegend=False
-            ))
+            # Only proceed if we have valid values
+            if predicted_values and len(predicted_dates) >= len(predicted_values):
+                # Adjust dates to match the number of valid values
+                valid_dates = predicted_dates[:len(predicted_values)]
+                
+                # Debug to see the prediction horizon
+                print(f"Prediction horizon: {len(valid_dates)} days")
+                if len(valid_dates) > 0:
+                    print(f"First prediction date: {valid_dates[0]}")
+                    print(f"Last prediction date: {valid_dates[-1]}")
+                
+                fig.add_trace(go.Scatter(
+                    x=valid_dates,
+                    y=predicted_values,
+                    mode='lines',
+                    name='Predicted Price',
+                    line=dict(color='#2980B9', width=3, dash='dash')
+                ))
+                
+                # Add confidence intervals if available
+                if 'confidence' in prediction_data and prediction_data['confidence']:
+                    confidence = prediction_data['confidence']
+                    
+                    if ('upper' in confidence and confidence['upper'] and 
+                        'lower' in confidence and confidence['lower']):
+                        
+                        # Clean confidence intervals
+                        upper_values = []
+                        for val in confidence['upper']:
+                            try:
+                                float_val = float(val)
+                                if not np.isnan(float_val):
+                                    upper_values.append(float_val)
+                                else:
+                                    continue
+                            except (ValueError, TypeError):
+                                continue
+                        
+                        lower_values = []
+                        for val in confidence['lower']:
+                            try:
+                                float_val = float(val)
+                                if not np.isnan(float_val):
+                                    lower_values.append(float_val)
+                                else:
+                                    continue
+                            except (ValueError, TypeError):
+                                continue
+                        
+                        # Make sure we have valid confidence intervals
+                        if upper_values and lower_values:
+                            # Make sure lengths match
+                            min_len = min(len(valid_dates), len(upper_values), len(lower_values))
+                            
+                            # Adjust all arrays to the same length
+                            valid_dates_ci = valid_dates[:min_len]
+                            upper_values = upper_values[:min_len]
+                            lower_values = lower_values[:min_len]
+                            
+                            # Add upper bound
+                            fig.add_trace(go.Scatter(
+                                x=valid_dates_ci,
+                                y=upper_values,
+                                mode='lines',
+                                name='Upper Bound',
+                                line=dict(width=0),
+                                showlegend=False
+                            ))
+                            
+                            # Add lower bound with fill
+                            fig.add_trace(go.Scatter(
+                                x=valid_dates_ci,
+                                y=lower_values,
+                                mode='lines',
+                                name='Lower Bound',
+                                line=dict(width=0),
+                                fillcolor='rgba(41, 128, 185, 0.2)',
+                                fill='tonexty',
+                                showlegend=False
+                            ))
+    except Exception as e:
+        print(f"Error adding predictions to chart: {e}")
+        import traceback
+        traceback.print_exc()
     
     # Current price and prediction annotation
+    title_color = "black"
+    title_text = f"Price Prediction"
+    
     if historical_data is not None and not historical_data.empty:
         current_price = historical_data['Close'].iloc[-1]
-        future_price = predicted_values[-1]
-        expected_return = ((future_price / current_price) - 1) * 100
         
-        # Add prediction horizon to title
-        prediction_horizon = len(predicted_dates)
-        title_text = f"Price Prediction ({prediction_horizon}-Day Horizon) - <b>{prediction_data['symbol']}</b>"
-        title_text += f" (Current: ${current_price:.2f}, Expected: ${future_price:.2f}, Return: {expected_return:.2f}%)"
-        
-        # Show expected return as positive or negative
-        if expected_return > 0:
-            title_color = "green"
-        else:
-            title_color = "red"
-    else:
-        prediction_horizon = len(predicted_dates)
-        title_text = f"Price Prediction ({prediction_horizon}-Day Horizon) - {prediction_data['symbol']}"
-        title_color = "black"
+        # Add prediction horizon to title - get it from the valid predictions
+        if 'values' in prediction_data and prediction_data['values']:
+            prediction_horizon = len(prediction_data['values'])
+            title_text = f"Price Prediction ({prediction_horizon}-Day Horizon) - <b>{prediction_data.get('symbol', '')}</b>"
+            
+            # Add expected return if we have at least one valid predicted value
+            if predicted_values:
+                future_price = predicted_values[-1]
+                expected_return = ((future_price / current_price) - 1) * 100
+                title_text += f" (Current: ${current_price:.2f}, Expected: ${future_price:.2f}, Return: {expected_return:.2f}%)"
+                
+                # Show expected return as positive or negative
+                if expected_return > 0:
+                    title_color = "green"
+                else:
+                    title_color = "red"
     
     # Update layout
     fig.update_layout(
@@ -262,27 +332,55 @@ def create_prediction_details(prediction_data, historical_data=None):
     symbol = prediction_data.get('symbol', 'Unknown')
     model_type = prediction_data.get('model', 'Unknown')
     
-    # Calculate expected return
+    # Calculate expected return with proper handling of NaN values
+    import numpy as np
+    
+    # Default values
+    current_price = "N/A"
+    future_price = "N/A"
+    expected_return_str = "N/A"
+    expected_return_color = "secondary"
+    expected_return = 0
+    
+    # Get current price if historical data is available
     if historical_data is not None and not historical_data.empty:
         current_price = historical_data['Close'].iloc[-1]
-        predicted_values = prediction_data.get('values', [])
         
-        if predicted_values:
-            future_price = predicted_values[-1]
-            expected_return = ((future_price / current_price) - 1) * 100
-            expected_return_str = f"{expected_return:.2f}%"
-            expected_return_color = "success" if expected_return > 0 else "danger"
-        else:
-            expected_return_str = "N/A"
-            expected_return_color = "secondary"
-    else:
-        current_price = "N/A"
-        future_price = "N/A"
-        expected_return_str = "N/A"
-        expected_return_color = "secondary"
+        # Get predicted values and handle potential NaN values
+        predicted_values = []
+        if 'values' in prediction_data and prediction_data['values']:
+            for val in prediction_data['values']:
+                try:
+                    float_val = float(val)
+                    if not np.isnan(float_val):
+                        predicted_values.append(float_val)
+                except (ValueError, TypeError):
+                    continue
+            
+            # Calculate expected return if we have valid predictions
+            if predicted_values:
+                future_price = predicted_values[-1]
+                expected_return = ((future_price / current_price) - 1) * 100
+                expected_return_str = f"{expected_return:.2f}%"
+                expected_return_color = "success" if expected_return > 0 else "danger"
     
-    # Get prediction horizon
-    prediction_horizon = len(prediction_data.get('dates', []))
+    # Get prediction horizon from the cleaned values
+    prediction_horizon = len(prediction_data.get('values', [])) 
+    
+    # Create recommendation text based on expected return
+    if expected_return_str != "N/A":
+        if expected_return > 5:
+            recommendation = "Consider Buying"
+            rec_color = "success"
+        elif expected_return < -5:
+            recommendation = "Consider Selling"
+            rec_color = "danger"
+        else:
+            recommendation = "Hold/Neutral"
+            rec_color = "warning"
+    else:
+        recommendation = "Hold/Neutral"
+        rec_color = "warning"
     
     return html.Div([
         dbc.Card([
@@ -296,7 +394,7 @@ def create_prediction_details(prediction_data, historical_data=None):
                         ]),
                         html.P([
                             html.Strong("Model: "), 
-                            model_type.capitalize()
+                            model_type.capitalize() if model_type else "Unknown"
                         ]),
                         html.P([
                             html.Strong("Prediction Horizon: "), 
@@ -321,10 +419,8 @@ def create_prediction_details(prediction_data, historical_data=None):
                 dbc.Alert([
                     html.Strong("Investment Recommendation: "),
                     html.Span(
-                        "Consider Buying" if expected_return_str != "N/A" and float(expected_return_str[:-1]) > 5 else
-                        "Consider Selling" if expected_return_str != "N/A" and float(expected_return_str[:-1]) < -5 else
-                        "Hold/Neutral",
-                        className=f"text-{'success' if expected_return_str != 'N/A' and float(expected_return_str[:-1]) > 5 else 'danger' if expected_return_str != 'N/A' and float(expected_return_str[:-1]) < -5 else 'warning'}"
+                        recommendation,
+                        className=f"text-{rec_color}"
                     )
                 ], color="info"),
                 html.P([
@@ -333,7 +429,6 @@ def create_prediction_details(prediction_data, historical_data=None):
             ])
         ])
     ])
-
 
 def create_trend_analysis_display(analysis_data):
     """
@@ -789,6 +884,17 @@ def register_ml_prediction_callbacks(app):
      State("ml-horizon-selector", "value")]
 )
     def update_prediction(n_clicks, symbol, days):
+        """
+        Generate and display price predictions for the selected asset and time horizon
+        
+        Args:
+            n_clicks: Button click counter
+            symbol: Asset symbol to analyze
+            days: Number of days to predict
+            
+        Returns:
+            tuple: (figure, details component, prediction data)
+        """
         # Check if button click is triggered
         if n_clicks is None or not symbol:
             # Return empty components on initial load
@@ -808,27 +914,64 @@ def register_ml_prediction_callbacks(app):
             # Get historical data for context
             historical_data = fmp_api.get_historical_price(symbol, period="1y")
             
+            if historical_data.empty:
+                fig = go.Figure()
+                fig.update_layout(
+                    title=f"Error: No historical data available for {symbol}",
+                    template="plotly_white"
+                )
+                return fig, html.Div(f"No historical data available for {symbol}."), None
+            
             # Get price predictions - explicitly pass the symbol and days
             from modules.price_prediction import get_price_predictions
             prediction_data = get_price_predictions(symbol=symbol, days=days)
             
+            # Debug output for prediction data
+            print(f"Prediction data received: {type(prediction_data)}")
             if prediction_data:
-                # Create prediction chart
-                chart = create_prediction_chart(prediction_data, historical_data)
+                print(f"Prediction keys: {prediction_data.keys()}")
+                print(f"Values count: {len(prediction_data.get('values', []))}")
                 
-                # Create prediction details
-                details = create_prediction_details(prediction_data, historical_data)
+                # Handle potential NaN values in prediction data
+                from modules.price_prediction import handle_nan_values
+                prediction_data = handle_nan_values(prediction_data)
                 
-                return chart, details, prediction_data
+                if prediction_data and 'values' in prediction_data and prediction_data['values']:
+                    # Create prediction chart
+                    chart = create_prediction_chart(prediction_data, historical_data)
+                    
+                    # Create prediction details
+                    details = create_prediction_details(prediction_data, historical_data)
+                    
+                    return chart, details, prediction_data
+                else:
+                    # No valid prediction values after NaN handling
+                    fig = go.Figure()
+                    fig.update_layout(
+                        title=f"No valid predictions for {symbol} (model may need training)",
+                        template="plotly_white"
+                    )
+                    
+                    return fig, html.Div([
+                        dbc.Alert(
+                            f"Could not generate valid predictions for {symbol}. Try training a model first.",
+                            color="warning"
+                        )
+                    ]), None
             else:
-                # Return empty figure with error message
+                # No prediction data returned
                 fig = go.Figure()
                 fig.update_layout(
                     title=f"Error: Could not generate predictions for {symbol}",
                     template="plotly_white"
                 )
                 
-                return fig, html.Div(f"Could not generate predictions for {symbol}. Try training a model first."), None
+                return fig, html.Div([
+                    dbc.Alert(
+                        f"Could not generate predictions for {symbol}. Try training a model first.",
+                        color="warning"
+                    )
+                ]), None
         
         except Exception as e:
             # Return error message
@@ -841,8 +984,13 @@ def register_ml_prediction_callbacks(app):
             import traceback
             traceback.print_exc()
             
-            return fig, html.Div(f"Error: {str(e)}"), None
-    
+            return fig, html.Div([
+                dbc.Alert(
+                    f"Error: {str(e)}",
+                    color="danger"
+                )
+            ]), None
+        
     # Generate trend analysis when asset selected
     @app.callback(
         Output("trend-analysis-content", "children"),

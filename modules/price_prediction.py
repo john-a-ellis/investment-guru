@@ -72,22 +72,25 @@ class PricePredictionModel:
             model_files = [f for f in os.listdir(self.model_dir) if f.endswith('.pkl')]
             print(f"Available model files: {model_files}")
             
-            # Try to find any model for this symbol
-            symbol_models = [f for f in model_files if self.symbol in f]
+            # Only look for matching models of the current type
+            # This prevents loading the wrong model type
+            matching_model_files = [f for f in model_files if f.startswith(f"{self.model_name}_")]
+            symbol_models = [f for f in matching_model_files if self.symbol in f]
+            
             if symbol_models:
                 symbol_model_path = os.path.join(self.model_dir, symbol_models[0])
-                print(f"Found matching model file: {symbol_models[0]}")
+                print(f"Found matching {self.model_name} model file: {symbol_models[0]}")
                 with open(symbol_model_path, 'rb') as f:
                     self.model = pickle.load(f)
                 self.is_trained = True
-                print(f"Successfully loaded alternative model for {self.symbol}")
+                print(f"Successfully loaded {self.model_name} model for {self.symbol}")
                 return True
             
-            print(f"No model file found for {self.symbol}")
+            print(f"No {self.model_name} model file found for {self.symbol}")
             return False
             
         except Exception as e:
-            print(f"Error loading model for {self.symbol}: {e}")
+            print(f"Error loading {self.model_name} model for {self.symbol}: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -667,16 +670,30 @@ class EnsembleModel(PricePredictionModel):
         
         # Get predictions from each model
         all_predictions = []
+        valid_models = []
+        
         for i, model in enumerate(self.models):
-            if model.is_trained or model.load_model():
-                pred = model.predict(historical_data, days=pred_days)
-                if not pred.empty:
-                    all_predictions.append(pred)
-                    logger.info(f"Got predictions from {model.model_name} model")
+            # Only use models of the correct type
+            # This prevents errors from trying to use the wrong model type
+            model_class_name = model.__class__.__name__
+            expected_model_name = model.model_name.capitalize() + "Model"
+            
+            if model_class_name == expected_model_name:
+                if model.is_trained or model.load_model():
+                    try:
+                        pred = model.predict(historical_data, days=pred_days)
+                        if not pred.empty:
+                            all_predictions.append(pred)
+                            valid_models.append(model)
+                            logger.info(f"Got predictions from {model.model_name} model")
+                        else:
+                            logger.warning(f"No predictions from {model.model_name} model")
+                    except Exception as e:
+                        logger.error(f"Error getting predictions from {model.model_name} model: {e}")
                 else:
-                    logger.warning(f"No predictions from {model.model_name} model")
+                    logger.warning(f"{model.model_name} model not trained or could not be loaded")
             else:
-                logger.warning(f"{model.model_name} model not trained or could not be loaded")
+                logger.warning(f"Model type mismatch: {model_class_name} vs expected {expected_model_name}")
         
         if not all_predictions:
             logger.error("No predictions available from any model")
@@ -689,16 +706,29 @@ class EnsembleModel(PricePredictionModel):
         
         # Get weighted average of predictions
         weighted_sum = pd.Series(0, index=common_index)
-        adjusted_weights = self.weights[:len(all_predictions)]
-        adjusted_weights = [w / sum(adjusted_weights) for w in adjusted_weights]
         
-        for i, pred in enumerate(all_predictions):
-            if pred.index.equals(common_index):
-                weighted_sum += pred['Close'] * adjusted_weights[i]
+        # Adjust weights based on valid models
+        if valid_models:
+            adjusted_weights = [self.weights[self.models.index(model)] for model in valid_models]
+            # Normalize weights
+            weight_sum = sum(adjusted_weights)
+            if weight_sum > 0:
+                adjusted_weights = [w / weight_sum for w in adjusted_weights]
             else:
-                # Reindex prediction to common index
-                reindexed_pred = pred.reindex(common_index)
-                weighted_sum += reindexed_pred['Close'] * adjusted_weights[i]
+                # Equal weights if sum is zero
+                adjusted_weights = [1.0/len(valid_models)] * len(valid_models)
+            
+            # Apply weights to predictions
+            for i, pred in enumerate(all_predictions):
+                if pred.index.equals(common_index):
+                    weighted_sum += pred['Close'] * adjusted_weights[i]
+                else:
+                    # Reindex prediction to common index
+                    reindexed_pred = pred.reindex(common_index)
+                    weighted_sum += reindexed_pred['Close'] * adjusted_weights[i]
+        else:
+            # If no valid models, return empty DataFrame
+            return pd.DataFrame()
         
         # Create final prediction DataFrame
         result = pd.DataFrame({'Close': weighted_sum})
@@ -997,7 +1027,7 @@ def get_price_predictions(symbol, days=30):
             logger.error(f"No historical data available for {symbol}")
             return None
         
-        # Check for a specific model file first
+        # Check for a specific Prophet model file first since it's our primary model
         import os
         model_dir = "models"
         prophet_path = os.path.join(model_dir, f"prophet_{symbol}.pkl")
@@ -1007,62 +1037,102 @@ def get_price_predictions(symbol, days=30):
         if os.path.exists(prophet_path):
             print(f"Found existing model for {symbol}")
             
-            # Direct loading approach
+            # Direct loading approach with Prophet model
             try:
                 import pickle
                 with open(prophet_path, 'rb') as f:
                     model = pickle.load(f)
                 
-                # Create future dataframe for the prediction days
+                # Make sure it's actually a Prophet model
                 from prophet import Prophet
-                
-                # Use the specified number of days
-                print(f"Creating forecast for {days} days")
-                future = model.make_future_dataframe(periods=days)
-                
-                # Make predictions
-                forecast = model.predict(future)
-                
-                # Extract predictions for future dates (only the specified number of days)
-                future_cutoff = historical_data.index[-1]
-                future_forecast = forecast[forecast['ds'] > future_cutoff]
-                
-                if len(future_forecast) > days:
-                    # Take only the requested number of days
-                    predictions = future_forecast.iloc[:days]
-                else:
-                    # Take all available future predictions
-                    predictions = future_forecast
-                
-                if len(predictions) > 0:
-                    # Format results
-                    result = {
-                        'symbol': symbol,
-                        'model': 'prophet',
-                        'dates': predictions['ds'].dt.strftime('%Y-%m-%d').tolist(),
-                        'values': predictions['yhat'].tolist(),
-                        'confidence': {
-                            'upper': predictions['yhat_upper'].tolist(),
-                            'lower': predictions['yhat_lower'].tolist()
-                        }
-                    }
+                if isinstance(model, Prophet):
+                    # Create future dataframe for the prediction days
+                    print(f"Creating forecast for {days} days")
+                    future = model.make_future_dataframe(periods=days)
                     
-                    print(f"Successfully generated predictions for {symbol} using direct loading ({len(result['dates'])} days)")
-                    return result
+                    # Make predictions
+                    forecast = model.predict(future)
+                    
+                    # Extract predictions for future dates (only the specified number of days)
+                    future_cutoff = historical_data.index[-1]
+                    future_forecast = forecast[forecast['ds'] > future_cutoff]
+                    
+                    if len(future_forecast) > days:
+                        # Take only the requested number of days
+                        predictions = future_forecast.iloc[:days]
+                    else:
+                        # Take all available future predictions
+                        predictions = future_forecast
+                    
+                    if len(predictions) > 0:
+                        # Format results
+                        result = {
+                            'symbol': symbol,
+                            'model': 'prophet',
+                            'dates': predictions['ds'].dt.strftime('%Y-%m-%d').tolist(),
+                            'values': predictions['yhat'].tolist(),
+                            'confidence': {
+                                'upper': predictions['yhat_upper'].tolist(),
+                                'lower': predictions['yhat_lower'].tolist()
+                            }
+                        }
+                        
+                        print(f"Successfully generated predictions for {symbol} using direct Prophet loading ({len(result['dates'])} days)")
+                        return handle_nan_values(result)
+                    else:
+                        print(f"No future predictions generated for {symbol}")
+                else:
+                    print(f"Loaded model is not a Prophet model: {type(model)}")
             except Exception as e:
-                print(f"Error with direct model loading: {e}")
+                print(f"Error with direct Prophet model loading: {e}")
+                import traceback
+                traceback.print_exc()
                 # Continue to try other approaches
         
-        # If direct approach failed, try with model classes, passing the symbol explicitly
-        print(f"Trying model classes for {symbol}")
+        # If direct approach failed, use the standalone ProphetModel rather than EnsembleModel
+        print(f"Trying standalone ProphetModel for {symbol}")
         
-        # Initialize models with explicit symbol
-        ensemble = EnsembleModel(prediction_days=days, symbol=symbol)
+        # Initialize ProphetModel with explicit symbol
         prophet_model = ProphetModel(prediction_days=days, symbol=symbol)
-        lstm_model = LSTMModel(prediction_days=days, symbol=symbol)
-        arima_model = ARIMAModel(prediction_days=days, symbol=symbol)
         
-        models_to_try = [ensemble, prophet_model, lstm_model, arima_model]
+        # Try to load and use the model
+        if prophet_model.load_model():
+            print(f"Successfully loaded Prophet model for {symbol}")
+            predictions = prophet_model.predict(historical_data, days=days)
+            
+            if not predictions.empty:
+                # Format results
+                result = {
+                    'symbol': symbol,
+                    'model': 'prophet',
+                    'dates': predictions.index.strftime('%Y-%m-%d').tolist(),
+                    'values': predictions['Close'].tolist()
+                }
+                
+                # Add confidence intervals if they exist
+                if 'Upper' in predictions.columns and 'Lower' in predictions.columns:
+                    result['confidence'] = {
+                        'upper': predictions['Upper'].tolist(),
+                        'lower': predictions['Lower'].tolist()
+                    }
+                else:
+                    # Create simple confidence intervals if not provided
+                    values = predictions['Close'].tolist()
+                    result['confidence'] = {
+                        'upper': [val * 1.05 for val in values],
+                        'lower': [val * 0.95 for val in values]
+                    }
+                
+                print(f"Successfully generated predictions for {symbol} using ProphetModel ({len(result['dates'])} days)")
+                return handle_nan_values(result)
+        
+        # If Prophet failed, try other models individually (no ensemble)
+        print(f"Trying other model types for {symbol}")
+        
+        models_to_try = [
+            ARIMAModel(prediction_days=days, symbol=symbol),
+            LSTMModel(prediction_days=days, symbol=symbol)
+        ]
         
         for model in models_to_try:
             if model.load_model():
@@ -1075,25 +1145,29 @@ def get_price_predictions(symbol, days=30):
                         'symbol': symbol,
                         'model': model.model_name,
                         'dates': predictions.index.strftime('%Y-%m-%d').tolist(),
-                        'values': predictions['Close'].tolist(),
-                        'confidence': {
-                            'upper': predictions.get('Upper', None),
-                            'lower': predictions.get('Lower', None)
-                        }
+                        'values': predictions['Close'].tolist()
                     }
                     
-                    # Convert confidence intervals to lists if they exist
-                    if result['confidence']['upper'] is not None and isinstance(predictions['Upper'], pd.Series):
-                        result['confidence']['upper'] = predictions['Upper'].tolist()
-                    if result['confidence']['lower'] is not None and isinstance(predictions['Lower'], pd.Series):
-                        result['confidence']['lower'] = predictions['Lower'].tolist()
+                    # Add confidence intervals if they exist
+                    if 'Upper' in predictions.columns and 'Lower' in predictions.columns:
+                        result['confidence'] = {
+                            'upper': predictions['Upper'].tolist(),
+                            'lower': predictions['Lower'].tolist()
+                        }
+                    else:
+                        # Create simple confidence intervals if not provided
+                        values = predictions['Close'].tolist()
+                        result['confidence'] = {
+                            'upper': [val * 1.05 for val in values],
+                            'lower': [val * 0.95 for val in values]
+                        }
                     
                     print(f"Successfully generated predictions for {symbol} using {model.model_name} ({len(result['dates'])} days)")
-                    return result
+                    return handle_nan_values(result)
         
         # Use fallback prediction if no models are available
         print(f"No trained models available for {symbol}, using fallback prediction with {days} days")
-        return create_fallback_prediction(symbol, days)
+        return handle_nan_values(create_fallback_prediction(symbol, days))
         
     except Exception as e:
         print(f"Error in get_price_predictions for {symbol}: {e}")
@@ -1102,7 +1176,8 @@ def get_price_predictions(symbol, days=30):
         
         # Try the fallback as a last resort
         try:
-            return create_fallback_prediction(symbol, days)
+            fallback_result = create_fallback_prediction(symbol, days)
+            return handle_nan_values(fallback_result)
         except Exception as fallback_error:
             print(f"Even fallback prediction failed for {symbol}: {fallback_error}")
             return None
@@ -1334,3 +1409,83 @@ def get_asset_analysis(self, symbol, days_to_predict=30, force_refresh=False):
         import traceback
         traceback.print_exc()
         return None
+    
+def handle_nan_values(prediction_data):
+    """
+    Clean prediction data by handling NaN values.
+    
+    Args:
+        prediction_data (dict): The prediction data dictionary
+        
+    Returns:
+        dict: Cleaned prediction data with NaN values removed or replaced
+    """
+    import numpy as np
+    import pandas as pd
+    
+    if not prediction_data:
+        return None
+    
+    # Make a copy to avoid modifying the original
+    cleaned_data = prediction_data.copy()
+    
+    # Check and clean values
+    if 'values' in cleaned_data:
+        # Convert values to float and replace NaN with None
+        cleaned_values = []
+        for val in cleaned_data['values']:
+            try:
+                float_val = float(val)
+                if np.isnan(float_val):
+                    # For plotting, we'll use the previous valid value or the first historical price
+                    continue
+                cleaned_values.append(float_val)
+            except (ValueError, TypeError):
+                continue
+        
+        # If we lost all values, return None
+        if not cleaned_values:
+            return None
+            
+        # Update the values list
+        cleaned_data['values'] = cleaned_values
+        
+        # Ensure dates and values have same length
+        if 'dates' in cleaned_data and len(cleaned_data['dates']) != len(cleaned_values):
+            # Keep only the dates corresponding to valid values
+            cleaned_data['dates'] = cleaned_data['dates'][:len(cleaned_values)]
+    
+    # Check and clean confidence intervals
+    if 'confidence' in cleaned_data:
+        confidence = cleaned_data['confidence']
+        if confidence:
+            # Clean upper bounds
+            if 'upper' in confidence:
+                cleaned_upper = []
+                for val in confidence['upper']:
+                    try:
+                        float_val = float(val)
+                        if np.isnan(float_val):
+                            continue
+                        cleaned_upper.append(float_val)
+                    except (ValueError, TypeError):
+                        continue
+                confidence['upper'] = cleaned_upper
+            
+            # Clean lower bounds
+            if 'lower' in confidence:
+                cleaned_lower = []
+                for val in confidence['lower']:
+                    try:
+                        float_val = float(val)
+                        if np.isnan(float_val):
+                            continue
+                        cleaned_lower.append(float_val)
+                    except (ValueError, TypeError):
+                        continue
+                confidence['lower'] = cleaned_lower
+            
+            # Update confidence data
+            cleaned_data['confidence'] = confidence
+    
+    return cleaned_data
