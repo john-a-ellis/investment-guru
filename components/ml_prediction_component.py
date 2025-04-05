@@ -120,7 +120,7 @@ def create_ml_prediction_component():
 
 def create_prediction_chart(prediction_data, historical_data=None):
     """
-    Create a prediction chart based on ML model predictions
+    Create a prediction chart based on ML model predictions with improved error handling.
     
     Args:
         prediction_data (dict): Prediction data from ML models
@@ -132,14 +132,28 @@ def create_prediction_chart(prediction_data, historical_data=None):
     # Debug output to see what's in prediction_data
     print(f"Prediction data keys: {prediction_data.keys() if prediction_data else 'None'}")
     
-    if not prediction_data or 'values' not in prediction_data or not prediction_data.get('values'):
+    if not prediction_data:
         # Return empty figure if no prediction data
         fig = go.Figure()
         fig.update_layout(
-            title="Price Prediction (No Valid Prediction Data Available)",
+            title="Price Prediction (No Prediction Data Available)",
             template="plotly_white"
         )
         return fig
+    
+    if 'values' not in prediction_data or not prediction_data.get('values'):
+        # Return empty figure if no values in prediction data
+        fig = go.Figure()
+        fig.update_layout(
+            title=f"Price Prediction (No Valid Values for {prediction_data.get('symbol', 'Unknown')})",
+            template="plotly_white"
+        )
+        return fig
+    
+    # More detailed debug information
+    print(f"Values count: {len(prediction_data['values'])}")
+    print(f"Dates count: {len(prediction_data['dates']) if 'dates' in prediction_data else 'No dates'}")
+    print(f"First few values: {prediction_data['values'][:3]}")
     
     # Create figure
     fig = go.Figure()
@@ -170,6 +184,11 @@ def create_prediction_chart(prediction_data, historical_data=None):
             # Ensure values are valid numbers
             import numpy as np
             values = prediction_data['values']
+            
+            # Debug values before processing
+            print(f"Values before processing: {values[:5]}")
+            print(f"Values types: {[type(v) for v in values[:5]]}")
+            
             predicted_values = []
             
             for val in values:
@@ -179,10 +198,16 @@ def create_prediction_chart(prediction_data, historical_data=None):
                         predicted_values.append(float_val)
                     else:
                         # Skip NaN values
+                        print(f"Skipping NaN value in chart creation")
                         continue
-                except (ValueError, TypeError):
+                except (ValueError, TypeError) as e:
                     # Skip invalid values
+                    print(f"Value error in chart creation: {e}")
                     continue
+            
+            # Debug values after processing
+            print(f"Valid values count: {len(predicted_values)}")
+            print(f"Processed values: {predicted_values[:5]}")
             
             # Only proceed if we have valid values
             if predicted_values and len(predicted_dates) >= len(predicted_values):
@@ -195,6 +220,7 @@ def create_prediction_chart(prediction_data, historical_data=None):
                     print(f"First prediction date: {valid_dates[0]}")
                     print(f"Last prediction date: {valid_dates[-1]}")
                 
+                # Add prediction trace
                 fig.add_trace(go.Scatter(
                     x=valid_dates,
                     y=predicted_values,
@@ -210,7 +236,7 @@ def create_prediction_chart(prediction_data, historical_data=None):
                     if ('upper' in confidence and confidence['upper'] and 
                         'lower' in confidence and confidence['lower']):
                         
-                        # Clean confidence intervals
+                        # Create confidence bands
                         upper_values = []
                         for val in confidence['upper']:
                             try:
@@ -269,29 +295,28 @@ def create_prediction_chart(prediction_data, historical_data=None):
         import traceback
         traceback.print_exc()
     
-    # Current price and prediction annotation
+    # Set chart title
     title_color = "black"
     title_text = f"Price Prediction"
     
     if historical_data is not None and not historical_data.empty:
         current_price = historical_data['Close'].iloc[-1]
         
-        # Add prediction horizon to title - get it from the valid predictions
-        if 'values' in prediction_data and prediction_data['values']:
-            prediction_horizon = len(prediction_data['values'])
-            title_text = f"Price Prediction ({prediction_horizon}-Day Horizon) - <b>{prediction_data.get('symbol', '')}</b>"
+        # Add prediction horizon to title
+        prediction_horizon = len(predicted_values) if 'predicted_values' in locals() and predicted_values else len(prediction_data.get('values', []))
+        title_text = f"Price Prediction ({prediction_horizon}-Day Horizon) - <b>{prediction_data.get('symbol', '')}</b>"
+        
+        # Add expected return if we have valid predictions
+        if 'predicted_values' in locals() and predicted_values:
+            future_price = predicted_values[-1]
+            expected_return = ((future_price / current_price) - 1) * 100
+            title_text += f" (Current: ${current_price:.2f}, Expected: ${future_price:.2f}, Return: {expected_return:.2f}%)"
             
-            # Add expected return if we have at least one valid predicted value
-            if predicted_values:
-                future_price = predicted_values[-1]
-                expected_return = ((future_price / current_price) - 1) * 100
-                title_text += f" (Current: ${current_price:.2f}, Expected: ${future_price:.2f}, Return: {expected_return:.2f}%)"
-                
-                # Show expected return as positive or negative
-                if expected_return > 0:
-                    title_color = "green"
-                else:
-                    title_color = "red"
+            # Show expected return as positive or negative
+            if expected_return > 0:
+                title_color = "green"
+            else:
+                title_color = "red"
     
     # Update layout
     fig.update_layout(
@@ -315,9 +340,10 @@ def create_prediction_chart(prediction_data, historical_data=None):
     return fig
 
 
+
 def create_prediction_details(prediction_data, historical_data=None):
     """
-    Create detailed analysis of price predictions
+    Create detailed analysis of price predictions with improved error handling.
     
     Args:
         prediction_data (dict): Prediction data from ML models
@@ -328,6 +354,9 @@ def create_prediction_details(prediction_data, historical_data=None):
     """
     if not prediction_data:
         return html.Div("No prediction data available.")
+    
+    # More debug info
+    print(f"create_prediction_details received data keys: {prediction_data.keys()}")
     
     symbol = prediction_data.get('symbol', 'Unknown')
     model_type = prediction_data.get('model', 'Unknown')
@@ -363,9 +392,11 @@ def create_prediction_details(prediction_data, historical_data=None):
                 expected_return = ((future_price / current_price) - 1) * 100
                 expected_return_str = f"{expected_return:.2f}%"
                 expected_return_color = "success" if expected_return > 0 else "danger"
+                print(f"Calculated expected return: {expected_return_str}")
     
     # Get prediction horizon from the cleaned values
     prediction_horizon = len(prediction_data.get('values', [])) 
+    print(f"Prediction horizon in details: {prediction_horizon}")
     
     # Create recommendation text based on expected return
     if expected_return_str != "N/A":
@@ -429,6 +460,7 @@ def create_prediction_details(prediction_data, historical_data=None):
             ])
         ])
     ])
+
 
 def create_trend_analysis_display(analysis_data):
     """
@@ -932,32 +964,25 @@ def register_ml_prediction_callbacks(app):
                 print(f"Prediction keys: {prediction_data.keys()}")
                 print(f"Values count: {len(prediction_data.get('values', []))}")
                 
-                # Handle potential NaN values in prediction data
-                from modules.price_prediction import handle_nan_values
-                prediction_data = handle_nan_values(prediction_data)
+                # Additional validation to avoid empty/invalid prediction data
+                if (not prediction_data.get('values') or 
+                    len(prediction_data['values']) == 0 or 
+                    all(pd.isna(v) for v in prediction_data['values'])):
+                    
+                    print(f"Warning: All prediction values for {symbol} are invalid")
+                    
+                    # Create a baseline fallback prediction
+                    from modules.price_prediction import create_simple_fallback
+                    prediction_data = create_simple_fallback(symbol, days)
                 
-                if prediction_data and 'values' in prediction_data and prediction_data['values']:
-                    # Create prediction chart
-                    chart = create_prediction_chart(prediction_data, historical_data)
+                # Create prediction chart
+                chart = create_prediction_chart(prediction_data, historical_data)
+                
+                # Create prediction details
+                details = create_prediction_details(prediction_data, historical_data)
+                
+                return chart, details, prediction_data
                     
-                    # Create prediction details
-                    details = create_prediction_details(prediction_data, historical_data)
-                    
-                    return chart, details, prediction_data
-                else:
-                    # No valid prediction values after NaN handling
-                    fig = go.Figure()
-                    fig.update_layout(
-                        title=f"No valid predictions for {symbol} (model may need training)",
-                        template="plotly_white"
-                    )
-                    
-                    return fig, html.Div([
-                        dbc.Alert(
-                            f"Could not generate valid predictions for {symbol}. Try training a model first.",
-                            color="warning"
-                        )
-                    ]), None
             else:
                 # No prediction data returned
                 fig = go.Figure()

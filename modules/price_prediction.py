@@ -269,7 +269,7 @@ class ProphetModel(PricePredictionModel):
     
     def predict(self, historical_data, days=None):
         """
-        Make predictions using Prophet model.
+        Make predictions using Prophet model with improved error handling.
         
         Args:
             historical_data (DataFrame): Historical price data
@@ -286,26 +286,51 @@ class ProphetModel(PricePredictionModel):
             # Use provided days or default
             pred_days = days if days is not None else self.prediction_days
             
+            # Convert to Prophet format - needs 'ds' and 'y' columns
+            # First ensure historical_data has a date index
+            hist_data = historical_data.copy()
+            if not isinstance(hist_data.index, pd.DatetimeIndex):
+                logger.error("Historical data must have DatetimeIndex")
+                return pd.DataFrame()
+            
+            # Create prophet data
+            prophet_data = pd.DataFrame({
+                'ds': hist_data.index,
+                'y': hist_data['Close']
+            })
+            
             # Create future dataframe
             future = self.model.make_future_dataframe(periods=pred_days)
             
             # Make predictions
             forecast = self.model.predict(future)
             
-            # Extract predictions for future dates
-            predictions = forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(pred_days)
+            # Extract predictions for future dates only
+            last_historical_date = hist_data.index[-1]
+            future_predictions = forecast[forecast['ds'] > last_historical_date].copy()
+            
+            # Make sure we have predictions
+            if future_predictions.empty:
+                logger.error(f"No future predictions generated for {self.symbol}")
+                return pd.DataFrame()
             
             # Convert to DataFrame with date index
             result = pd.DataFrame({
-                'Close': predictions['yhat'],
-                'Lower': predictions['yhat_lower'],
-                'Upper': predictions['yhat_upper']
-            }, index=pd.DatetimeIndex(predictions['ds']))
+                'Close': future_predictions['yhat'],
+                'Upper': future_predictions['yhat_upper'],
+                'Lower': future_predictions['yhat_lower']
+            }, index=pd.DatetimeIndex(future_predictions['ds']))
+            
+            # Debug this output
+            logger.info(f"Prophet prediction result for {self.symbol}: {len(result)} rows")
+            logger.info(f"Date range: {result.index.min()} to {result.index.max()}")
             
             return result
         
         except Exception as e:
             logger.error(f"Error making predictions with Prophet model: {e}")
+            import traceback
+            traceback.print_exc()
             return pd.DataFrame()
     
     def evaluate(self, test_data):
@@ -1027,78 +1052,19 @@ def get_price_predictions(symbol, days=30):
             logger.error(f"No historical data available for {symbol}")
             return None
         
-        # Check for a specific Prophet model file first since it's our primary model
-        import os
-        model_dir = "models"
-        prophet_path = os.path.join(model_dir, f"prophet_{symbol}.pkl")
-        
-        print(f"Checking for specific model file: {prophet_path}")
-        
-        if os.path.exists(prophet_path):
-            print(f"Found existing model for {symbol}")
-            
-            # Direct loading approach with Prophet model
-            try:
-                import pickle
-                with open(prophet_path, 'rb') as f:
-                    model = pickle.load(f)
-                
-                # Make sure it's actually a Prophet model
-                from prophet import Prophet
-                if isinstance(model, Prophet):
-                    # Create future dataframe for the prediction days
-                    print(f"Creating forecast for {days} days")
-                    future = model.make_future_dataframe(periods=days)
-                    
-                    # Make predictions
-                    forecast = model.predict(future)
-                    
-                    # Extract predictions for future dates (only the specified number of days)
-                    future_cutoff = historical_data.index[-1]
-                    future_forecast = forecast[forecast['ds'] > future_cutoff]
-                    
-                    if len(future_forecast) > days:
-                        # Take only the requested number of days
-                        predictions = future_forecast.iloc[:days]
-                    else:
-                        # Take all available future predictions
-                        predictions = future_forecast
-                    
-                    if len(predictions) > 0:
-                        # Format results
-                        result = {
-                            'symbol': symbol,
-                            'model': 'prophet',
-                            'dates': predictions['ds'].dt.strftime('%Y-%m-%d').tolist(),
-                            'values': predictions['yhat'].tolist(),
-                            'confidence': {
-                                'upper': predictions['yhat_upper'].tolist(),
-                                'lower': predictions['yhat_lower'].tolist()
-                            }
-                        }
-                        
-                        print(f"Successfully generated predictions for {symbol} using direct Prophet loading ({len(result['dates'])} days)")
-                        return handle_nan_values(result)
-                    else:
-                        print(f"No future predictions generated for {symbol}")
-                else:
-                    print(f"Loaded model is not a Prophet model: {type(model)}")
-            except Exception as e:
-                print(f"Error with direct Prophet model loading: {e}")
-                import traceback
-                traceback.print_exc()
-                # Continue to try other approaches
-        
-        # If direct approach failed, use the standalone ProphetModel rather than EnsembleModel
-        print(f"Trying standalone ProphetModel for {symbol}")
-        
-        # Initialize ProphetModel with explicit symbol
+        # Initialize ProphetModel directly
         prophet_model = ProphetModel(prediction_days=days, symbol=symbol)
         
         # Try to load and use the model
         if prophet_model.load_model():
             print(f"Successfully loaded Prophet model for {symbol}")
             predictions = prophet_model.predict(historical_data, days=days)
+            
+            # Debug prediction output
+            print(f"Prophet predictions shape: {predictions.shape if not predictions.empty else 'Empty'}")
+            if not predictions.empty:
+                print(f"Prediction date range: {predictions.index.min()} to {predictions.index.max()}")
+                print(f"First few predicted values: {predictions['Close'].head().tolist()}")
             
             if not predictions.empty:
                 # Format results
@@ -1123,64 +1089,45 @@ def get_price_predictions(symbol, days=30):
                         'lower': [val * 0.95 for val in values]
                     }
                 
-                print(f"Successfully generated predictions for {symbol} using ProphetModel ({len(result['dates'])} days)")
-                return handle_nan_values(result)
-        
-        # If Prophet failed, try other models individually (no ensemble)
-        print(f"Trying other model types for {symbol}")
-        
-        models_to_try = [
-            ARIMAModel(prediction_days=days, symbol=symbol),
-            LSTMModel(prediction_days=days, symbol=symbol)
-        ]
-        
-        for model in models_to_try:
-            if model.load_model():
-                print(f"Successfully loaded {model.model_name} model for {symbol}")
-                predictions = model.predict(historical_data, days=days)
+                # Debug the result structure before returning
+                print(f"Result dates count: {len(result['dates'])}")
+                print(f"Result values count: {len(result['values'])}")
+                print(f"First few dates: {result['dates'][:3]}")
+                print(f"First few values: {result['values'][:3]}")
                 
-                if not predictions.empty:
-                    # Format results
-                    result = {
-                        'symbol': symbol,
-                        'model': model.model_name,
-                        'dates': predictions.index.strftime('%Y-%m-%d').tolist(),
-                        'values': predictions['Close'].tolist()
-                    }
+                # Clean and verify the result contains valid data before returning
+                cleaned_result = handle_nan_values(result)
+                
+                # One more debug check after NaN handling
+                if cleaned_result is None:
+                    print("Warning: NaN handling returned None - all values might be NaN")
+                    # Fall back to original result with safeguards
+                    sanitized_result = result.copy()
+                    sanitized_result['values'] = [float(v) if not pd.isna(v) else float(historical_data['Close'].iloc[-1]) for v in result['values']]
+                    return sanitized_result
+                else:
+                    print(f"Cleaned result dates count: {len(cleaned_result['dates'])}")
+                    print(f"Cleaned result values count: {len(cleaned_result['values'])}")
                     
-                    # Add confidence intervals if they exist
-                    if 'Upper' in predictions.columns and 'Lower' in predictions.columns:
-                        result['confidence'] = {
-                            'upper': predictions['Upper'].tolist(),
-                            'lower': predictions['Lower'].tolist()
-                        }
-                    else:
-                        # Create simple confidence intervals if not provided
-                        values = predictions['Close'].tolist()
-                        result['confidence'] = {
-                            'upper': [val * 1.05 for val in values],
-                            'lower': [val * 0.95 for val in values]
-                        }
-                    
-                    print(f"Successfully generated predictions for {symbol} using {model.model_name} ({len(result['dates'])} days)")
-                    return handle_nan_values(result)
+                return cleaned_result
+            else:
+                print(f"No valid predictions for {symbol}")
+        else:
+            print(f"Could not load Prophet model for {symbol}")
         
-        # Use fallback prediction if no models are available
-        print(f"No trained models available for {symbol}, using fallback prediction with {days} days")
-        return handle_nan_values(create_fallback_prediction(symbol, days))
+        # If Prophet model failed, try fallback prediction
+        print(f"Using fallback prediction for {symbol}")
+        fallback_result = create_fallback_prediction(symbol, days)
+        cleaned_fallback = handle_nan_values(fallback_result)
+        return cleaned_fallback if cleaned_fallback else fallback_result
         
     except Exception as e:
         print(f"Error in get_price_predictions for {symbol}: {e}")
         import traceback
         traceback.print_exc()
         
-        # Try the fallback as a last resort
-        try:
-            fallback_result = create_fallback_prediction(symbol, days)
-            return handle_nan_values(fallback_result)
-        except Exception as fallback_error:
-            print(f"Even fallback prediction failed for {symbol}: {fallback_error}")
-            return None
+        # Create a simple fallback prediction as last resort
+        return create_simple_fallback(symbol, days)
 
 
 def check_prophet_installed():
@@ -1412,7 +1359,7 @@ def get_asset_analysis(self, symbol, days_to_predict=30, force_refresh=False):
     
 def handle_nan_values(prediction_data):
     """
-    Clean prediction data by handling NaN values.
+    Clean prediction data by handling NaN values with improved debugging.
     
     Args:
         prediction_data (dict): The prediction data dictionary
@@ -1424,27 +1371,42 @@ def handle_nan_values(prediction_data):
     import pandas as pd
     
     if not prediction_data:
+        print("Warning: handle_nan_values received None or empty prediction_data")
         return None
     
     # Make a copy to avoid modifying the original
     cleaned_data = prediction_data.copy()
     
+    # Debug the input
+    print(f"NaN handler received data with keys: {cleaned_data.keys()}")
+    
     # Check and clean values
     if 'values' in cleaned_data:
+        # Debug values before cleaning
+        original_values_count = len(cleaned_data['values'])
+        nan_count = sum(1 for val in cleaned_data['values'] if pd.isna(val) or val is None)
+        print(f"Original values: {original_values_count}, NaN count: {nan_count}")
+        
         # Convert values to float and replace NaN with None
         cleaned_values = []
         for val in cleaned_data['values']:
             try:
                 float_val = float(val)
-                if np.isnan(float_val):
-                    # For plotting, we'll use the previous valid value or the first historical price
+                if not np.isnan(float_val):
+                    cleaned_values.append(float_val)
+                else:
+                    print(f"Skipping NaN value")
                     continue
-                cleaned_values.append(float_val)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as e:
+                print(f"Value conversion error: {e} for value: {val}")
                 continue
+        
+        # Debug cleaned values
+        print(f"Cleaned values count: {len(cleaned_values)}")
         
         # If we lost all values, return None
         if not cleaned_values:
+            print("Warning: All values were NaN or invalid")
             return None
             
         # Update the values list
@@ -1452,10 +1414,13 @@ def handle_nan_values(prediction_data):
         
         # Ensure dates and values have same length
         if 'dates' in cleaned_data and len(cleaned_data['dates']) != len(cleaned_values):
+            print(f"Adjusting dates list from {len(cleaned_data['dates'])} to {len(cleaned_values)}")
             # Keep only the dates corresponding to valid values
             cleaned_data['dates'] = cleaned_data['dates'][:len(cleaned_values)]
+    else:
+        print("Warning: No 'values' key found in prediction data")
     
-    # Check and clean confidence intervals
+    # Check and clean confidence intervals with similar debugging
     if 'confidence' in cleaned_data:
         confidence = cleaned_data['confidence']
         if confidence:
@@ -1465,9 +1430,10 @@ def handle_nan_values(prediction_data):
                 for val in confidence['upper']:
                     try:
                         float_val = float(val)
-                        if np.isnan(float_val):
+                        if not np.isnan(float_val):
+                            cleaned_upper.append(float_val)
+                        else:
                             continue
-                        cleaned_upper.append(float_val)
                     except (ValueError, TypeError):
                         continue
                 confidence['upper'] = cleaned_upper
@@ -1478,9 +1444,10 @@ def handle_nan_values(prediction_data):
                 for val in confidence['lower']:
                     try:
                         float_val = float(val)
-                        if np.isnan(float_val):
+                        if not np.isnan(float_val):
+                            cleaned_lower.append(float_val)
+                        else:
                             continue
-                        cleaned_lower.append(float_val)
                     except (ValueError, TypeError):
                         continue
                 confidence['lower'] = cleaned_lower
@@ -1489,3 +1456,44 @@ def handle_nan_values(prediction_data):
             cleaned_data['confidence'] = confidence
     
     return cleaned_data
+
+# New fallback function for more reliability
+def create_simple_fallback(symbol, days=30):
+    """
+    Create a very simple fallback prediction when all else fails.
+    
+    Args:
+        symbol (str): Stock symbol
+        days (int): Number of days to predict
+        
+    Returns:
+        dict: Simple prediction data
+    """
+    from datetime import datetime, timedelta
+    import numpy as np
+    
+    # Create basic prediction structure
+    current_date = datetime.now()
+    future_dates = [(current_date + timedelta(days=i+1)).strftime('%Y-%m-%d') for i in range(days)]
+    
+    # Use a fixed value that won't be NaN
+    base_value = 100.0
+    values = [base_value + i * 0.1 for i in range(days)]
+    
+    # Simple confidence intervals
+    upper = [val * 1.05 for val in values]
+    lower = [val * 0.95 for val in values]
+    
+    result = {
+        'symbol': symbol,
+        'model': 'simple_fallback',
+        'dates': future_dates,
+        'values': values,
+        'confidence': {
+            'upper': upper,
+            'lower': lower
+        }
+    }
+    
+    print(f"Created simple fallback prediction for {symbol} with {len(values)} days")
+    return result
