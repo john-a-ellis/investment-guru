@@ -170,10 +170,11 @@ class ARIMAModel(PricePredictionModel):
     """
     Price prediction model using ARIMA (AutoRegressive Integrated Moving Average).
     """
-    def __init__(self, prediction_days=30, order=(5,1,0)):
+    def __init__(self, prediction_days=30, order=(5,1,0), symbol=None):
         super().__init__(model_name="arima", prediction_days=prediction_days)
         self.order = order
-    
+        self.symbol = symbol
+
     def train(self, historical_data):
         """
         Train ARIMA model on historical data.
@@ -290,7 +291,7 @@ class ProphetModel(PricePredictionModel):
     """
     Price prediction model using Facebook Prophet.
     """
-    def __init__(self, prediction_days=30):
+    def __init__(self, prediction_days=30, symbol=None):
         super().__init__(model_name="prophet", prediction_days=prediction_days)
         self.symbol = symbol
     
@@ -425,12 +426,14 @@ class LSTMModel(PricePredictionModel):
     """
     Price prediction model using LSTM (Long Short-Term Memory) neural networks.
     """
-    def __init__(self, prediction_days=30, lookback=60, units=50, epochs=50, batch_size=32):
+    def __init__(self, prediction_days=30, lookback=60, units=50, epochs=50, batch_size=32, symbol=None):
+        
         super().__init__(model_name="lstm", prediction_days=prediction_days)
         self.lookback = lookback
         self.units = units
         self.epochs = epochs
         self.batch_size = batch_size
+        self.symbol = symbol
     
     def _create_sequences(self, data):
         """
@@ -677,15 +680,16 @@ class EnsembleModel(PricePredictionModel):
     """
     Ensemble model that combines predictions from multiple models.
     """
-    def __init__(self, prediction_days=30, models=None, weights=None):
+    def __init__(self, prediction_days=30, models=None, weights=None, symbol=None):
         super().__init__(model_name="ensemble", prediction_days=prediction_days)
+        self.symbol = symbol
         
         # Initialize models if provided, otherwise use default (ARIMA, Prophet, LSTM)
         if models is None:
             self.models = [
-                ARIMAModel(prediction_days=prediction_days),
-                ProphetModel(prediction_days=prediction_days),
-                LSTMModel(prediction_days=prediction_days)
+                ARIMAModel(prediction_days=prediction_days, symbol=symbol),
+                ProphetModel(prediction_days=prediction_days, symbol=symbol),
+                LSTMModel(prediction_days=prediction_days, symbol=symbol)
             ]
         else:
             self.models = models
@@ -1051,7 +1055,7 @@ def get_price_predictions(symbol, days=30):
             return None
         
         # Try to load ensemble model first
-        ensemble = EnsembleModel(prediction_days=days)
+        ensemble = EnsembleModel(prediction_days=days, symbol=symbol)  # Pass the symbol here
         
         if ensemble.load_model():
             # Make predictions using ensemble
@@ -1069,6 +1073,12 @@ def get_price_predictions(symbol, days=30):
                         'lower': predictions.get('Lower', None)
                     }
                 }
+                
+                # Convert confidence intervals to lists if they exist
+                if result['confidence']['upper'] is not None:
+                    result['confidence']['upper'] = predictions['Upper'].tolist()
+                if result['confidence']['lower'] is not None:
+                    result['confidence']['lower'] = predictions['Lower'].tolist()
                 
                 return result
         
@@ -1108,37 +1118,19 @@ def get_price_predictions(symbol, days=30):
                     
                     return result
         
-        # If no models are available, train a new one (Prophet is fastest to train)
-        logger.info(f"No trained models available for {symbol}, training new Prophet model")
-        model = ProphetModel(prediction_days=days)
+        # Use fallback prediction if no models are available
+        logger.info(f"No trained models available for {symbol}, using fallback prediction")
+        return create_fallback_prediction(symbol, days)
         
-        if model.train(historical_data):
-            model.save_model()
-            predictions = model.predict(historical_data, days=days)
-            
-            if not predictions.empty:
-                # Format results
-                result = {
-                    'symbol': symbol,
-                    'model': 'prophet',
-                    'dates': predictions.index.strftime('%Y-%m-%d').tolist(),
-                    'values': predictions['Close'].tolist(),
-                    'confidence': {
-                        'upper': predictions['Upper'].tolist() if 'Upper' in predictions.columns else None,
-                        'lower': predictions['Lower'].tolist() if 'Lower' in predictions.columns else None
-                    }
-                }
-                
-                return result
-        
-        logger.error(f"Could not make predictions for {symbol}")
-        return None
-    
     except Exception as e:
-        logger.error(f"Error getting price predictions for {symbol}: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
+        logger.error(f"Error in get_price_predictions for {symbol}: {e}")
+        
+        # Try the fallback as a last resort
+        try:
+            return create_fallback_prediction(symbol, days)
+        except:
+            logger.error(f"Even fallback prediction failed for {symbol}")
+            return None
     
 def check_prophet_installed():
     """
