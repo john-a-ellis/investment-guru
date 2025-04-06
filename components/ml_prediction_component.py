@@ -561,8 +561,9 @@ def create_trend_analysis_display(analysis_data):
                                 }
                             )),
                             config={'displayModeBar': False},
-                            style={'height': '50px'}
-                        )
+                            # style={'height': '200px'}
+                        ),
+                        # figure.update_layout(width=200, height=200)
                     ])
                 ], width=6)
             ])
@@ -681,8 +682,9 @@ def create_trend_analysis_display(analysis_data):
                                 }
                             )),
                             config={'displayModeBar': False},
-                            style={'height': '200px'}
-                        )
+                            # style={'height': '200px'}
+                        ),
+                        # figure.update_layout(width=200, height=200)
                     ])
                 ], width=6)
             ])
@@ -750,7 +752,7 @@ def create_portfolio_insights(recommendations):
                             }
                         )),
                         config={'displayModeBar': False},
-                        style={'height': '200px'}
+                        # style={'height': '200px'}
                     )
                 ], width=6)
             ])

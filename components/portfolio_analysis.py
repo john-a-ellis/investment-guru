@@ -155,12 +155,13 @@ def get_sector_breakdown(portfolio):
     
     return pd.DataFrame(sector_data)
 
-def calculate_correlation_matrix(portfolio):
+def calculate_correlation_matrix(portfolio, period="1y"):
     """
-    Calculate correlation matrix for portfolio investments
+    Calculate correlation matrix for portfolio investments using FMP API.
     
     Args:
         portfolio (dict): Portfolio data
+        period (str): Time period to calculate for ("1m", "3m", "6m", "1y", "all")
         
     Returns:
         DataFrame: Correlation matrix
@@ -169,37 +170,82 @@ def calculate_correlation_matrix(portfolio):
         return pd.DataFrame()
     
     # Get symbols from portfolio
-    symbols = [inv.get("symbol", "") for inv in portfolio.values()]
+    symbols = []
+    for inv_id, inv in portfolio.items():
+        symbol = inv.get("symbol", "")
+        if symbol:
+            symbols.append(symbol)
     
     if not symbols:
         return pd.DataFrame()
     
-    # Get historical data (1 year) for all symbols
+    # Define date range based on period
     end_date = datetime.now()
-    start_date = end_date - timedelta(days=365)
+    
+    if period == "1m":
+        start_date = end_date - timedelta(days=30)
+    elif period == "3m":
+        start_date = end_date - timedelta(days=90)
+    elif period == "6m":
+        start_date = end_date - timedelta(days=180)
+    elif period == "1y":
+        start_date = end_date - timedelta(days=365)
+    else:  # "all"
+        # Find earliest purchase date in portfolio
+        earliest_date = end_date
+        for inv in portfolio.values():
+            try:
+                purchase_date = datetime.strptime(inv.get("purchase_date", end_date.strftime("%Y-%m-%d")), "%Y-%m-%d")
+                if purchase_date < earliest_date:
+                    earliest_date = purchase_date
+            except Exception as e:
+                print(f"Error parsing purchase date: {e}")
+                continue
+        
+        # Go back at least 1 day before earliest purchase to get a baseline
+        start_date = earliest_date - timedelta(days=1)
     
     try:
-        # Download data for all symbols at once - use auto_adjust=False for consistent column names
-        data = download_yf_data(symbols, start=start_date, end=end_date, auto_adjust=False)
+        # Import FMP API
+        from modules.fmp_api import fmp_api
         
-        # If only one symbol, the structure is different
-        if len(symbols) == 1:
-            # Use 'Close' instead of 'Adj Close' for consistency
-            prices = pd.DataFrame(data['Close'], columns=symbols)
+        # Get historical price data for each symbol using FMP API
+        historical_data = {}
+        for symbol in symbols:
+            try:
+                hist = fmp_api.get_historical_price(symbol, start_date=start_date, end_date=end_date)
+                
+                if not hist.empty and 'Close' in hist.columns:
+                    historical_data[symbol] = hist['Close']
+            except Exception as e:
+                print(f"Error getting historical data for {symbol} from FMP: {e}")
+        
+        # If we have at least 2 symbols with data, calculate correlation
+        if len(historical_data) >= 2:
+            # Create DataFrame with all price data
+            prices_df = pd.DataFrame(historical_data)
+            
+            # Fill missing values with forward fill then backward fill
+            prices_df = prices_df.ffill().bfill()
+            
+            # Calculate daily returns
+            returns_df = prices_df.pct_change().dropna()
+            
+            # Calculate correlation matrix
+            correlation_matrix = returns_df.corr()
+            
+            return correlation_matrix
         else:
-            # Use 'Close' instead of 'Adj Close' for consistency
-            prices = data['Close']
+            print("Not enough symbols with historical data to calculate correlation matrix")
+            return pd.DataFrame()
         
-        # Calculate daily returns
-        returns = prices.pct_change().dropna()
-        
-        # Calculate correlation matrix
-        correlation_matrix = returns.corr()
-        
-        return correlation_matrix
     except Exception as e:
         print(f"Error calculating correlation matrix: {e}")
+        import traceback
+        traceback.print_exc()
         return pd.DataFrame()
+
+
 
 def create_allocation_chart(portfolio):
     """
@@ -306,13 +352,13 @@ def create_sector_chart(portfolio):
 
 def create_correlation_chart(portfolio):
     """
-    Create a heatmap showing correlation between portfolio investments
+    Create a heatmap showing correlation between portfolio investments using FMP API.
     
     Args:
         portfolio (dict): Portfolio data
         
     Returns:
-        Figure: Plotly figure
+        Figure: Plotly figure with correlation heatmap
     """
     # Calculate correlation matrix
     corr_matrix = calculate_correlation_matrix(portfolio)
@@ -357,6 +403,7 @@ def create_correlation_chart(portfolio):
     )
     
     return fig
+
 
 def create_allocation_details(portfolio):
     """
@@ -450,7 +497,7 @@ def create_sector_details(portfolio):
 
 def create_correlation_analysis(portfolio):
     """
-    Create analysis of portfolio correlation
+    Create analysis of portfolio correlation using FMP data.
     
     Args:
         portfolio (dict): Portfolio data
@@ -462,7 +509,7 @@ def create_correlation_analysis(portfolio):
     corr_matrix = calculate_correlation_matrix(portfolio)
     
     if corr_matrix.empty:
-        return html.P("No correlation data available.")
+        return html.P("No correlation data available. Make sure you have at least two investments with sufficient historical data.")
     
     # Find highest and lowest correlations
     highest_corr = pd.DataFrame()
