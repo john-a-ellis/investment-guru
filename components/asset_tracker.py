@@ -46,45 +46,6 @@ def create_asset_tracker_component():
         ])
     ])
 
-# def load_tracked_assets():
-#     """
-#     Load tracked assets from storage file
-#     """
-#     try:
-#         if os.path.exists('data/tracked_assets.json'):
-#             with open('data/tracked_assets.json', 'r') as f:
-#                 return json.load(f)
-#         else:
-#             # Default assets if no file exists
-#             default_assets = {
-#                 "CGL.TO": {"name": "iShares Gold Bullion ETF", "type": "etf", "added_date": datetime.now().strftime("%Y-%m-%d")},
-#                 "XTR.TO": {"name": "iShares Diversified Monthly Income ETF", "type": "etf", "added_date": datetime.now().strftime("%Y-%m-%d")},
-#                 "CWW.TO": {"name": "iShares Global Water Index ETF", "type": "etf", "added_date": datetime.now().strftime("%Y-%m-%d")},
-#                 "MFC.TO": {"name": "Manulife Financial Corp.", "type": "stock", "added_date": datetime.now().strftime("%Y-%m-%d")},
-#                 "TRI.TO": {"name": "Thomson Reuters Corp.", "type": "stock", "added_date": datetime.now().strftime("%Y-%m-%d")},
-#                 "PNG.V": {"name": "Kraken Robotics Inc.", "type": "stock", "added_date": datetime.now().strftime("%Y-%m-%d")}
-#             }
-#             save_tracked_assets(default_assets)
-#             return default_assets
-#     except Exception as e:
-#         print(f"Error loading tracked assets: {e}")
-#         return {}
-
-# def save_tracked_assets(assets):
-#     """
-#     Save tracked assets to storage file
-#     """
-#     try:
-#         os.makedirs('data', exist_ok=True)
-#         with open('data/tracked_assets.json', 'w') as f:
-#             json.dump(assets, f, indent=4)
-#         return True
-#     except Exception as e:
-#         print(f"Error saving tracked assets: {e}")
-#         return False
-
-# Update the create_tracked_assets_table function in components/asset_tracker.py
-
 def create_tracked_assets_table(assets):
     """
     Create a table to display tracked assets with consistent IDs for pattern-matching callbacks

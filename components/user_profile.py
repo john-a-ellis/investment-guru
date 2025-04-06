@@ -67,38 +67,3 @@ def create_user_profile_component():
             html.Div(id="profile-update-status", className="mt-3")
         ])
     ], className="mb-4")
-
-# def load_user_profile():
-#     """
-#     Load user profile from storage file
-#     """
-#     try:
-#         if os.path.exists('data/user_profile.json'):
-#             with open('data/user_profile.json', 'r') as f:
-#                 return json.load(f)
-#         else:
-#             # Default profile if no file exists
-#             default_profile = {
-#                 "risk_level": 5,
-#                 "investment_horizon": "medium",
-#                 "initial_investment": 10000,
-#                 "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-#             }
-#             save_user_profile(default_profile)
-#             return default_profile
-#     except Exception as e:
-#         print(f"Error loading user profile: {e}")
-#         return {}
-
-# def save_user_profile(profile):
-#     """
-#     Save user profile to storage file
-#     """
-#     try:
-#         os.makedirs('data', exist_ok=True)
-#         with open('data/user_profile.json', 'w') as f:
-#             json.dump(profile, f, indent=4)
-#         return True
-#     except Exception as e:
-#         print(f"Error saving user profile: {e}")
-#         return False
