@@ -897,11 +897,33 @@ def train_price_prediction_models(symbol, lookback_period="1y"):
             
         logger.info(f"Starting model training for symbol: {symbol}")
             
-        # Get historical data
-        from modules.fmp_api import fmp_api
-        
-        # Get historical price data
-        historical_data = fmp_api.get_historical_price(symbol, period=lookback_period)
+        # Get historical data - try FMP first, fallback to YFinance
+        try:
+            # Import FMP API
+            from modules.fmp_api import fmp_api
+            
+            # Get historical price data
+            historical_data = fmp_api.get_historical_price(symbol, period=lookback_period)
+            
+            if historical_data.empty:
+                logger.warning(f"No data from FMP for {symbol}, trying direct YFinance approach")
+                # FMP failed or returned empty, try YFinance directly
+                import yfinance as yf
+                ticker = yf.Ticker(symbol)
+                historical_data = ticker.history(period=lookback_period)
+                
+                # Ensure timezone is localized to None (timezone-naive)
+                if historical_data.index.tz is not None:
+                    historical_data.index = historical_data.index.tz_localize(None)
+                
+                logger.info(f"Retrieved {len(historical_data)} rows from YFinance for {symbol}")
+            else:
+                logger.info(f"Retrieved {len(historical_data)} rows from FMP for {symbol}")
+        except Exception as data_error:
+            logger.error(f"Error getting historical data: {data_error}")
+            import traceback
+            traceback.print_exc()
+            return {"error": f"Failed to retrieve historical data: {str(data_error)}"}
         
         if historical_data.empty:
             logger.error(f"No historical data available for {symbol}")

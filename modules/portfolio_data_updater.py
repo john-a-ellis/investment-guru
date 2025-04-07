@@ -10,9 +10,11 @@ def update_portfolio_data():
     including mutual fund support
     """
     # Load portfolio
+    
     portfolio = load_portfolio()
     
     # Import mutual fund provider
+    logger.info("update_portfolio_data in portfolio_data_updater.py is being called")
     from modules.mutual_fund_provider import MutualFundProvider
     mutual_fund_provider = MutualFundProvider()
     

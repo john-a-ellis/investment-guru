@@ -143,75 +143,92 @@ class ModelIntegration:
         self.model_training_status[f"{symbol}_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         # Define training function
-        def _do_training():
+        def _do_training(self, symbol, lookback_period):
+            """
+            Internal method to perform model training for a specific symbol.
+            
+            Args:
+                symbol (str): Asset symbol
+                lookback_period (str): Lookback period for training data
+                
+            Returns:
+                dict: Training status and metrics
+            """
+            print(f"Starting model training for {symbol}")
             try:
-                logger.info(f"Starting model training for {symbol} with {lookback_period} data")
+                # Update training status
+                self.model_training_status[symbol] = "in_progress"
+                self.model_training_status[f"{symbol}_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
-                # Import here to avoid circular imports
+                # Train price prediction models
                 from modules.price_prediction import train_price_prediction_models
+                model_data = train_price_prediction_models(symbol=symbol, lookback_period=lookback_period)
                 
-                # Ensure model directory exists
-                os.makedirs(self.model_dir, exist_ok=True)
-                
-                # Train models - pass period in the correct format for the API
-                if lookback_period == "1y":
-                    api_period = "365days"
-                elif lookback_period == "2y":
-                    api_period = "730days"
-                elif lookback_period == "5y":
-                    api_period = "1825days"
-                else:
-                    api_period = "365days"  # Default
-                    
-                results = train_price_prediction_models(symbol, api_period)
-                
-                if results:
-                    # Log training results
-                    if isinstance(results, dict):
-                        for model_name, model_data in results.items():
-                            metrics = model_data.get('metrics', {})
-                            logger.info(f"Trained {model_name} model for {symbol} with metrics: {metrics}")
-                        
-                        # Update status
-                        self.model_training_status[symbol] = "completed"
-                        self.model_training_status[f"{symbol}_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        
-                        # Save metrics to file
-                        metrics_file = os.path.join(self.data_dir, f"{symbol}_metrics.json")
-                        
-                        metrics_data = {}
-                        for model_name, model_data in results.items():
-                            metrics_data[model_name] = model_data.get('metrics', {})
-                        
-                        with open(metrics_file, 'w') as f:
-                            json.dump(metrics_data, f, indent=4)
-                        
-                        logger.info(f"Saved metrics for {symbol} models to {metrics_file}")
-                    else:
-                        # Handle case where results is not a dictionary (e.g., from simple predict function)
-                        self.model_training_status[symbol] = "completed"
-                        self.model_training_status[f"{symbol}_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        logger.info(f"Model training completed for {symbol} with non-dictionary result")
-                else:
-                    # Update status
+                # Check for errors or problematic model_data format
+                if isinstance(model_data, str) or hasattr(model_data, 'get') and model_data.get('error'):
+                    error_message = model_data if isinstance(model_data, str) else model_data.get('error', 'Unknown error')
+                    print(f"Error training models for {symbol}: {error_message}")
                     self.model_training_status[symbol] = "failed"
-                    logger.error(f"Failed to train models for {symbol}")
+                    self.model_training_status[f"{symbol}_error"] = error_message
+                    return {"status": "failed", "error": error_message}
+                
+                # Handle cases where model_data is not in expected format
+                if not hasattr(model_data, 'get'):
+                    print(f"Warning: Unexpected model_data format for {symbol}: {type(model_data)}")
+                    # Try to convert to dictionary if it's in another format
+                    try:
+                        if isinstance(model_data, str):
+                            # Could be a JSON string, try to parse
+                            import json
+                            model_data = json.loads(model_data)
+                        else:
+                            # Create a basic structure to continue
+                            model_data = {
+                                'prophet': {
+                                    'model': None,
+                                    'metrics': {
+                                        'mae': 0.0,
+                                        'mse': 0.0,
+                                        'rmse': 0.0,
+                                        'mape': 0.0,
+                                        'error': f"Model data in unexpected format: {type(model_data)}"
+                                    }
+                                }
+                            }
+                    except Exception as parse_error:
+                        print(f"Error parsing model data for {symbol}: {parse_error}")
+                        self.model_training_status[symbol] = "failed"
+                        self.model_training_status[f"{symbol}_error"] = f"Model data format error: {parse_error}"
+                        return {"status": "failed", "error": f"Model data format error: {parse_error}"}
+                
+                # Get model metrics
+                metrics = model_data.get('metrics', {})
+                if not metrics and 'prophet' in model_data:
+                    # Try to get metrics from prophet model
+                    metrics = model_data['prophet'].get('metrics', {})
+                
+                # Update training status
+                if 'error' in metrics:
+                    self.model_training_status[symbol] = "failed"
+                    self.model_training_status[f"{symbol}_error"] = metrics['error']
+                    return {"status": "failed", "error": metrics['error']}
+                else:
+                    self.model_training_status[symbol] = "completed"
+                    self.model_training_status[f"{symbol}_metrics"] = metrics
+                    return {"status": "completed", "metrics": metrics}
             
             except Exception as e:
-                # Update status
-                self.model_training_status[symbol] = "failed"
-                logger.error(f"Error training models for {symbol}: {e}")
                 import traceback
                 traceback.print_exc()
-        
-        # Train async or sync based on parameter
-        if async_training:
-            self.training_executor.submit(_do_training)
-            return f"Started asynchronous training for {symbol}"
-        else:
-            _do_training()
-            status = self.model_training_status.get(symbol, "unknown")
-            return f"Completed training for {symbol} with status: {status}"
+                
+                error_message = f"Error in model training process: {str(e)}"
+                print(error_message)
+                
+                self.model_training_status[symbol] = "failed"
+                self.model_training_status[f"{symbol}_error"] = error_message
+                
+                return {"status": "failed", "error": error_message}
+
         
     def get_portfolio_recommendations(self, use_ml=True):
         """

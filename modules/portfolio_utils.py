@@ -211,12 +211,13 @@ def save_user_profile(profile):
 def update_portfolio_data():
     """
     Updates portfolio data with current market prices and performance metrics
-    using FMP API instead of yfinance
+    using both FMP API and YFinance as fallback
     
     Returns:
         dict: Updated portfolio data
     """
     # Get all portfolio investments
+    logger.info("update_portfolio_data in portfolio_utils.py is being called")
     query = "SELECT * FROM portfolio;"
     investments = execute_query(query, fetchall=True)
     
@@ -259,7 +260,7 @@ def update_portfolio_data():
                         "currency": "CAD"
                     }
             else:
-                # For stocks, ETFs, etc., use FMP API
+                # For stocks, ETFs, etc., try FMP API first, then fall back to YFinance
                 quote = fmp_api.get_quote(symbol)
                 
                 if quote and 'price' in quote:
@@ -279,18 +280,59 @@ def update_portfolio_data():
                         "currency": currency
                     }
                 else:
-                    logger.warning(f"No price data available from FMP for {symbol}")
-                    # Use existing price as fallback
-                    purchase_price = next((float(inv['purchase_price']) for inv in investments if inv['symbol'] == symbol), 0)
-                    is_canadian = symbol.endswith(".TO") or symbol.endswith(".V") or "-CAD" in symbol
-                    currency = "CAD" if is_canadian else "USD"
-                    
-                    symbol_prices[symbol] = {
-                        "price": float(purchase_price),
-                        "currency": currency
-                    }
+                    # FMP API failed, try YFinance
+                    logger.warning(f"No price data available from FMP for {symbol}, trying YFinance")
+                    try:
+                        import yfinance as yf
+                        ticker = yf.Ticker(symbol)
+                        # Get the most recent data (1 day)
+                        hist = ticker.history(period="1d")
+                        
+                        if not hist.empty and 'Close' in hist.columns:
+                            current_price = hist['Close'].iloc[-1]
+                            
+                            # Determine currency based on symbol
+                            is_canadian = symbol.endswith(".TO") or symbol.endswith(".V") or "-CAD" in symbol
+                            currency = "CAD" if is_canadian else "USD"
+                            
+                            symbol_prices[symbol] = {
+                                "price": float(current_price),
+                                "currency": currency
+                            }
+                            logger.info(f"Successfully got price for {symbol} from YFinance: {current_price}")
+                        else:
+                            logger.warning(f"No recent price data found for {symbol} in YFinance")
+                            # Use existing price as fallback
+                            purchase_price = next((float(inv['purchase_price']) for inv in investments if inv['symbol'] == symbol), 0)
+                            is_canadian = symbol.endswith(".TO") or symbol.endswith(".V") or "-CAD" in symbol
+                            currency = "CAD" if is_canadian else "USD"
+                            
+                            symbol_prices[symbol] = {
+                                "price": float(purchase_price),
+                                "currency": currency
+                            }
+                    except Exception as yf_error:
+                        logger.error(f"Error getting price from YFinance for {symbol}: {yf_error}")
+                        # Use existing price as fallback
+                        purchase_price = next((float(inv['purchase_price']) for inv in investments if inv['symbol'] == symbol), 0)
+                        is_canadian = symbol.endswith(".TO") or symbol.endswith(".V") or "-CAD" in symbol
+                        currency = "CAD" if is_canadian else "USD"
+                        
+                        symbol_prices[symbol] = {
+                            "price": float(purchase_price),
+                            "currency": currency
+                        }
         except Exception as e:
             logger.error(f"Error getting price for {symbol}: {e}")
+            # Use purchase price as fallback in case of errors
+            purchase_price = next((float(inv['purchase_price']) for inv in investments if inv['symbol'] == symbol), 0)
+            is_canadian = symbol.endswith(".TO") or symbol.endswith(".V") or "-CAD" in symbol
+            currency = "CAD" if is_canadian else "USD"
+            
+            symbol_prices[symbol] = {
+                "price": float(purchase_price),
+                "currency": currency
+            }
     
     # Now update each investment with the consistent price
     for inv in investments:
@@ -325,6 +367,10 @@ def update_portfolio_data():
                 # Calculate percentage gain/loss with safe division
                 gain_loss_percent = (safe_division(current_price, purchase_price, 1) - 1) * 100
                 
+                # Debug log for CGL-C.TO
+                if symbol == "CGL-C.TO":
+                    logger.info(f"Updating CGL-C.TO: shares={shares}, current_price={current_price}, current_value={current_value}")
+                
                 # Update investment details in database
                 update_query = """
                 UPDATE portfolio SET
@@ -350,6 +396,8 @@ def update_portfolio_data():
                 execute_query(update_query, params, commit=True)
         except Exception as e:
             logger.error(f"Error processing investment {inv.get('id', 'unknown')}: {e}")
+            import traceback
+            traceback.print_exc()
     
     # Return updated portfolio
     return load_portfolio()
