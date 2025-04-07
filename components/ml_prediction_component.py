@@ -1113,10 +1113,29 @@ def register_ml_prediction_callbacks(app):
             # Handle nested dictionary format
             for symbol, details in status_dict.items():
                 if isinstance(details, dict) and 'status' in details:
-                    # Get status from nested dict
-                    status = details.get('status', 'unknown')
-                    last_updated = details.get('last_updated', 'never')
-                    error_message = details.get('error', '')
+                    # Get status - handle both string and dictionary formats
+                    if isinstance(details['status'], dict) and 'status' in details['status']:
+                        # The status is a nested dictionary with its own 'status' key
+                        status = details['status']['status']
+                        last_updated = details['status'].get('last_updated', 'never')
+                        
+                        # Extract error message if present
+                        error_message = details['status'].get('error', '')
+                        
+                        # Extract metrics if present
+                        metrics = details['status'].get('metrics', {})
+                        metrics_text = ""
+                        if metrics:
+                            try:
+                                metrics_text = f"MAE: {metrics.get('mae', 0):.2f}, RMSE: {metrics.get('rmse', 0):.2f}"
+                            except:
+                                metrics_text = "Available"
+                    else:
+                        # The status is a simple string
+                        status = details['status']
+                        last_updated = details.get('last_updated', 'never')
+                        error_message = ""
+                        metrics_text = ""
                     
                     # Determine status color
                     status_color = {
@@ -1137,6 +1156,7 @@ def register_ml_prediction_callbacks(app):
                                 )
                             ),
                             html.Td(last_updated),
+                            html.Td(metrics_text),
                             html.Td(
                                 error_message,
                                 className="text-danger" if error_message else ""
@@ -1148,9 +1168,17 @@ def register_ml_prediction_callbacks(app):
             if not rows:
                 symbols = [k for k in status_dict.keys() if not k.endswith("_updated") and not k.endswith("_error")]
                 for symbol in sorted(symbols):
-                    status = status_dict.get(symbol, "unknown")
+                    status_value = status_dict.get(symbol, "unknown")
+                    
+                    # Handle case where status is a dictionary
+                    if isinstance(status_value, dict):
+                        status = status_value.get('status', 'unknown')
+                        error_message = status_value.get('error', '')
+                    else:
+                        status = status_value
+                        error_message = status_dict.get(f"{symbol}_error", "")
+                    
                     last_updated = status_dict.get(f"{symbol}_updated", "never")
-                    error_message = status_dict.get(f"{symbol}_error", "")
                     
                     # Determine status color
                     status_color = {
@@ -1171,6 +1199,7 @@ def register_ml_prediction_callbacks(app):
                                 )
                             ),
                             html.Td(last_updated),
+                            html.Td(""),  # Empty cell for metrics
                             html.Td(
                                 error_message,
                                 className="text-danger" if error_message else ""
@@ -1183,16 +1212,21 @@ def register_ml_prediction_callbacks(app):
                     html.Th("Symbol"),
                     html.Th("Status"),
                     html.Th("Last Updated"),
+                    html.Th("Metrics"),
                     html.Th("Error (if any)")
                 ])),
                 html.Tbody(rows)
             ], bordered=True, striped=True, hover=True)
         
         except Exception as e:
-            # Return error message
+            # Return error message with detailed exception info
             import traceback
-            traceback.print_exc()
-            return html.Div(f"Error retrieving training status: {str(e)}")
+            error_details = traceback.format_exc()
+            print(f"Error retrieving training status: {error_details}")
+            return html.Div([
+                html.P(f"Error retrieving training status: {str(e)}"),
+                html.Pre(error_details, style={"whiteSpace": "pre-wrap", "fontSize": "small", "color": "red"})
+            ])
         
     # Handle sell recommendation clicks
     @app.callback(
