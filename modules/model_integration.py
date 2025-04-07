@@ -122,7 +122,7 @@ class ModelIntegration:
             traceback.print_exc()
             return None
     
-    def train_models_for_symbol(self, symbol, lookback_period="2y"):
+    def train_models_for_symbol(self, symbol, lookback_period="2y", async_training=True):
         """
         Train ML models for a specific symbol. This runs in a separate thread to avoid
         blocking the main application.
@@ -130,11 +130,11 @@ class ModelIntegration:
         Args:
             symbol (str): Asset symbol
             lookback_period (str): Period of historical data to use for training
+            async_training (bool): Whether to run training asynchronously
             
         Returns:
             str: Training status
         """
-        import threading
         from datetime import datetime
         
         # Define the nested _do_training function with improved error handling
@@ -152,8 +152,10 @@ class ModelIntegration:
             print(f"Starting detailed model training for {symbol}")
             try:
                 # Update training status
-                self.model_training_status[symbol] = "in_progress"
-                self.model_training_status[f"{symbol}_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self.model_training_status[symbol] = {
+                    'status': 'in_progress',
+                    'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
                 
                 # Train price prediction models
                 from modules.price_prediction import train_price_prediction_models
@@ -167,11 +169,21 @@ class ModelIntegration:
                 if isinstance(model_data, str):
                     error_message = model_data
                     print(f"Error training models for {symbol}: {error_message}")
+                    self.model_training_status[symbol] = {
+                        'status': 'failed',
+                        'error': error_message,
+                        'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
                     return {"status": "failed", "error": error_message}
                     
                 if isinstance(model_data, dict) and "error" in model_data:
                     error_message = model_data["error"]
                     print(f"Error training models for {symbol}: {error_message}")
+                    self.model_training_status[symbol] = {
+                        'status': 'failed',
+                        'error': error_message,
+                        'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
                     return {"status": "failed", "error": error_message}
                 
                 # Handle cases where model_data is not in expected format
@@ -193,6 +205,11 @@ class ModelIntegration:
                         }
                     except Exception as parse_error:
                         print(f"Error parsing model data for {symbol}: {parse_error}")
+                        self.model_training_status[symbol] = {
+                            'status': 'failed',
+                            'error': f"Model data format error: {parse_error}",
+                            'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }
                         return {"status": "failed", "error": f"Model data format error: {parse_error}"}
                 
                 # Get model metrics - adjust to handle the expected structure from train_price_prediction_models
@@ -208,9 +225,19 @@ class ModelIntegration:
                 if metrics and 'error' in metrics:
                     error_message = metrics['error']
                     print(f"Error in metrics for {symbol}: {error_message}")
+                    self.model_training_status[symbol] = {
+                        'status': 'failed',
+                        'error': error_message,
+                        'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
                     return {"status": "failed", "error": error_message}
                 else:
                     print(f"Training completed successfully for {symbol}")
+                    self.model_training_status[symbol] = {
+                        'status': 'completed',
+                        'metrics': metrics,
+                        'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
                     return {"status": "completed", "metrics": metrics}
             
             except Exception as e:
@@ -220,96 +247,44 @@ class ModelIntegration:
                 error_message = f"Error in model training process: {str(e)}"
                 print(error_message)
                 
-                return {"status": "failed", "error": error_message}
-        
-        # Initialize status
-        self.model_training_status[symbol] = "pending"
-        self.model_training_status[f"{symbol}_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        # Define the training thread function with proper logging
-    def training_thread():
-        try:
-            print(f"Starting training thread for {symbol}")
-            
-            # Create or update the status entry with nested structure
-            if symbol not in self.model_training_status:
                 self.model_training_status[symbol] = {
-                    'symbol': symbol,
-                    'status': 'in_progress',
+                    'status': 'failed',
+                    'error': error_message,
                     'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
-            else:
-                # If it already exists, update the status
-                if isinstance(self.model_training_status[symbol], dict):
-                    self.model_training_status[symbol]['status'] = 'in_progress'
-                    self.model_training_status[symbol]['last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                else:
-                    # Convert to dictionary if it's not already
-                    self.model_training_status[symbol] = {
-                        'symbol': symbol,
-                        'status': 'in_progress',
-                        'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    }
-            
-            # Perform the training
-            result = _do_training(symbol, lookback_period)
-            
-            # Parse the result and update status with nested structure
-            if result.get("status") == "completed":
-                if isinstance(self.model_training_status[symbol], dict):
-                    self.model_training_status[symbol]['status'] = 'completed'
-                    self.model_training_status[symbol]['last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    # Add metrics to the status
-                    if 'metrics' in result:
-                        self.model_training_status[symbol]['metrics'] = result['metrics']
-                else:
-                    self.model_training_status[symbol] = {
-                        'symbol': symbol,
-                        'status': 'completed',
-                        'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    }
-                    # Add metrics to the status
-                    if 'metrics' in result:
-                        self.model_training_status[symbol]['metrics'] = result['metrics']
-                
-                print(f"Training completed successfully for {symbol}")
-            else:
-                error_msg = result.get("error", "Unknown error")
-                
-                if isinstance(self.model_training_status[symbol], dict):
-                    self.model_training_status[symbol]['status'] = 'failed'
-                    self.model_training_status[symbol]['last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    self.model_training_status[symbol]['error'] = error_msg
-                else:
-                    self.model_training_status[symbol] = {
-                        'symbol': symbol,
-                        'status': 'failed',
-                        'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        'error': error_msg
-                    }
-                
-                print(f"Training failed for {symbol}: {error_msg}")
-                
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            
-            # Log the error and update status
-            error_message = f"Exception in training thread: {str(e)}"
-            print(error_message)
-            
-            if isinstance(self.model_training_status[symbol], dict):
-                self.model_training_status[symbol]['status'] = 'failed'
-                self.model_training_status[symbol]['last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                self.model_training_status[symbol]['error'] = error_message
-            else:
-                self.model_training_status[symbol] = {
-                    'symbol': symbol,
-                    'status': 'failed',
-                    'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    'error': error_message
-            }
+                return {"status": "failed", "error": error_message}
         
+        # Initialize status with consistent nested structure
+        self.model_training_status[symbol] = {
+            'status': 'pending',
+            'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        # Define a wrapper function that will be run in a separate thread
+        def training_thread_wrapper():
+            try:
+                print(f"Starting training thread for {symbol}")
+                _do_training(symbol, lookback_period)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                print(f"Exception in training thread wrapper: {str(e)}")
+                self.model_training_status[symbol] = {
+                    'status': 'failed',
+                    'error': f"Thread error: {str(e)}",
+                    'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+        
+        # Run training either synchronously or asynchronously
+        if async_training:
+            # Submit the training task to the thread pool
+            self.training_executor.submit(training_thread_wrapper)
+            return "pending"  # Status will be updated by the thread
+        else:
+            # Run synchronously (mainly for testing)
+            result = _do_training(symbol, lookback_period)
+            return result.get("status", "failed")
+            
     def get_portfolio_recommendations(self, use_ml=True):
         """
         Generate portfolio recommendations based on ML models and trend analysis.
