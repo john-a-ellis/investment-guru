@@ -1093,66 +1093,107 @@ def register_ml_prediction_callbacks(app):
     @app.callback(
         Output("ml-training-status-table", "children"),
         [Input("ml-update-interval", "n_intervals"),
-         Input("ml-training-status", "children")]
+        Input("ml-training-status", "children")]
     )
     def update_training_status(n_intervals, training_status):
         try:
             # Get model training status for all symbols
             status_dict = model_integration.get_model_training_status()
             
+            # Debug output to see the status
+            print(f"Current training status: {status_dict}")
+            
+            # Make sure the status dict has data
+            if not status_dict:
+                return html.P("No model training data available.")
+            
             # Create status table
-            return create_training_status_table(status_dict)
+            rows = []
+            
+            # Handle nested dictionary format
+            for symbol, details in status_dict.items():
+                if isinstance(details, dict) and 'status' in details:
+                    # Get status from nested dict
+                    status = details.get('status', 'unknown')
+                    last_updated = details.get('last_updated', 'never')
+                    error_message = details.get('error', '')
+                    
+                    # Determine status color
+                    status_color = {
+                        "completed": "success",
+                        "in_progress": "warning", 
+                        "pending": "info",
+                        "failed": "danger",
+                        "unknown": "secondary"
+                    }.get(status, "secondary")
+                    
+                    rows.append(
+                        html.Tr([
+                            html.Td(symbol),
+                            html.Td(
+                                html.Span(
+                                    status.replace('_', ' ').title(),
+                                    className=f"text-{status_color}"
+                                )
+                            ),
+                            html.Td(last_updated),
+                            html.Td(
+                                error_message,
+                                className="text-danger" if error_message else ""
+                            )
+                        ])
+                    )
+            
+            # If no rows were created, try the original flat format
+            if not rows:
+                symbols = [k for k in status_dict.keys() if not k.endswith("_updated") and not k.endswith("_error")]
+                for symbol in sorted(symbols):
+                    status = status_dict.get(symbol, "unknown")
+                    last_updated = status_dict.get(f"{symbol}_updated", "never")
+                    error_message = status_dict.get(f"{symbol}_error", "")
+                    
+                    # Determine status color
+                    status_color = {
+                        "completed": "success",
+                        "in_progress": "warning", 
+                        "pending": "info",
+                        "failed": "danger",
+                        "unknown": "secondary"
+                    }.get(status, "secondary")
+                    
+                    rows.append(
+                        html.Tr([
+                            html.Td(symbol),
+                            html.Td(
+                                html.Span(
+                                    status.replace('_', ' ').title(),
+                                    className=f"text-{status_color}"
+                                )
+                            ),
+                            html.Td(last_updated),
+                            html.Td(
+                                error_message,
+                                className="text-danger" if error_message else ""
+                            )
+                        ])
+                    )
+            
+            return dbc.Table([
+                html.Thead(html.Tr([
+                    html.Th("Symbol"),
+                    html.Th("Status"),
+                    html.Th("Last Updated"),
+                    html.Th("Error (if any)")
+                ])),
+                html.Tbody(rows)
+            ], bordered=True, striped=True, hover=True)
         
         except Exception as e:
             # Return error message
+            import traceback
+            traceback.print_exc()
             return html.Div(f"Error retrieving training status: {str(e)}")
-    
-    # Handle buy recommendation clicks
-    @app.callback(
-        Output("ml-portfolio-insights", "children", allow_duplicate=True),
-        Input({"type": "buy-rec-button", "symbol": dash.ALL}, "n_clicks"),
-        State({"type": "buy-rec-button", "symbol": dash.ALL}, "id"),
-        prevent_initial_call='initial_duplicate'
-    )
-    def handle_buy_recommendation(n_clicks_list, button_ids):
-        # Check if any button was clicked
-        if not any(n for n in n_clicks_list if n):
-            raise dash.exceptions.PreventUpdate
         
-        # Find which button was clicked
-        clicked_idx = next((i for i, n in enumerate(n_clicks_list) if n), None)
-        if clicked_idx is None:
-            raise dash.exceptions.PreventUpdate
-        
-        # Get the symbol
-        symbol = button_ids[clicked_idx]["symbol"]
-        
-        # Record transaction (placeholder - you should integrate with your transaction system)
-        # This is where you would integrate with your existing transaction_recorder functionality
-        try:
-            # Import FMP API to get current price
-            from modules.fmp_api import fmp_api
-            quote = fmp_api.get_quote(symbol)
-            
-            if quote and 'price' in quote:
-                current_price = quote['price']
-                
-                # Use the record_transaction function from your portfolio_utils
-                from modules.portfolio_utils import record_transaction
-                
-                # Default to buying 1 share - in a real app, you'd want a quantity input
-                success = record_transaction(symbol, "buy", current_price, 1)
-                
-                if success:
-                    return dbc.Alert(f"Successfully added buy transaction for {symbol}", color="success")
-                else:
-                    return dbc.Alert(f"Failed to add transaction for {symbol}", color="danger")
-            else:
-                return dbc.Alert(f"Could not get current price for {symbol}", color="warning")
-        
-        except Exception as e:
-            return dbc.Alert(f"Error creating transaction: {str(e)}", color="danger")
-    
     # Handle sell recommendation clicks
     @app.callback(
         Output("ml-portfolio-insights", "children", allow_duplicate=True),

@@ -122,28 +122,23 @@ class ModelIntegration:
             traceback.print_exc()
             return None
     
-    def train_models_for_symbol(self, symbol, lookback_period="2y", async_training=True):
+    def train_models_for_symbol(self, symbol, lookback_period="2y"):
         """
-        Train prediction models for a specific symbol.
+        Train ML models for a specific symbol. This runs in a separate thread to avoid
+        blocking the main application.
         
         Args:
-            symbol (str): Asset symbol to train models for
-            lookback_period (str): Historical period to use for training
-            async_training (bool): Whether to train asynchronously in background
-        
+            symbol (str): Asset symbol
+            lookback_period (str): Period of historical data to use for training
+            
         Returns:
-            str: Training status message
+            str: Training status
         """
-        # Check if training is already in progress
-        if self.model_training_status.get(symbol) == "in_progress":
-            return f"Training for {symbol} is already in progress"
+        import threading
+        from datetime import datetime
         
-        # Update status
-        self.model_training_status[symbol] = "in_progress"
-        self.model_training_status[f"{symbol}_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        # Define training function
-        def _do_training(self, symbol, lookback_period):
+        # Define the nested _do_training function with improved error handling
+        def _do_training(symbol, lookback_period):
             """
             Internal method to perform model training for a specific symbol.
             
@@ -154,7 +149,7 @@ class ModelIntegration:
             Returns:
                 dict: Training status and metrics
             """
-            print(f"Starting model training for {symbol}")
+            print(f"Starting detailed model training for {symbol}")
             try:
                 # Update training status
                 self.model_training_status[symbol] = "in_progress"
@@ -164,57 +159,58 @@ class ModelIntegration:
                 from modules.price_prediction import train_price_prediction_models
                 model_data = train_price_prediction_models(symbol=symbol, lookback_period=lookback_period)
                 
+                # Debug output to see what's coming back
+                print(f"Received model_data type: {type(model_data)}")
+                print(f"Model data content: {model_data}")
+                
                 # Check for errors or problematic model_data format
-                if isinstance(model_data, str) or hasattr(model_data, 'get') and model_data.get('error'):
-                    error_message = model_data if isinstance(model_data, str) else model_data.get('error', 'Unknown error')
+                if isinstance(model_data, str):
+                    error_message = model_data
                     print(f"Error training models for {symbol}: {error_message}")
-                    self.model_training_status[symbol] = "failed"
-                    self.model_training_status[f"{symbol}_error"] = error_message
+                    return {"status": "failed", "error": error_message}
+                    
+                if isinstance(model_data, dict) and "error" in model_data:
+                    error_message = model_data["error"]
+                    print(f"Error training models for {symbol}: {error_message}")
                     return {"status": "failed", "error": error_message}
                 
                 # Handle cases where model_data is not in expected format
-                if not hasattr(model_data, 'get'):
+                if not isinstance(model_data, dict):
                     print(f"Warning: Unexpected model_data format for {symbol}: {type(model_data)}")
-                    # Try to convert to dictionary if it's in another format
                     try:
-                        if isinstance(model_data, str):
-                            # Could be a JSON string, try to parse
-                            import json
-                            model_data = json.loads(model_data)
-                        else:
-                            # Create a basic structure to continue
-                            model_data = {
-                                'prophet': {
-                                    'model': None,
-                                    'metrics': {
-                                        'mae': 0.0,
-                                        'mse': 0.0,
-                                        'rmse': 0.0,
-                                        'mape': 0.0,
-                                        'error': f"Model data in unexpected format: {type(model_data)}"
-                                    }
+                        # Create a basic structure to continue
+                        model_data = {
+                            'prophet': {
+                                'model': None,
+                                'metrics': {
+                                    'mae': 0.0,
+                                    'mse': 0.0,
+                                    'rmse': 0.0,
+                                    'mape': 0.0,
+                                    'error': f"Model data in unexpected format: {type(model_data)}"
                                 }
                             }
+                        }
                     except Exception as parse_error:
                         print(f"Error parsing model data for {symbol}: {parse_error}")
-                        self.model_training_status[symbol] = "failed"
-                        self.model_training_status[f"{symbol}_error"] = f"Model data format error: {parse_error}"
                         return {"status": "failed", "error": f"Model data format error: {parse_error}"}
                 
-                # Get model metrics
-                metrics = model_data.get('metrics', {})
-                if not metrics and 'prophet' in model_data:
-                    # Try to get metrics from prophet model
-                    metrics = model_data['prophet'].get('metrics', {})
-                
-                # Update training status
-                if 'error' in metrics:
-                    self.model_training_status[symbol] = "failed"
-                    self.model_training_status[f"{symbol}_error"] = metrics['error']
-                    return {"status": "failed", "error": metrics['error']}
+                # Get model metrics - adjust to handle the expected structure from train_price_prediction_models
+                if 'prophet' in model_data and isinstance(model_data['prophet'], dict) and 'metrics' in model_data['prophet']:
+                    metrics = model_data['prophet']['metrics']
                 else:
-                    self.model_training_status[symbol] = "completed"
-                    self.model_training_status[f"{symbol}_metrics"] = metrics
+                    metrics = model_data.get('metrics', {})
+                
+                # Debug output
+                print(f"Metrics for {symbol}: {metrics}")
+                
+                # Check if we have valid metrics
+                if metrics and 'error' in metrics:
+                    error_message = metrics['error']
+                    print(f"Error in metrics for {symbol}: {error_message}")
+                    return {"status": "failed", "error": error_message}
+                else:
+                    print(f"Training completed successfully for {symbol}")
                     return {"status": "completed", "metrics": metrics}
             
             except Exception as e:
@@ -224,11 +220,95 @@ class ModelIntegration:
                 error_message = f"Error in model training process: {str(e)}"
                 print(error_message)
                 
-                self.model_training_status[symbol] = "failed"
-                self.model_training_status[f"{symbol}_error"] = error_message
-                
                 return {"status": "failed", "error": error_message}
-
+        
+        # Initialize status
+        self.model_training_status[symbol] = "pending"
+        self.model_training_status[f"{symbol}_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Define the training thread function with proper logging
+    def training_thread():
+        try:
+            print(f"Starting training thread for {symbol}")
+            
+            # Create or update the status entry with nested structure
+            if symbol not in self.model_training_status:
+                self.model_training_status[symbol] = {
+                    'symbol': symbol,
+                    'status': 'in_progress',
+                    'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+            else:
+                # If it already exists, update the status
+                if isinstance(self.model_training_status[symbol], dict):
+                    self.model_training_status[symbol]['status'] = 'in_progress'
+                    self.model_training_status[symbol]['last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    # Convert to dictionary if it's not already
+                    self.model_training_status[symbol] = {
+                        'symbol': symbol,
+                        'status': 'in_progress',
+                        'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
+            
+            # Perform the training
+            result = _do_training(symbol, lookback_period)
+            
+            # Parse the result and update status with nested structure
+            if result.get("status") == "completed":
+                if isinstance(self.model_training_status[symbol], dict):
+                    self.model_training_status[symbol]['status'] = 'completed'
+                    self.model_training_status[symbol]['last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    # Add metrics to the status
+                    if 'metrics' in result:
+                        self.model_training_status[symbol]['metrics'] = result['metrics']
+                else:
+                    self.model_training_status[symbol] = {
+                        'symbol': symbol,
+                        'status': 'completed',
+                        'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                    # Add metrics to the status
+                    if 'metrics' in result:
+                        self.model_training_status[symbol]['metrics'] = result['metrics']
+                
+                print(f"Training completed successfully for {symbol}")
+            else:
+                error_msg = result.get("error", "Unknown error")
+                
+                if isinstance(self.model_training_status[symbol], dict):
+                    self.model_training_status[symbol]['status'] = 'failed'
+                    self.model_training_status[symbol]['last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    self.model_training_status[symbol]['error'] = error_msg
+                else:
+                    self.model_training_status[symbol] = {
+                        'symbol': symbol,
+                        'status': 'failed',
+                        'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        'error': error_msg
+                    }
+                
+                print(f"Training failed for {symbol}: {error_msg}")
+                
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            
+            # Log the error and update status
+            error_message = f"Exception in training thread: {str(e)}"
+            print(error_message)
+            
+            if isinstance(self.model_training_status[symbol], dict):
+                self.model_training_status[symbol]['status'] = 'failed'
+                self.model_training_status[symbol]['last_updated'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self.model_training_status[symbol]['error'] = error_message
+            else:
+                self.model_training_status[symbol] = {
+                    'symbol': symbol,
+                    'status': 'failed',
+                    'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    'error': error_message
+            }
         
     def get_portfolio_recommendations(self, use_ml=True):
         """
