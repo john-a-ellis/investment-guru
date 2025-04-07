@@ -746,6 +746,10 @@ def calculate_twrr(portfolio, transactions=None, period="3m"):
     sub_period_returns = []
     portfolio_values = historical_data['Total']
     
+    # Ensure historical data is timezone-naive
+    if portfolio_values.index.tz is not None:
+        portfolio_values.index = portfolio_values.index.tz_localize(None)
+    
     # Create a data structure for significant dates (transactions)
     significant_dates = []
     for transaction in period_transactions:
@@ -755,8 +759,10 @@ def calculate_twrr(portfolio, transactions=None, period="3m"):
             
             # Fix: Convert date object to datetime if needed
             if isinstance(tx_date, datetime):
-                # Already a datetime object, use it
+                # Already a datetime object, use it but ensure it's timezone-naive
                 tx_datetime = tx_date
+                if hasattr(tx_datetime, 'tz') and tx_datetime.tz is not None:
+                    tx_datetime = tx_datetime.replace(tzinfo=None)
             else:
                 # If it's a string or date object, convert properly to pandas Timestamp
                 # which is compatible with the DatetimeIndex used in portfolio_values
@@ -765,6 +771,10 @@ def calculate_twrr(portfolio, transactions=None, period="3m"):
                         tx_datetime = pd.Timestamp(tx_date)
                     else:  # Assume it's a date object
                         tx_datetime = pd.Timestamp(tx_date.year, tx_date.month, tx_date.day)
+                    
+                    # Ensure timezone-naive
+                    if tx_datetime.tz is not None:
+                        tx_datetime = tx_datetime.tz_localize(None)
                 except Exception as e:
                     print(f"Error converting transaction date: {e}")
                     continue
@@ -791,7 +801,6 @@ def calculate_twrr(portfolio, transactions=None, period="3m"):
     
     significant_dates = unique_dates
     
-    # Rest of function remains the same...
     # If no significant dates, just calculate the total return
     if not significant_dates:
         if len(portfolio_values) >= 2:

@@ -116,7 +116,7 @@ class FMPApi:
     
     def get_historical_price(self, symbol, period=None, start_date=None, end_date=None):
         """
-        Get historical price data for a symbol with caching.
+        Get historical price data for a symbol with caching and YFinance fallback.
         
         Args:
             symbol (str): Stock symbol
@@ -143,7 +143,7 @@ class FMPApi:
             if time.time() - cache_time < self.cache_expiry['daily_price']:
                 return data
         
-        # Handle period parameter
+        # Handle period parameter for FMP API
         if period:
             # Convert period to 'from' parameter for FMP API
             days = 0
@@ -183,7 +183,7 @@ class FMPApi:
             endpoint = f"historical-price-full/{symbol}"
             params = {'from': '365days'}
         
-        # Make the request
+        # Make the request to FMP API
         response = self._make_request(endpoint, params)
         
         # Process the response
@@ -219,8 +219,40 @@ class FMPApi:
             
             return df
         else:
-            # Return empty DataFrame on failure
-            return pd.DataFrame()
+            # FMP API couldn't find data - try YFinance as fallback
+            logger.info(f"Data for {symbol} not found in FMP API, trying YFinance as fallback")
+            
+            try:
+                import yfinance as yf
+                from modules.yf_utils import get_ticker_history
+                
+                # Convert period to YFinance format if needed
+                yf_period = period
+                if not yf_period and start_date and end_date:
+                    # Use start and end dates instead of period
+                    yf_start = pd.to_datetime(start_date)
+                    yf_end = pd.to_datetime(end_date)
+                    hist = get_ticker_history(symbol, start=yf_start, end=yf_end)
+                else:
+                    # Use period parameter
+                    hist = get_ticker_history(symbol, period=yf_period)
+                
+                if not hist.empty:
+                    # IMPORTANT FIX: Convert to timezone-naive DatetimeIndex to match FMP data
+                    # This ensures compatibility with the rest of the application
+                    if hist.index.tz is not None:
+                        hist.index = hist.index.tz_localize(None)
+                    
+                    # Cache the result
+                    self.price_cache[cache_key] = (time.time(), hist)
+                    logger.info(f"Successfully retrieved {symbol} data from YFinance")
+                    return hist
+                else:
+                    logger.warning(f"No data found for {symbol} in YFinance either")
+                    return pd.DataFrame()
+            except Exception as e:
+                logger.error(f"Error getting data from YFinance for {symbol}: {e}")
+                return pd.DataFrame()
     
     def get_quote(self, symbol):
         """

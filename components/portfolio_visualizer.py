@@ -41,7 +41,6 @@ def get_portfolio_historical_data(portfolio, period="3m"):
         DataFrame: Historical portfolio data
     """
     
-    
     if not portfolio:
         return pd.DataFrame()
     
@@ -110,6 +109,10 @@ def get_portfolio_historical_data(portfolio, period="3m"):
                 # Get historical price data from FMP API
                 hist = fmp_api.get_historical_price(symbol, start_date=start_date, end_date=end_date)
                 
+                # Ensure timezone consistency by converting to timezone-naive if needed
+                if hist.index.tz is not None:
+                    hist.index = hist.index.tz_localize(None)
+                
                 if not hist.empty and 'Close' in hist.columns:
                     regular_symbol_data[symbol] = hist['Close']
             except Exception as e:
@@ -123,6 +126,11 @@ def get_portfolio_historical_data(portfolio, period="3m"):
         for symbol in mutual_fund_symbols:
             try:
                 fund_hist = mutual_fund_provider.get_historical_data(symbol, start_date, end_date)
+                
+                # Ensure timezone consistency by converting to timezone-naive if needed
+                if fund_hist.index.tz is not None:
+                    fund_hist.index = fund_hist.index.tz_localize(None)
+                
                 if not fund_hist.empty and 'Close' in fund_hist.columns:
                     mutual_fund_data[symbol] = fund_hist['Close']
             except Exception as e:
@@ -193,6 +201,10 @@ def get_portfolio_historical_data(portfolio, period="3m"):
         from modules.portfolio_utils import get_historical_usd_to_cad_rates
         exchange_rates = get_historical_usd_to_cad_rates(start_date, end_date)
         
+        # Ensure exchange rates are timezone-naive to match our other data
+        if exchange_rates.index.tz is not None:
+            exchange_rates.index = exchange_rates.index.tz_localize(None)
+        
         # Convert USD to CAD
         if 'Total_USD' in portfolio_values.columns and (portfolio_values['Total_USD'] > 0).any():
             portfolio_values['USD_in_CAD'] = 0
@@ -218,6 +230,7 @@ def get_portfolio_historical_data(portfolio, period="3m"):
             portfolio_values['Total'] = portfolio_values['Total_CAD']
     except Exception as e:
         print(f"Error converting currencies: {e}")
+        import traceback
         traceback.print_exc()
         
         # Fallback - just use CAD values
@@ -228,10 +241,16 @@ def get_portfolio_historical_data(portfolio, period="3m"):
         # Get TSX data from FMP API
         tsx_hist = fmp_api.get_historical_price("^GSPTSE", start_date=start_date, end_date=end_date)
         
+        # Ensure timezone consistency
+        if tsx_hist.index.tz is not None:
+            tsx_hist.index = tsx_hist.index.tz_localize(None)
+        
         if not tsx_hist.empty and 'Close' in tsx_hist.columns:
             portfolio_values['TSX'] = tsx_hist['Close']
     except Exception as e:
         print(f"Error adding benchmark data: {e}")
+        import traceback
+        traceback.print_exc()
     
     # Resample data to the chosen frequency
     if resample_freq != 'D':
