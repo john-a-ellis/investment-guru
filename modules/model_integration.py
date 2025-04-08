@@ -18,6 +18,7 @@ from modules.price_prediction import get_price_predictions, train_price_predicti
 from modules.trend_analysis import TrendAnalyzer
 from modules.data_collector import DataCollector
 from modules.portfolio_utils import load_portfolio
+from modules.price_prediction import ProphetModel
 
 # Configure logging
 logging.basicConfig(
@@ -757,3 +758,108 @@ class ModelIntegration:
                     }
             
             return status_dict
+        
+    def get_backtesting_recommendation_signal(self, symbol, historical_data_slice):
+        """
+        Generates a simple Buy/Sell/Hold signal for backtesting based on historical data slice.
+
+        Args:
+            symbol (str): Asset symbol.
+            historical_data_slice (pd.DataFrame): DataFrame with historical OHLCV data up to
+                                                  the day *before* the decision date.
+
+        Returns:
+            str: 'BUY', 'SELL', or 'HOLD'.
+        """
+        try:
+            # --- 1. Perform Trend Analysis on the Slice ---
+            # Ensure TrendAnalyzer is initialized (it's in __init__)
+            if not hasattr(self, 'trend_analyzer'): self.trend_analyzer = TrendAnalyzer()
+
+            trend_analysis = self.trend_analyzer.detect_trend(historical_data_slice)
+            support_resistance = self.trend_analyzer.identify_support_resistance(historical_data_slice)
+            patterns = self.trend_analyzer.detect_patterns(historical_data_slice)
+            breakout = self.trend_analyzer.predict_breakout(historical_data_slice, support_resistance)
+            market_regime = self.trend_analyzer.get_market_regime(historical_data_slice)
+
+            # --- 2. Get Price Prediction (using pre-trained model) ---
+            prediction_direction = 'neutral'
+            prediction_confidence = 0
+            expected_return = 0
+            predicted_value = None
+
+            # Load the pre-trained Prophet model for this symbol
+            # NOTE: Assumes model was trained *before* the backtest period started.
+            # For realistic backtests, periodic retraining within the loop might be needed.
+            prophet_predictor = ProphetModel(symbol=symbol, prediction_days=1) # Predict just 1 day ahead for signal
+            if prophet_predictor.load_model():
+                # Predict using the historical slice
+                # IMPORTANT: DO NOT use the "sanity check" override here. Test the raw model output.
+                raw_predictions = prophet_predictor.predict(historical_data_slice, days=1)
+
+                if not raw_predictions.empty:
+                    predicted_value = raw_predictions['Close'].iloc[0]
+                    current_price = historical_data_slice['Close'].iloc[-1]
+
+                    if current_price > 0:
+                        expected_return = ((predicted_value / current_price) - 1) * 100
+                        if expected_return > 1.0: # Example threshold for BUY signal based on 1-day prediction
+                            prediction_direction = 'bullish'
+                            prediction_confidence = min(100, expected_return * 20) # Scale confidence
+                        elif expected_return < -1.0: # Example threshold for SELL
+                            prediction_direction = 'bearish'
+                            prediction_confidence = min(100, abs(expected_return) * 20)
+                        else:
+                            prediction_direction = 'neutral'
+                            prediction_confidence = 100 - (abs(expected_return) * 20)
+
+            # --- 3. Combine Factors for Simple Signal (Adapt your _generate_recommendation logic) ---
+            # This is a simplified version of your _generate_recommendation heuristic logic.
+            # Adapt this scoring based on your actual strategy rules.
+
+            buy_score = 0
+            sell_score = 0
+
+            # Trend Factor
+            if trend_analysis.get('overall_trend') in ['bullish', 'strong_bullish']:
+                buy_score += trend_analysis.get('trend_strength', 50) * 0.3 # Weight 30%
+            elif trend_analysis.get('overall_trend') in ['bearish', 'strong_bearish']:
+                sell_score += trend_analysis.get('trend_strength', 50) * 0.3
+
+            # Breakout Factor
+            if breakout.get('prediction') == 'bullish':
+                buy_score += breakout.get('confidence', 0) * 0.2 # Weight 20%
+            elif breakout.get('prediction') == 'bearish':
+                sell_score += breakout.get('confidence', 0) * 0.2
+
+            # Prediction Factor
+            if prediction_direction == 'bullish':
+                 buy_score += prediction_confidence * 0.3 # Weight 30%
+            elif prediction_direction == 'bearish':
+                 sell_score += prediction_confidence * 0.3
+
+            # Pattern Factor (Simple example: add bonus for strong patterns)
+            strong_bull_pattern = any(p['strength'] > 80 for p in patterns.get('patterns', []) if p['type'] == 'bullish' and p['days_ago'] <= 2)
+            strong_bear_pattern = any(p['strength'] > 80 for p in patterns.get('patterns', []) if p['type'] == 'bearish' and p['days_ago'] <= 2)
+            if strong_bull_pattern:
+                buy_score += 15 # Bonus score
+            if strong_bear_pattern:
+                sell_score += 15
+
+            # --- 4. Determine Final Signal ---
+            # Define thresholds for BUY/SELL signals
+            buy_threshold = 55 # Example threshold
+            sell_threshold = 55 # Example threshold
+
+            if buy_score > sell_score and buy_score > buy_threshold:
+                return 'BUY'
+            elif sell_score > buy_score and sell_score > sell_threshold:
+                return 'SELL'
+            else:
+                return 'HOLD'
+
+        except Exception as e:
+            logger.error(f"Error generating backtesting signal for {symbol}: {e}")
+            import traceback
+            traceback.print_exc()
+            return 'HOLD' # Default to HOLD on error

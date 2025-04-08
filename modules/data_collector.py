@@ -46,7 +46,7 @@ class DataCollector:
         """
         if symbols is None:
             # Load tracked assets
-            from components.asset_tracker import load_tracked_assets
+            from modules.portfolio_utils import load_tracked_assets
             tracked_assets = load_tracked_assets()
             symbols = list(tracked_assets.keys())
             

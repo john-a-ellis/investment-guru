@@ -78,7 +78,7 @@ class RecommendationEngine:
         Get available assets from tracked assets and add other recommendations
         """
         try:
-            from components.asset_tracker import load_tracked_assets
+            from modules.portfolio_utils import load_tracked_assets
             tracked_assets = load_tracked_assets()
         except Exception as e:
             print(f"Error loading tracked assets: {e}")
