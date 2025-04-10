@@ -12,6 +12,7 @@ import os
 import traceback
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error
+from modules.data_provider import data_provider
 
 # Configure logging
 logging.basicConfig(
@@ -121,10 +122,10 @@ class ARIMAModel(PricePredictionModel):
             data = historical_data.sort_index()
             
             # Extract close prices
-            if 'Close' in data.columns:
-                close_prices = data['Close']
+            if 'close' in data.columns:
+                close_prices = data['close']
             else:
-                raise ValueError("Data must contain 'Close' column")
+                raise ValueError("Data must contain 'close' column")
             
             # Train ARIMA model
             self.model = ARIMA(close_prices, order=self.order)
@@ -167,7 +168,7 @@ class ARIMAModel(PricePredictionModel):
             forecast = self.model.forecast(steps=pred_days)
             
             # Create a DataFrame with predictions
-            predictions = pd.DataFrame(forecast, index=future_dates, columns=['Close'])
+            predictions = pd.DataFrame(forecast, index=future_dates, columns=['close'])
             
             return predictions
         
@@ -197,12 +198,12 @@ class ARIMAModel(PricePredictionModel):
             )
             
             # Calculate evaluation metrics
-            mae = mean_absolute_error(test_data['Close'], predictions)
-            mse = mean_squared_error(test_data['Close'], predictions)
+            mae = mean_absolute_error(test_data['close'], predictions)
+            mse = mean_squared_error(test_data['close'], predictions)
             rmse = np.sqrt(mse)
             
             # Calculate MAPE (Mean Absolute Percentage Error)
-            mape = np.mean(np.abs((test_data['Close'] - predictions) / test_data['Close'])) * 100
+            mape = np.mean(np.abs((test_data['close'] - predictions) / test_data['close'])) * 100
             
             return {
                 'mae': mae,
@@ -241,14 +242,14 @@ class ProphetModel(PricePredictionModel):
             data = historical_data.sort_index().copy()
             
             # Extract close prices
-            if 'Close' in data.columns:
+            if 'close' in data.columns:
                 # Prophet requires 'ds' (date) and 'y' (target) columns
                 prophet_data = pd.DataFrame({
                     'ds': data.index,
-                    'y': data['Close']
+                    'y': data['close']
                 })
             else:
-                raise ValueError("Data must contain 'Close' column")
+                raise ValueError("Data must contain 'close' column")
             
             # Train Prophet model
             self.model = Prophet(
@@ -296,7 +297,7 @@ class ProphetModel(PricePredictionModel):
             # Create prophet data
             prophet_data = pd.DataFrame({
                 'ds': hist_data.index,
-                'y': hist_data['Close']
+                'y': hist_data['close']
             })
             
             # Create future dataframe
@@ -900,10 +901,10 @@ def train_price_prediction_models(symbol, lookback_period="1y"):
         # Get historical data - try FMP first, fallback to YFinance
         try:
             # Import FMP API
-            from modules.fmp_api import fmp_api
+            # from modules.fmp_api import fmp_api
             
             # Get historical price data
-            historical_data = fmp_api.get_historical_price(symbol, period=lookback_period)
+            historical_data = data_provider.get_historical_price(symbol, period=lookback_period)
             
             if historical_data.empty:
                 logger.warning(f"No data from FMP for {symbol}, trying direct YFinance approach")
@@ -1051,158 +1052,119 @@ def train_price_prediction_models(symbol, lookback_period="1y"):
 def get_price_predictions(symbol, days=30):
     """
     Get price predictions for a specific symbol using the best available model.
-    
+    Simplified by removing the complex sanity check block.
+
     Args:
         symbol (str): Stock symbol to predict
         days (int): Number of days to predict
-    
+
     Returns:
         dict: Predictions with dates, values, and confidence intervals
     """
     print(f"get_price_predictions called with symbol: {symbol}, days: {days}")
-    
+
     if not symbol:
         logger.error("Symbol parameter cannot be None or empty")
         return None
-        
+
     try:
         # Get recent historical data
-        from modules.fmp_api import fmp_api
-        historical_data = fmp_api.get_historical_price(symbol, period="1y")
-        
+        historical_data = data_provider.get_historical_price(symbol, period="1y")
+
         if historical_data.empty:
             logger.error(f"No historical data available for {symbol}")
-            return None
-        
-        # Store current price for scaling reference
-        current_price = historical_data['Close'].iloc[-1]
+            return create_simple_fallback(symbol, days) # Use simple fallback if no history
+
+        # Store current price for reference (but don't use for complex adjustments here)
+        current_price = historical_data['close'].iloc[-1]
         print(f"Current price for {symbol}: {current_price}")
-        
+
         # Initialize ProphetModel directly
         prophet_model = ProphetModel(prediction_days=days, symbol=symbol)
-        
+
+        predictions = pd.DataFrame() # Initialize empty DataFrame
+
         # Try to load and use the model
         if prophet_model.load_model():
             print(f"Successfully loaded Prophet model for {symbol}")
             predictions = prophet_model.predict(historical_data, days=days)
-            
+
             # Debug prediction output
             print(f"Prophet predictions shape: {predictions.shape if not predictions.empty else 'Empty'}")
             if not predictions.empty:
                 print(f"Prediction date range: {predictions.index.min()} to {predictions.index.max()}")
                 print(f"First few predicted values: {predictions['Close'].head().tolist()}")
-                
-                # Sanity check: verify predictions are within reasonable bounds
-                max_predicted_price = predictions['Close'].max()
-                min_predicted_price = predictions['Close'].min()
-                
-                # If prediction is wildly different from current price, adjust it
-                max_reasonable_change = 0.30  # 30% change threshold
-                if (max_predicted_price > current_price * (1 + max_reasonable_change) or 
-                    min_predicted_price < current_price * (1 - max_reasonable_change)):
-                    print(f"WARNING: Prediction for {symbol} is outside reasonable bounds!")
-                    print(f"Current: ${current_price}, Predicted range: ${min_predicted_price} to ${max_predicted_price}")
-                    print("Applying sanity correction to predictions...")
-                    
-                    # Adjust the predictions to be more reasonable
-                    # Option 1: Cap the percentage change
-                    adjusted_predictions = pd.DataFrame(index=predictions.index)
-                    
-                    # Start with a random walk from current price with small steps
-                    last_price = current_price
-                    adjusted_values = []
-                    for i in range(len(predictions)):
-                        # Generate a reasonable daily return (-1% to +1%)
-                        daily_return = np.random.normal(0.0003, 0.008)  # Slight positive bias
-                        new_price = last_price * (1 + daily_return)
-                        adjusted_values.append(new_price)
-                        last_price = new_price
-                    
-                    # Create adjusted predictions dataframe
-                    adjusted_predictions['Close'] = adjusted_values
-                    
-                    # Add trend alignment from original predictions
-                    if len(predictions) > 5:
-                        # Get the trend direction from original predictions
-                        orig_start = predictions['Close'].iloc[0]
-                        orig_end = predictions['Close'].iloc[-1]
-                        trend_factor = (orig_end / orig_start - 1) / 4  # Dampened trend
-                        
-                        # Apply a dampened version of the trend
-                        for i in range(len(adjusted_predictions)):
-                            factor = (i / len(adjusted_predictions)) * trend_factor
-                            adjusted_predictions.iloc[i, 0] = adjusted_predictions.iloc[i, 0] * (1 + factor)
-                    
-                    # Create uncertainty bands 
-                    adjusted_predictions['Upper'] = adjusted_predictions['Close'] * 1.05
-                    adjusted_predictions['Lower'] = adjusted_predictions['Close'] * 0.95
-                    
-                    print(f"Adjusted predictions range: ${adjusted_predictions['Close'].min()} to ${adjusted_predictions['Close'].max()}")
-                    predictions = adjusted_predictions
-            
-            if not predictions.empty:
-                # Format results
-                result = {
-                    'symbol': symbol,
-                    'model': 'prophet',
-                    'dates': predictions.index.strftime('%Y-%m-%d').tolist(),
-                    'values': predictions['Close'].tolist()
-                }
-                
-                # Add confidence intervals if they exist
-                if 'Upper' in predictions.columns and 'Lower' in predictions.columns:
-                    result['confidence'] = {
-                        'upper': predictions['Upper'].tolist(),
-                        'lower': predictions['Lower'].tolist()
-                    }
-                else:
-                    # Create simple confidence intervals if not provided
-                    values = predictions['Close'].tolist()
-                    result['confidence'] = {
-                        'upper': [val * 1.05 for val in values],
-                        'lower': [val * 0.95 for val in values]
-                    }
-                
-                # Debug the result structure before returning
-                print(f"Result dates count: {len(result['dates'])}")
-                print(f"Result values count: {len(result['values'])}")
-                print(f"First few dates: {result['dates'][:3]}")
-                print(f"First few values: {result['values'][:3]}")
-                
-                # Clean and verify the result contains valid data before returning
-                cleaned_result = handle_nan_values(result)
-                
-                # One more debug check after NaN handling
-                if cleaned_result is None:
-                    print("Warning: NaN handling returned None - all values might be NaN")
-                    # Fall back to original result with safeguards
-                    sanitized_result = result.copy()
-                    sanitized_result['values'] = [float(v) if not pd.isna(v) else float(historical_data['Close'].iloc[-1]) for v in result['values']]
-                    return sanitized_result
-                else:
-                    print(f"Cleaned result dates count: {len(cleaned_result['dates'])}")
-                    print(f"Cleaned result values count: {len(cleaned_result['values'])}")
-                    
-                return cleaned_result
             else:
-                print(f"No valid predictions for {symbol}")
+                 # Log if Prophet returned empty, triggering fallback later
+                 logger.warning(f"Prophet model for {symbol} returned empty predictions.")
+
         else:
             print(f"Could not load Prophet model for {symbol}")
-        
-        # If Prophet model failed, use fallback prediction
-        print(f"Using fallback prediction for {symbol}")
-        fallback_result = create_fallback_prediction(symbol, days)
-        cleaned_fallback = handle_nan_values(fallback_result)
-        return cleaned_fallback if cleaned_fallback else fallback_result
-        
+            logger.warning(f"Prophet model file not found or failed to load for {symbol}.")
+
+
+        # --- REMOVED/COMMENTED OUT SANITY CHECK BLOCK ---
+        # if not predictions.empty:
+        #     max_predicted_price = predictions['Close'].max()
+        #     min_predicted_price = predictions['Close'].min()
+        #     max_reasonable_change = 0.30
+        #     if (max_predicted_price > current_price * (1 + max_reasonable_change) or
+        #         min_predicted_price < current_price * (1 - max_reasonable_change)):
+        #         print(f"WARNING: Prediction for {symbol} is outside reasonable bounds!")
+        #         # ... (rest of the complex adjustment logic removed) ...
+        #         # Force using the main fallback instead of this complex adjustment
+        #         predictions = pd.DataFrame() # Clear predictions to trigger main fallback
+        # --- END REMOVED/COMMENTED OUT SANITY CHECK BLOCK ---
+
+
+        # Check if predictions are valid (not empty)
+        if not predictions.empty:
+            # Format results
+            result = {
+                'symbol': symbol,
+                'model': 'prophet',
+                'dates': predictions.index.strftime('%Y-%m-%d').tolist(),
+                'values': predictions['Close'].tolist()
+            }
+
+            # Add confidence intervals if they exist
+            if 'Upper' in predictions.columns and 'Lower' in predictions.columns:
+                result['confidence'] = {
+                    'upper': predictions['Upper'].tolist(),
+                    'lower': predictions['Lower'].tolist()
+                }
+            else:
+                # Create simple confidence intervals if not provided
+                values = predictions['Close'].tolist()
+                result['confidence'] = {
+                    'upper': [val * 1.05 for val in values],
+                    'lower': [val * 0.95 for val in values]
+                }
+
+            # Clean and verify the result
+            cleaned_result = handle_nan_values(result)
+            if cleaned_result is None:
+                 print("Warning: NaN handling returned None - using simple fallback")
+                 return create_simple_fallback(symbol, days) # Use simple fallback if cleaning fails
+
+            print(f"Cleaned result dates count: {len(cleaned_result['dates'])}")
+            print(f"Cleaned result values count: {len(cleaned_result['values'])}")
+            return cleaned_result
+        else:
+            # If Prophet model failed or predictions were cleared by sanity check (now removed)
+            # Use the main fallback prediction
+            print(f"Using main fallback prediction for {symbol}")
+            fallback_result = create_fallback_prediction(symbol, days)
+            cleaned_fallback = handle_nan_values(fallback_result)
+            # If even fallback cleaning fails, use the simplest one
+            return cleaned_fallback if cleaned_fallback else create_simple_fallback(symbol, days)
+
     except Exception as e:
         print(f"Error in get_price_predictions for {symbol}: {e}")
         import traceback
         traceback.print_exc()
-        
-        # Create a simple fallback prediction as last resort
+        # Use the simplest fallback on any error
         return create_simple_fallback(symbol, days)
-
 
 def check_prophet_installed():
     """
@@ -1239,103 +1201,82 @@ def create_fallback_prediction(symbol, days=30):
     """
     Create a fallback prediction when model training fails or is not available.
     This uses a simple moving average projection instead of ML models.
-    
+    Handles potential column name differences from direct YFinance calls.
+
     Args:
         symbol (str): Stock symbol
         days (int): Number of days to predict
-        
+
     Returns:
         dict: Simple prediction data
     """
     print(f"Using fallback prediction for {symbol} with {days} days")
-    
+
     try:
-        # Get historical data
-        from modules.fmp_api import fmp_api
         import pandas as pd
         import numpy as np
         from datetime import datetime, timedelta
-        
-        # Get recent historical data (last 90 days)
-        historical_data = fmp_api.get_historical_price(symbol, period="90days")
-        
+
+        # --- Attempt 1: Use DataProvider (preferred, returns standardized data) ---
+        historical_data = data_provider.get_historical_price(symbol, period="90days")
+
+        # --- Check if DataProvider succeeded ---
         if historical_data.empty or len(historical_data) < 30:
-            print(f"Not enough historical data for fallback prediction for {symbol}")
-            # Try to get data from YFinance directly
+            print(f"Not enough historical data from DataProvider for fallback prediction for {symbol}. Trying direct YFinance.")
+            # --- Attempt 2: Direct YFinance (returns unstandardized data) ---
             try:
                 import yfinance as yf
                 ticker = yf.Ticker(symbol)
-                historical_data = ticker.history(period="3mo")
+                historical_data = ticker.history(period="3mo") # This overwrites the previous variable
                 if historical_data.empty or len(historical_data) < 30:
                     raise ValueError("Insufficient data from YFinance")
+                # --- IMPORTANT: Data from direct YFinance is NOT standardized ---
+                print(f"Direct YFinance call returned {len(historical_data)} rows.")
+
             except Exception as yf_error:
                 print(f"YFinance fallback error: {yf_error}")
-                
-                # Create a very basic fallback if no data
-                # Try to get a reasonable default price
-                last_price = 100.0  # Default price 
-                try:
-                    # Maybe we can at least get a current price
-                    current_quote = fmp_api.get_quote(symbol)
-                    if current_quote and 'price' in current_quote:
-                        last_price = current_quote['price']
-                except:
-                    pass
-                    
-                last_date = datetime.now()
-                # Use very small random changes with a slight upward bias
-                predicted_prices = [last_price * (1 + np.random.normal(0.0001, 0.001)) for _ in range(days)]
-                future_dates = [last_date + timedelta(days=i+1) for i in range(days)]
-                
-                # Format as dictionary
-                result = {
-                    'symbol': symbol,
-                    'model': 'basic_fallback',
-                    'dates': [date.strftime('%Y-%m-%d') for date in future_dates],
-                    'values': predicted_prices,
-                    'confidence': {
-                        'upper': [price * 1.05 for price in predicted_prices],
-                        'lower': [price * 0.95 for price in predicted_prices]
-                    }
-                }
-                
-                return result
-        
-        # Get the last closing price
-        last_price = historical_data['Close'].iloc[-1]
+                # If both attempts fail, go to the emergency fallback immediately
+                raise # Re-raise the exception to trigger the outer except block's emergency fallback
+
+        # --- Determine the correct close column name ---
+        # DataProvider returns 'close', direct YFinance returns 'Close'
+        close_col_name = None
+        if 'close' in historical_data.columns:
+            close_col_name = 'close'
+        elif 'Close' in historical_data.columns:
+            close_col_name = 'Close'
+        else:
+            raise ValueError("Could not find 'close' or 'Close' column in historical data.")
+
+        # --- Proceed with calculation using the correct column name ---
+        last_price = historical_data[close_col_name].iloc[-1]
         last_date = historical_data.index[-1]
-        
+
         # Calculate average daily return with some bounds
-        daily_returns = historical_data['Close'].pct_change().dropna()
-        avg_daily_return = np.clip(daily_returns.mean(), -0.005, 0.005)  # Limit to ±0.5% per day
-        
-        # Calculate standard deviation for confidence intervals (with reasonable bounds)
-        std_dev = np.clip(daily_returns.std(), 0.005, 0.02)  # Between 0.5% and 2%
-        
+        daily_returns = historical_data[close_col_name].pct_change().dropna()
+        avg_daily_return = np.clip(daily_returns.mean(), -0.005, 0.005)
+        std_dev = np.clip(daily_returns.std(), 0.005, 0.02)
+
         # Generate future dates
         future_dates = [last_date + timedelta(days=i+1) for i in range(days)]
-        
-        # Calculate predicted prices using compound growth with a little randomness
+
+        # Calculate predicted prices
         predicted_prices = []
         current_price = last_price
-        
         for i in range(days):
-            # Add some randomness to daily return
             daily_return = avg_daily_return + np.random.normal(0, std_dev/3)
-            # Constrain to reasonable range
-            daily_return = np.clip(daily_return, -0.01, 0.01)  # Max ±1% per day
-            # Calculate new price
+            daily_return = np.clip(daily_return, -0.01, 0.01)
             current_price = current_price * (1 + daily_return)
             predicted_prices.append(current_price)
-        
-        # Calculate upper and lower bounds (1 standard deviation)
+
+        # Calculate bounds
         upper_bounds = [price * (1 + std_dev) for price in predicted_prices]
         lower_bounds = [price * (1 - std_dev) for price in predicted_prices]
-        
-        # Format as dictionary
+
+        # Format result
         result = {
             'symbol': symbol,
-            'model': 'simple_forecast',
+            'model': 'simple_forecast', # Indicate it's the intended fallback
             'dates': [date.strftime('%Y-%m-%d') for date in future_dates],
             'values': predicted_prices,
             'confidence': {
@@ -1343,76 +1284,63 @@ def create_fallback_prediction(symbol, days=30):
                 'lower': lower_bounds
             }
         }
-        
-        print(f"Successfully created fallback prediction for {symbol} with {days} days")
+
+        print(f"Successfully created fallback prediction for {symbol} with {days} days, starting near {last_price:.2f}")
         return result
-        
+
     except Exception as e:
+        # --- This block now handles errors from data fetching OR calculation ---
         print(f"Error creating fallback prediction for {symbol}: {e}")
         import traceback
         traceback.print_exc()
-        
-        # Last resort: create a minimal prediction
+
+        # --- Emergency Fallback Logic ---
+        print(f"Executing EMERGENCY fallback for {symbol}")
         try:
             # Try to get a reasonable default price
-            last_price = 50.0  # Arbitrary fallback price 
+            last_price = 50.0 # Arbitrary fallback price
             try:
-                # Try to get actual price data
-                import yfinance as yf
-                ticker = yf.Ticker(symbol)
-                data = ticker.history(period="1d")
-                if not data.empty and 'Close' in data.columns:
-                    last_price = data['Close'].iloc[-1]
-            except:
-                pass
-                
-            # Generate very basic synthetic data
+                # Try to get actual price data one last time
+                current_quote = data_provider.get_current_quote(symbol)
+                if current_quote and 'price' in current_quote:
+                    last_price = current_quote['price']
+                else: # If quote fails, try yfinance again just for price
+                    import yfinance as yf
+                    ticker = yf.Ticker(symbol)
+                    data = ticker.history(period="1d")
+                    if not data.empty:
+                        # Check for 'Close' or 'close'
+                        if 'Close' in data.columns: last_price = data['Close'].iloc[-1]
+                        elif 'close' in data.columns: last_price = data['close'].iloc[-1]
+
+            except Exception as price_err:
+                print(f"Could not get current price for emergency fallback: {price_err}")
+                # Use hash-based price if even current price fails
+                symbol_hash = sum(ord(c) for c in symbol) % 100 + 20
+                last_price = float(symbol_hash) # Ensure float
+
+            # Generate very basic synthetic data starting from last_price
             last_date = datetime.now()
-            future_dates = [last_date + timedelta(days=i+1) for i in range(days)]
-            
-            # Generate prices with slight upward bias and minimal volatility
-            predicted_prices = []
-            current_price = last_price
-            
-            for i in range(days):
-                # Very small random change
-                daily_return = np.random.normal(0.0001, 0.0015)  # Tiny upward bias
-                current_price = current_price * (1 + daily_return)
-                predicted_prices.append(current_price)
-            
+            future_dates = [(last_date + timedelta(days=i+1)).strftime('%Y-%m-%d') for i in range(days)]
+            values = [last_price * (1 + np.random.normal(0.0001, 0.0015))**i for i in range(days)] # Slight random walk
+
             result = {
-                'symbol': symbol,
-                'model': 'minimal_fallback',
-                'dates': [date.strftime('%Y-%m-%d') for date in future_dates],
-                'values': predicted_prices,
-                'confidence': {
-                    'upper': [price * 1.02 for price in predicted_prices],
-                    'lower': [price * 0.98 for price in predicted_prices]
-                }
-            }
-            
-            return result
-        except:
-            # True last resort - just return static prices based on symbol length (for stability)
-            symbol_hash = sum(ord(c) for c in symbol) % 100 + 20  # Price between $20-$120 based on symbol
-            static_price = symbol_hash
-            
-            # Generate dates
-            future_dates = [(datetime.now() + timedelta(days=i+1)).strftime('%Y-%m-%d') for i in range(days)]
-            
-            # Very small variation
-            values = [static_price + static_price * (i * 0.0001) for i in range(days)]
-            
-            return {
                 'symbol': symbol,
                 'model': 'emergency_fallback',
                 'dates': future_dates,
                 'values': values,
                 'confidence': {
-                    'upper': [v * 1.01 for v in values],
-                    'lower': [v * 0.99 for v in values]
+                    'upper': [v * 1.02 for v in values],
+                    'lower': [v * 0.98 for v in values]
                 }
             }
+            print(f"Created EMERGENCY fallback prediction for {symbol}, starting near {last_price:.2f}")
+            return result
+        except Exception as emergency_e:
+            # Absolute last resort if even emergency fallback fails
+            print(f"CRITICAL ERROR: Emergency fallback failed: {emergency_e}")
+            return create_simple_fallback(symbol, days) # Use the simplest possible fallback
+
         
 # Modify get_price_predictions to use the fallback when needed
 # This fixes the get_asset_analysis method in the ModelIntegration class to properly pass
@@ -1471,10 +1399,10 @@ def get_asset_analysis(self, symbol, days_to_predict=30, force_refresh=False):
             'symbol': symbol,
             'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             'price': {
-                'current': df['Close'].iloc[-1],
-                'change_1d': (df['Close'].iloc[-1] / df['Close'].iloc[-2] - 1) * 100 if len(df) > 1 else 0,
-                'change_1w': (df['Close'].iloc[-1] / df['Close'].iloc[-5] - 1) * 100 if len(df) > 5 else 0,
-                'change_1m': (df['Close'].iloc[-1] / df['Close'].iloc[-20] - 1) * 100 if len(df) > 20 else 0,
+                'current': df['close'].iloc[-1],
+                'change_1d': (df['close'].iloc[-1] / df['close'].iloc[-2] - 1) * 100 if len(df) > 1 else 0,
+                'change_1w': (df['close'].iloc[-1] / df['close'].iloc[-5] - 1) * 100 if len(df) > 5 else 0,
+                'change_1m': (df['close'].iloc[-1] / df['close'].iloc[-20] - 1) * 100 if len(df) > 20 else 0,
             },
             'trend': trend_analysis,
             'support_resistance': support_resistance,

@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 import uuid
 from modules.db_utils import execute_query
 from modules.yf_utils import get_ticker_history, download_yf_data
+from modules.data_provider import data_provider
 
 # Configure logging
 logging.basicConfig(
@@ -229,7 +230,7 @@ def update_portfolio_data():
     mutual_fund_provider = MutualFundProvider()
     
     # Import FMP API
-    from modules.fmp_api import fmp_api
+    # from modules.fmp_api import fmp_api
     
     # First, get current prices for all unique symbols
     unique_symbols = {inv['symbol'] for inv in investments}
@@ -261,7 +262,7 @@ def update_portfolio_data():
                     }
             else:
                 # For stocks, ETFs, etc., try FMP API first, then fall back to YFinance
-                quote = fmp_api.get_quote(symbol)
+                quote = data_provider.get_current_quote(symbol)
                 
                 if quote and 'price' in quote:
                     current_price = quote['price']
@@ -560,8 +561,8 @@ def get_usd_to_cad_rate():
     """
     try:
         # Use FMP API to get exchange rate
-        from modules.fmp_api import fmp_api
-        rate = fmp_api.get_exchange_rate("USD", "CAD")
+        # from modules.fmp_api import fmp_api
+        rate = data_provider.get_exchange_rate("USD", "CAD")
         
         if rate is not None:
             return rate
@@ -599,8 +600,8 @@ def get_historical_usd_to_cad_rates(start_date=None, end_date=None):
         days = (end_date - start_date).days + 5  # Add buffer days
         
         # Get historical exchange rate data from FMP API
-        from modules.fmp_api import fmp_api
-        exchange_data = fmp_api.get_historical_exchange_rates("USD", "CAD", days=days)
+        # from modules.fmp_api import fmp_api
+        exchange_data = data_provider.get_historical_exchange_rates("USD", "CAD", days=days)
         
         if not exchange_data.empty and 'rate' in exchange_data.columns:
             # Extract just the exchange rates

@@ -5,8 +5,12 @@ from datetime import datetime, timedelta
 import logging
 import plotly.graph_objects as go
 
+# Import the new DataProvider instance
+from modules.data_provider import data_provider
+# Remove direct FMP API import
+# from modules.fmp_api import fmp_api
+
 # Import necessary components from your project
-from modules.fmp_api import fmp_api # Or your primary data source
 from modules.model_integration import ModelIntegration # To generate signals
 from modules.portfolio_risk_metrics import calculate_risk_metrics # For performance analysis
 
@@ -52,20 +56,20 @@ class Backtester:
         self._add_benchmark_data('^GSPTSE') # Using TSX Composite as example
 
     def _load_data(self):
-        """Loads historical price data for all symbols."""
+        """Loads historical price data for all symbols using DataProvider."""
         logger.info(f"Loading historical data for symbols: {self.symbols}")
         all_data = {}
         min_date = self.start_date - timedelta(days=365) # Load extra data for initial calculations
 
         for symbol in self.symbols:
             try:
-                # Use fmp_api, adjust if using yfinance [cite: 12]
-                hist = fmp_api.get_historical_price(symbol, start_date=min_date, end_date=self.end_date)
-                if not hist.empty and 'Close' in hist.columns:
-                     # Ensure timezone is naive
-                    if hist.index.tz is not None:
-                       hist.index = hist.index.tz_localize(None)
-                    all_data[symbol] = hist[['Open', 'High', 'Low', 'Close', 'Volume']]
+                # --- Use DataProvider ---
+                hist = data_provider.get_historical_price(symbol, start_date=min_date, end_date=self.end_date)
+                # DataProvider already handles standardization (lowercase columns, timezone-naive index)
+
+                if not hist.empty and 'close' in hist.columns:
+                     # --- Use standardized lowercase columns ---
+                    all_data[symbol] = hist[['open', 'high', 'low', 'close', 'volume']]
                 else:
                     logger.warning(f"No data loaded for {symbol}")
             except Exception as e:
@@ -76,24 +80,26 @@ class Backtester:
 
         # Combine into a multi-index DataFrame
         panel_data = pd.concat(all_data, axis=1)
-        panel_data.columns.names = ['Symbol', 'Field']
+        panel_data.columns.names = ['Symbol', 'Field'] # Keep original field names for multi-index
         panel_data = panel_data.ffill().bfill() # Fill missing values
         panel_data = panel_data.loc[self.start_date:self.end_date] # Filter to backtest period
         logger.info(f"Data loaded from {panel_data.index.min()} to {panel_data.index.max()}")
         return panel_data
 
     def _add_benchmark_data(self, benchmark_symbol):
-        """Adds benchmark data to the historical data panel."""
+        """Adds benchmark data to the historical data panel using DataProvider."""
         logger.info(f"Loading benchmark data: {benchmark_symbol}")
         try:
             min_date = self.start_date - timedelta(days=1) # Ensure we have the day before start
-            bench_hist = fmp_api.get_historical_price(benchmark_symbol, start_date=min_date, end_date=self.end_date) # [cite: 12]
-            if not bench_hist.empty and 'Close' in bench_hist.columns:
-                 # Ensure timezone is naive
-                if bench_hist.index.tz is not None:
-                    bench_hist.index = bench_hist.index.tz_localize(None)
+            # --- Use DataProvider ---
+            bench_hist = data_provider.get_historical_price(benchmark_symbol, start_date=min_date, end_date=self.end_date)
+            # DataProvider handles standardization
+
+            # --- Use standardized lowercase 'close' column ---
+            if not bench_hist.empty and 'close' in bench_hist.columns:
                 # Align benchmark index with main data and forward fill
-                self.historical_data[(benchmark_symbol, 'Close')] = bench_hist['Close'].reindex(self.historical_data.index, method='ffill')
+                # --- Use standardized lowercase 'close' column ---
+                self.historical_data[(benchmark_symbol, 'close')] = bench_hist['close'].reindex(self.historical_data.index, method='ffill')
                 logger.info(f"Benchmark data '{benchmark_symbol}' added.")
             else:
                  logger.warning(f"No benchmark data loaded for {benchmark_symbol}")
@@ -132,19 +138,22 @@ class Backtester:
             for symbol in self.symbols:
                 # Extract the historical data slice for the specific symbol
                 if symbol in available_data_panel.columns.get_level_values('Symbol'):
+                    # --- Use standardized lowercase columns ---
                     symbol_historical_slice = available_data_panel[symbol].dropna()
+                    # Rename columns temporarily for the model if it expects uppercase
+                    # This depends on how get_backtesting_recommendation_signal is implemented
+                    # If it expects 'Close', 'Open', etc., rename here:
+                    # temp_slice = symbol_historical_slice.rename(columns={'open':'Open', 'high':'High', 'low':'Low', 'close':'Close', 'volume':'Volume'})
 
                     if symbol_historical_slice.empty or len(symbol_historical_slice) < 50: # Ensure enough data for analysis
                         #logger.debug(f"Skipping signal generation for {symbol} on {current_date} due to insufficient slice length: {len(symbol_historical_slice)}")
                         continue
 
                     # --- !!! CALL ADAPTED STRATEGY LOGIC !!! ---
-                    # This is where you call the modified method from ModelIntegration
-                    # We assume a new method 'get_backtesting_recommendation_signal' exists
+                    # Pass the slice with the column names expected by the function
                     signal = self.model_integration.get_backtesting_recommendation_signal(
                         symbol=symbol,
-                        historical_data_slice=symbol_historical_slice
-                        # Pass other necessary context if needed, e.g., current holdings[symbol], risk level
+                        historical_data_slice=symbol_historical_slice # or temp_slice if renaming needed
                     )
                     # --- END ADAPTED CALL ---
 
@@ -195,8 +204,9 @@ class Backtester:
         """Calculates the total portfolio value for the current day."""
         holdings_value = 0
         for symbol in self.symbols:
-            if (symbol, 'Close') in current_prices.index:
-                 price = current_prices[(symbol, 'Close')]
+            # --- Use standardized lowercase 'close' column ---
+            if (symbol, 'close') in current_prices.index:
+                 price = current_prices[(symbol, 'close')]
                  if pd.notna(price) and self.holdings[symbol] > 0 : # Only count if price is valid
                      holdings_value += self.holdings[symbol] * price
             # else: logger.warning(f"No price for {symbol} on {date}") # Optional warning
@@ -230,8 +240,9 @@ class Backtester:
 
             # 3. Execute Trades based on signals and *today's* prices (e.g., Open price)
             for symbol, action in signals.items():
-                if (symbol, 'Open') in day_data.index:
-                     trade_price = day_data[(symbol, 'Open')] # Trade at Open price
+                # --- Use standardized lowercase 'open' column ---
+                if (symbol, 'open') in day_data.index:
+                     trade_price = day_data[(symbol, 'open')] # Trade at Open price
                      if pd.notna(trade_price):
                          self._execute_trade(symbol, action, date, trade_price)
                 #else: logger.warning(f"No Open price for {symbol} on {date} to execute trade.")
@@ -271,14 +282,18 @@ class Backtester:
         # Need to adapt calculate_risk_metrics to take a Series/DataFrame directly
         # Mocking the structure it expects for now
         mock_portfolio_for_metrics = {'Total': self.portfolio_value_history}
-        if ('^GSPTSE', 'Close') in self.historical_data.columns:
-             mock_portfolio_for_metrics['TSX'] = self.historical_data[('^GSPTSE', 'Close')]
+        # --- Use standardized lowercase 'close' column ---
+        if ('^GSPTSE', 'close') in self.historical_data.columns:
+             mock_portfolio_for_metrics['TSX'] = self.historical_data[('^GSPTSE', 'close')]
 
         # We need to create a temporary DataFrame suitable for calculate_risk_metrics
         metrics_df = pd.DataFrame(mock_portfolio_for_metrics)
-        risk_metrics = calculate_risk_metrics(portfolio={}, period='all', risk_free_rate=0.02) # Pass empty portfolio, use period='all'
-        # Manually override historical_data call within calculate_risk_metrics or refactor it
-        # For now, let's extract manually:
+        # NOTE: calculate_risk_metrics expects a portfolio dict, not the metrics_df directly.
+        # It internally calls get_portfolio_historical_data. This needs refactoring in portfolio_risk_metrics.py
+        # For now, we calculate manually here.
+        # risk_metrics = calculate_risk_metrics(portfolio={}, period='all', risk_free_rate=0.02) # Pass empty portfolio, use period='all'
+
+        # Manually calculate metrics:
         daily_returns = portfolio_returns.pct_change().dropna()
         if not daily_returns.empty:
              results['Annualized Volatility (%)'] = daily_returns.std() * np.sqrt(252) * 100
@@ -304,7 +319,7 @@ class Backtester:
              # results['Win Rate (%)'] = (results['Winning Trades'] / results['Total Trades']) * 100 if results['Total Trades'] > 0 else 0
         else:
             results['Winning Trades'] = 0
-            results['Win Rate (%)'] = 0
+            # results['Win Rate (%)'] = 0 # Avoid adding if no trades
 
         results['Final Portfolio Value'] = self.portfolio_value_history.iloc[-1]
 
@@ -329,8 +344,9 @@ class Backtester:
 
         # Add Benchmark if available
         benchmark_symbol = '^GSPTSE' # Example
-        if (benchmark_symbol, 'Close') in self.historical_data.columns:
-             benchmark_data = self.historical_data[(benchmark_symbol, 'Close')]
+        # --- Use standardized lowercase 'close' column ---
+        if (benchmark_symbol, 'close') in self.historical_data.columns:
+             benchmark_data = self.historical_data[(benchmark_symbol, 'close')]
              # Normalize benchmark to start at initial capital
              normalized_benchmark = (benchmark_data / benchmark_data.iloc[0]) * self.initial_capital
              fig.add_trace(go.Scatter(

@@ -101,7 +101,7 @@ class TrendAnalyzer:
                 price_trend = "neutral"
                 
                 # Calculate percentage change over the window
-                price_change = (recent_data['Close'].iloc[-1] / recent_data['Close'].iloc[0] - 1) * 100
+                price_change = (recent_data['close'].iloc[-1] / recent_data['close'].iloc[0] - 1) * 100
                 
                 # Determine trend based on price change
                 if price_change > 5:  # Strong uptrend (more than 5% gain)
@@ -161,7 +161,7 @@ class TrendAnalyzer:
                     'price_action': price_trend
                 },
                 'latest_data': {
-                    'current_price': data['Close'].iloc[-1],
+                    'current_price': data['close'].iloc[-1],
                     'sma_20': data['SMA_short'].iloc[-1],
                     'sma_50': data['SMA_medium'].iloc[-1],
                     'sma_200': data['SMA_long'].iloc[-1],
@@ -202,14 +202,14 @@ class TrendAnalyzer:
                 recent_data = df.tail(window).copy()
             
             # Calculate returns
-            recent_data['daily_return'] = recent_data['Close'].pct_change()
+            recent_data['daily_return'] = recent_data['close'].pct_change()
             
             # Calculate volatility (standard deviation of returns)
             volatility = recent_data['daily_return'].std() * np.sqrt(252)  # Annualized
             
             # Calculate trend using linear regression on log prices
             import statsmodels.api as sm
-            log_prices = np.log(recent_data['Close'])
+            log_prices = np.log(recent_data['close'])
             x = np.arange(len(log_prices))
             x = sm.add_constant(x)
             model = sm.OLS(log_prices, x)
@@ -220,14 +220,14 @@ class TrendAnalyzer:
             r_squared = results.rsquared
             
             # Calculate drawdowns
-            peak = recent_data['Close'].expanding().max()
-            drawdown = (recent_data['Close'] / peak - 1) * 100
+            peak = recent_data['close'].expanding().max()
+            drawdown = (recent_data['close'] / peak - 1) * 100
             max_drawdown = drawdown.min()
             
             # Calculate 52-week (or max window) high and low
-            high_52wk = recent_data['High'].max()
-            low_52wk = recent_data['Low'].min()
-            current_price = recent_data['Close'].iloc[-1]
+            high_52wk = recent_data['high'].max()
+            low_52wk = recent_data['low'].min()
+            current_price = recent_data['close'].iloc[-1]
             
             # Calculate price position relative to 52-week range
             price_position = (current_price - low_52wk) / (high_52wk - low_52wk) if high_52wk != low_52wk else 0.5
@@ -333,7 +333,7 @@ class TrendAnalyzer:
                 historical_data = df.tail(window).copy()
             
             # Calculate daily returns
-            historical_data['daily_return'] = historical_data['Close'].pct_change()
+            historical_data['daily_return'] = historical_data['close'].pct_change()
             
             # Calculate cumulative returns
             historical_data['cum_return'] = (1 + historical_data['daily_return']).cumprod()
@@ -346,7 +346,7 @@ class TrendAnalyzer:
             from scipy.signal import find_peaks
             
             # Convert to numpy array for signal processing
-            prices = historical_data['Close'].values
+            prices = historical_data['close'].values
             cum_returns = historical_data['cum_return'].values
             
             # Find peaks (potential market tops)
@@ -357,7 +357,7 @@ class TrendAnalyzer:
             troughs, _ = find_peaks(-prices, distance=63)  # Minimum 3 months between troughs
             
             # Use the cumulative return to calculate drawdowns
-            historical_data['drawdown'] = historical_data['Close'] / historical_data['Close'].expanding().max() - 1
+            historical_data['drawdown'] = historical_data['close'] / historical_data['close'].expanding().max() - 1
             
             # Identify significant bear markets (20%+ drawdown)
             bear_markets = []
@@ -421,7 +421,7 @@ class TrendAnalyzer:
             if len(historical_data) >= 252:  # At least 1 year of data
                 # Detrend the data for better cycle detection
                 from scipy import signal
-                detrended = signal.detrend(historical_data['Close'].values)
+                detrended = signal.detrend(historical_data['close'].values)
                 
                 # Calculate FFT
                 fft_values = fft(detrended)
@@ -464,16 +464,16 @@ class TrendAnalyzer:
                 dominant_cycles = []
             
             # Determine the current position in the market cycle
-            current_price = historical_data['Close'].iloc[-1]
-            all_time_high = historical_data['Close'].max()
-            all_time_low = historical_data['Close'].min()
+            current_price = historical_data['close'].iloc[-1]
+            all_time_high = historical_data['close'].max()
+            all_time_low = historical_data['close'].min()
             current_drawdown = (current_price / all_time_high - 1) * 100
             
             # Determine if we're in a bull or bear market currently
             is_bear_market = current_drawdown <= -20
             
             # Calculate days since all time high
-            all_time_high_idx = historical_data['Close'].idxmax()
+            all_time_high_idx = historical_data['close'].idxmax()
             days_since_ath = (historical_data.index[-1] - all_time_high_idx).days
             
             # Determine cycle position using a combination of indicators
@@ -525,7 +525,7 @@ class TrendAnalyzer:
     def _calculate_sma(self, df, window=20):
         """Calculate Simple Moving Average"""
         try:
-            return df['Close'].rolling(window=window).mean()
+            return df['close'].rolling(window=window).mean()
         except Exception as e:
             logger.error(f"Error calculating SMA: {e}")
             return pd.Series(index=df.index)
@@ -533,43 +533,64 @@ class TrendAnalyzer:
     def _calculate_ema(self, df, window=20):
         """Calculate Exponential Moving Average"""
         try:
-            return df['Close'].ewm(span=window, adjust=False).mean()
+            return df['close'].ewm(span=window, adjust=False).mean()
         except Exception as e:
             logger.error(f"Error calculating EMA: {e}")
             return pd.Series(index=df.index)
     
     def _calculate_rsi(self, df, window=14):
-        """Calculate Relative Strength Index"""
+        """Calculate Relative Strength Index with safe division"""
         try:
             # Calculate price changes
-            delta = df['Close'].diff()
-            
+            delta = df['close'].diff() # Use lowercase 'close'
+
             # Separate gains and losses
             gain = delta.copy()
             loss = delta.copy()
             gain[gain < 0] = 0
             loss[loss > 0] = 0
             loss = abs(loss)
-            
-            # Calculate average gain and loss
-            avg_gain = gain.rolling(window=window).mean()
-            avg_loss = loss.rolling(window=window).mean()
-            
-            # Calculate RS and RSI
-            rs = avg_gain / avg_loss
+
+            # Calculate average gain and loss using Exponential Moving Average for smoother RSI
+            # avg_gain = gain.rolling(window=window).mean() # Original rolling mean
+            # avg_loss = loss.rolling(window=window).mean() # Original rolling mean
+            avg_gain = gain.ewm(com=window - 1, min_periods=window).mean()
+            avg_loss = loss.ewm(com=window - 1, min_periods=window).mean()
+
+
+            # --- Safe Calculation of RS ---
+            # Initialize RS series with zeros
+            rs = pd.Series(0.0, index=df.index)
+            # Calculate RS where avg_loss is not zero
+            non_zero_loss_idx = avg_loss != 0
+            rs[non_zero_loss_idx] = avg_gain[non_zero_loss_idx] / avg_loss[non_zero_loss_idx]
+            # Where avg_loss is zero but avg_gain is positive, RS is effectively infinite (RSI=100)
+            zero_loss_positive_gain_idx = (avg_loss == 0) & (avg_gain > 0)
+            # We handle this in the RSI calculation directly
+
+            # --- Calculate RSI ---
             rsi = 100 - (100 / (1 + rs))
-            
+            # Set RSI to 100 where avg_loss was zero but avg_gain was positive
+            rsi[zero_loss_positive_gain_idx] = 100.0
+            # Set RSI to 50 where both avg_gain and avg_loss are zero (no change)
+            rsi[(avg_loss == 0) & (avg_gain == 0)] = 50.0
+
+            # Fill initial NaNs if using EWM
+            rsi = rsi.fillna(50) # Fill initial NaNs with 50 (neutral)
+
             return rsi
         except Exception as e:
             logger.error(f"Error calculating RSI: {e}")
-            return pd.Series(index=df.index)
+            import traceback
+            traceback.print_exc() # Print full traceback for debugging
+            return pd.Series(index=df.index) # Return empty series on error
     
     def _calculate_macd(self, df, fast=12, slow=26, signal=9):
         """Calculate MACD (Moving Average Convergence Divergence)"""
         try:
             # Calculate EMAs
-            ema_fast = df['Close'].ewm(span=fast, adjust=False).mean()
-            ema_slow = df['Close'].ewm(span=slow, adjust=False).mean()
+            ema_fast = df['close'].ewm(span=fast, adjust=False).mean()
+            ema_slow = df['close'].ewm(span=slow, adjust=False).mean()
             
             # Calculate MACD
             macd = ema_fast - ema_slow
@@ -589,10 +610,10 @@ class TrendAnalyzer:
         """Calculate Bollinger Bands"""
         try:
             # Calculate middle band (SMA)
-            middle_band = df['Close'].rolling(window=window).mean()
+            middle_band = df['close'].rolling(window=window).mean()
             
             # Calculate standard deviation
-            std = df['Close'].rolling(window=window).std()
+            std = df['close'].rolling(window=window).std()
             
             # Calculate upper and lower bands
             upper_band = middle_band + (std * num_std)
@@ -601,9 +622,9 @@ class TrendAnalyzer:
             return upper_band.iloc[-1], middle_band.iloc[-1], lower_band.iloc[-1]
         except Exception as e:
             logger.error(f"Error calculating Bollinger Bands: {e}")
-            if 'Close' in df.columns and len(df) > 0:
+            if 'close' in df.columns and len(df) > 0:
                 # Return current price as all bands if calculation fails
-                current_price = df['Close'].iloc[-1]
+                current_price = df['close'].iloc[-1]
                 return current_price, current_price, current_price
             return 0, 0, 0
     
@@ -611,9 +632,9 @@ class TrendAnalyzer:
         """Calculate Average True Range"""
         try:
             # Calculate True Range
-            tr1 = df['High'] - df['Low']
-            tr2 = abs(df['High'] - df['Close'].shift())
-            tr3 = abs(df['Low'] - df['Close'].shift())
+            tr1 = df['high'] - df['low']
+            tr2 = abs(df['high'] - df['close'].shift())
+            tr3 = abs(df['low'] - df['close'].shift())
             tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
             
             # Calculate ATR
@@ -628,12 +649,12 @@ class TrendAnalyzer:
         """Find local extrema (peaks and troughs) for support/resistance"""
         try:
             # Find peaks (local maxima)
-            peaks_idx = argrelextrema(df['High'].values, np.greater_equal, order=window_size)[0]
-            peaks = df['High'].iloc[peaks_idx]
+            peaks_idx = argrelextrema(df['high'].values, np.greater_equal, order=window_size)[0]
+            peaks = df['high'].iloc[peaks_idx]
             
             # Find troughs (local minima)
-            troughs_idx = argrelextrema(df['Low'].values, np.less_equal, order=window_size)[0]
-            troughs = df['Low'].iloc[troughs_idx]
+            troughs_idx = argrelextrema(df['low'].values, np.less_equal, order=window_size)[0]
+            troughs = df['low'].iloc[troughs_idx]
             
             return {
                 'peaks': peaks.values.tolist(),
@@ -647,7 +668,7 @@ class TrendAnalyzer:
         """Find price clusters for support/resistance using K-means"""
         try:
             # Combine high and low prices for clustering
-            prices = np.concatenate([df['High'].values, df['Low'].values])
+            prices = np.concatenate([df['high'].values, df['low'].values])
             
             # Reshape for K-means
             X = prices.reshape(-1, 1)
@@ -674,9 +695,9 @@ class TrendAnalyzer:
             last_data = df.iloc[-1]
             
             # Calculate pivot points
-            high = last_data['High']
-            low = last_data['Low']
-            close = last_data['Close']
+            high = last_data['high']
+            low = last_data['low']
+            close = last_data['close']
             
             pivot = (high + low + close) / 3
             support1 = (2 * pivot) - high
@@ -699,8 +720,8 @@ class TrendAnalyzer:
         """Detect double top/bottom patterns"""
         try:
             # Find peaks and troughs
-            peaks_idx = argrelextrema(df['High'].values, np.greater_equal, order=5)[0]
-            troughs_idx = argrelextrema(df['Low'].values, np.less_equal, order=5)[0]
+            peaks_idx = argrelextrema(df['high'].values, np.greater_equal, order=5)[0]
+            troughs_idx = argrelextrema(df['low'].values, np.less_equal, order=5)[0]
             
             patterns = []
             current_idx = len(df) - 1
@@ -713,8 +734,8 @@ class TrendAnalyzer:
                 
                 # Check if they are relatively close in time and price
                 time_diff = abs(last_peak - second_last_peak)
-                price_diff = abs(df['High'].iloc[last_peak] - df['High'].iloc[second_last_peak])
-                price_percent_diff = price_diff / df['High'].iloc[second_last_peak]
+                price_diff = abs(df['high'].iloc[last_peak] - df['high'].iloc[second_last_peak])
+                price_percent_diff = price_diff / df['high'].iloc[second_last_peak]
                 
                 # Double top conditions
                 if (time_diff <= 20 and  # Peaks within 20 bars
@@ -737,8 +758,8 @@ class TrendAnalyzer:
                 
                 # Check if they are relatively close in time and price
                 time_diff = abs(last_trough - second_last_trough)
-                price_diff = abs(df['Low'].iloc[last_trough] - df['Low'].iloc[second_last_trough])
-                price_percent_diff = price_diff / df['Low'].iloc[second_last_trough]
+                price_diff = abs(df['low'].iloc[last_trough] - df['low'].iloc[second_last_trough])
+                price_percent_diff = price_diff / df['low'].iloc[second_last_trough]
                 
                 # Double bottom conditions
                 if (time_diff <= 20 and  # Troughs within 20 bars
@@ -762,8 +783,8 @@ class TrendAnalyzer:
         """Detect head and shoulders patterns"""
         try:
             # Find peaks and troughs
-            peaks_idx = argrelextrema(df['High'].values, np.greater_equal, order=5)[0]
-            troughs_idx = argrelextrema(df['Low'].values, np.less_equal, order=5)[0]
+            peaks_idx = argrelextrema(df['high'].values, np.greater_equal, order=5)[0]
+            troughs_idx = argrelextrema(df['low'].values, np.less_equal, order=5)[0]
             
             patterns = []
             current_idx = len(df) - 1
@@ -778,12 +799,12 @@ class TrendAnalyzer:
                     right_peak = peaks_idx[i+2]
                     
                     # Head should be higher than shoulders
-                    if (df['High'].iloc[head_peak] > df['High'].iloc[left_peak] and 
-                        df['High'].iloc[head_peak] > df['High'].iloc[right_peak]):
+                    if (df['high'].iloc[head_peak] > df['high'].iloc[left_peak] and 
+                        df['high'].iloc[head_peak] > df['high'].iloc[right_peak]):
                         
                         # Left and right shoulders should be at similar height
-                        shoulder_diff = abs(df['High'].iloc[left_peak] - df['High'].iloc[right_peak])
-                        shoulder_percent_diff = shoulder_diff / df['High'].iloc[left_peak]
+                        shoulder_diff = abs(df['high'].iloc[left_peak] - df['high'].iloc[right_peak])
+                        shoulder_percent_diff = shoulder_diff / df['high'].iloc[left_peak]
                         
                         if shoulder_percent_diff <= 0.10:  # Shoulders within 10% of each other
                             # Pattern is formed, add to list if recent
@@ -807,12 +828,12 @@ class TrendAnalyzer:
                     right_trough = troughs_idx[i+2]
                     
                     # Head should be lower than shoulders
-                    if (df['Low'].iloc[head_trough] < df['Low'].iloc[left_trough] and 
-                        df['Low'].iloc[head_trough] < df['Low'].iloc[right_trough]):
+                    if (df['low'].iloc[head_trough] < df['low'].iloc[left_trough] and 
+                        df['low'].iloc[head_trough] < df['low'].iloc[right_trough]):
                         
                         # Left and right shoulders should be at similar height
-                        shoulder_diff = abs(df['Low'].iloc[left_trough] - df['Low'].iloc[right_trough])
-                        shoulder_percent_diff = shoulder_diff / df['Low'].iloc[left_trough]
+                        shoulder_diff = abs(df['low'].iloc[left_trough] - df['low'].iloc[right_trough])
+                        shoulder_percent_diff = shoulder_diff / df['low'].iloc[left_trough]
                         
                         if shoulder_percent_diff <= 0.10:  # Shoulders within 10% of each other
                             # Pattern is formed, add to list if recent
@@ -829,7 +850,6 @@ class TrendAnalyzer:
             return patterns
         except Exception as e:
             logger.error(f"Error detecting head and shoulders patterns: {e}")
-            return []
             traceback.print_exc()
             return {
                 'overall_trend': "unknown",
@@ -910,7 +930,7 @@ class TrendAnalyzer:
                 })
             
             # Calculate strength for each level based on proximity to price and historical touches
-            current_price = data['Close'].iloc[-1]
+            current_price = data['close'].iloc[-1]
             
             for level in all_levels:
                 # Proximity factor (closer levels are more relevant)
@@ -918,14 +938,14 @@ class TrendAnalyzer:
                 proximity_score = max(0, 1 - proximity * 10)  # Scale to 0-1 (0% to 100%)
                 
                 # Historical touches factor (more touches = stronger level)
-                price_tolerance = data['Close'].std() * 0.2  # 20% of standard deviation
+                price_tolerance = data['close'].std() * 0.2  # 20% of standard deviation
                 
                 # Count how many times price has approached this level
                 touches = 0
                 for i in range(1, len(data)):
                     # Check if price crossed or approached the level
-                    if (min(data['Low'].iloc[i-1], data['Low'].iloc[i]) <= level['price'] <= max(data['High'].iloc[i-1], data['High'].iloc[i]) or
-                        abs(data['Close'].iloc[i] - level['price']) <= price_tolerance):
+                    if (min(data['low'].iloc[i-1], data['low'].iloc[i]) <= level['price'] <= max(data['high'].iloc[i-1], data['high'].iloc[i]) or
+                        abs(data['close'].iloc[i] - level['price']) <= price_tolerance):
                         touches += 1
                 
                 # Normalize touches score
@@ -970,7 +990,7 @@ class TrendAnalyzer:
             return {
                 'support': [],
                 'resistance': [],
-                'current_price': df['Close'].iloc[-1] if not df.empty else None
+                'current_price': df['close'].iloc[-1] if not df.empty else None
             }
     
     def detect_patterns(self, df, window=25):
@@ -1023,10 +1043,10 @@ class TrendAnalyzer:
                     
                     # Apply the function
                     result = pattern_func(
-                        recent_data['Open'].values, 
-                        recent_data['High'].values,
-                        recent_data['Low'].values, 
-                        recent_data['Close'].values
+                        recent_data['open'].values, 
+                        recent_data['high'].values,
+                        recent_data['low'].values, 
+                        recent_data['close'].values
                     )
                     
                     # Check if pattern exists in the most recent candles (last 3)
@@ -1092,7 +1112,7 @@ class TrendAnalyzer:
             recent_data = df.tail(20).copy()
             
             # Get current price
-            current_price = recent_data['Close'].iloc[-1]
+            current_price = recent_data['close'].iloc[-1]
             
             # If support_resistance not provided, calculate it
             if support_resistance is None:
@@ -1132,7 +1152,7 @@ class TrendAnalyzer:
             atr = self._calculate_atr(recent_data)
             
             # Calculate volume trends
-            volume_change = recent_data['Volume'].pct_change().mean() * 100
+            volume_change = recent_data['volume'].pct_change().mean() * 100
             
             # Get momentum indicators
             recent_data['RSI'] = self._calculate_rsi(recent_data)

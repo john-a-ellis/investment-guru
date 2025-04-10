@@ -8,7 +8,7 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import yfinance as yf
 from modules.yf_utils import get_ticker_info, download_yf_data
-
+from modules.data_provider import data_provider
 def create_portfolio_analysis_component():
     """
     Creates a component for analyzing portfolio allocation and diversification
@@ -207,16 +207,16 @@ def calculate_correlation_matrix(portfolio, period="1y"):
     
     try:
         # Import FMP API
-        from modules.fmp_api import fmp_api
+        # from modules.fmp_api import fmp_api
         
         # Get historical price data for each symbol using FMP API
         historical_data = {}
         for symbol in symbols:
             try:
-                hist = fmp_api.get_historical_price(symbol, start_date=start_date, end_date=end_date)
+                hist = data_provider.get_historical_price(symbol, start_date=start_date, end_date=end_date)
                 
-                if not hist.empty and 'Close' in hist.columns:
-                    historical_data[symbol] = hist['Close']
+                if not hist.empty and 'close' in hist.columns:
+                    historical_data[symbol] = hist['close']
             except Exception as e:
                 print(f"Error getting historical data for {symbol} from FMP: {e}")
         

@@ -18,6 +18,7 @@ from modules.model_integration import ModelIntegration
 from modules.trend_analysis import TrendAnalyzer
 from modules.price_prediction import get_price_predictions
 from modules.portfolio_utils import load_tracked_assets, load_portfolio
+from modules.data_provider import data_provider
 
 def create_ml_prediction_component():
     """
@@ -162,14 +163,17 @@ def create_prediction_chart(prediction_data, historical_data=None):
     if historical_data is not None and not historical_data.empty:
         # Use only the last 90 days of historical data for context
         recent_history = historical_data.tail(90)
-        
-        fig.add_trace(go.Scatter(
-            x=recent_history.index,
-            y=recent_history['Close'],
-            mode='lines',
-            name='Historical Price',
-            line=dict(color='#2C3E50', width=2)
-        ))
+        # --- FIX: Use lowercase 'close' ---
+        if 'close' in recent_history.columns:
+            fig.add_trace(go.Scatter(
+                x=recent_history.index,
+                y=recent_history['close'], # Use lowercase
+                mode='lines',
+                name='Historical Price',
+                line=dict(color='#2C3E50', width=2)
+            ))
+        else:
+            print("Warning: 'close' column not found in historical data for prediction chart.")
     
     # Add predicted values - handle all types of date formats
     try:
@@ -298,14 +302,32 @@ def create_prediction_chart(prediction_data, historical_data=None):
     # Set chart title
     title_color = "black"
     title_text = f"Price Prediction"
-    
+    current_price = None # <<< INITIALIZE HERE
+
     if historical_data is not None and not historical_data.empty:
-        current_price = historical_data['Close'].iloc[-1]
-        
-        # Add prediction horizon to title
-        prediction_horizon = len(predicted_values) if 'predicted_values' in locals() and predicted_values else len(prediction_data.get('values', []))
-        title_text = f"Price Prediction ({prediction_horizon}-Day Horizon) - <b>{prediction_data.get('symbol', '')}</b>"
-        
+        if 'close' in historical_data.columns: # <<< Check historical_data
+            current_price = historical_data['close'].iloc[-1] # <<< Assign here
+            # ... (rest of title generation using current_price) ...
+
+            prediction_horizon = len(prediction_data.get('values', []))
+            title_text = f"Price Prediction ({prediction_horizon}-Day Horizon) - <b>{prediction_data.get('symbol', '')}</b>"
+
+            predicted_values = prediction_data.get('values')
+            # --- ADD CHECK FOR current_price VALIDITY ---
+            if predicted_values and current_price is not None and current_price > 0:
+                future_price = predicted_values[-1]
+                # --- ERROR LINE IS NOW SAFE ---
+                expected_return = ((future_price / current_price) - 1) * 100
+                title_text += f" (Current: ${current_price:.2f}, Expected: ${future_price:.2f}, Return: {expected_return:.2f}%)"
+                # ... (title color logic) ...
+            else:
+                 print(f"Warning: Cannot calculate expected return. predicted_values empty: {not predicted_values}, current_price: {current_price}")
+        else:
+            # current_price remains None
+            print("Warning: 'close' column not found for title generation.")
+            prediction_horizon = len(prediction_data.get('values', []))
+            title_text = f"Price Prediction ({prediction_horizon}-Day Horizon) - <b>{prediction_data.get('symbol', '')}</b> (Current Price Unavailable)"
+
         # Add expected return if we have valid predictions
         if 'predicted_values' in locals() and predicted_values:
             future_price = predicted_values[-1]
@@ -373,7 +395,13 @@ def create_prediction_details(prediction_data, historical_data=None):
     
     # Get current price if historical data is available
     if historical_data is not None and not historical_data.empty:
-        current_price = historical_data['Close'].iloc[-1]
+         # --- FIX: Use lowercase 'close' ---
+        if 'close' in historical_data.columns:
+            current_price = historical_data['close'].iloc[-1] # Use lowercase
+            # ... (rest of calculation using current_price) ...
+        else:
+            print("Warning: 'close' column not found for prediction details.")
+            current_price = "N/A"
         
         # Get predicted values and handle potential NaN values
         predicted_values = []
@@ -918,6 +946,7 @@ def register_ml_prediction_callbacks(app):
      State("ml-horizon-selector", "value")]
 )
     def update_prediction(n_clicks, symbol, days):
+        print(f"--- update_prediction received symbol: {repr(symbol)} ---") # Use repr to see exact string
         """
         Generate and display price predictions for the selected asset and time horizon
         
@@ -943,10 +972,10 @@ def register_ml_prediction_callbacks(app):
             print(f"Processing prediction for symbol: {symbol}, days: {days}")
             
             # Import FMP API
-            from modules.fmp_api import fmp_api
+            # from modules.fmp_api import fmp_api
             
             # Get historical data for context
-            historical_data = fmp_api.get_historical_price(symbol, period="1y")
+            historical_data = data_provider.get_historical_price(symbol, period="1y")
             
             if historical_data.empty:
                 fig = go.Figure()
@@ -1251,8 +1280,8 @@ def register_ml_prediction_callbacks(app):
         # Record transaction (placeholder - you should integrate with your transaction system)
         try:
             # Import FMP API to get current price
-            from modules.fmp_api import fmp_api
-            quote = fmp_api.get_quote(symbol)
+            # from modules.fmp_api import fmp_api
+            quote = data_provider.get_current_quote(symbol)
             
             if quote and 'price' in quote:
                 current_price = quote['price']

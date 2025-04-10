@@ -18,13 +18,12 @@ from dash.dependencies import MATCH
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Custom modules - consolidated imports from our improved architecture
-from modules.data_collector import DataCollector
 from modules.market_analyzer import MarketAnalyzer
 from modules.news_analyzer import NewsAnalyzer
 from modules.recommendation_engine import RecommendationEngine
 from modules.portfolio_tracker import PortfolioTracker
 from modules.mutual_fund_provider import MutualFundProvider
-
+from modules.data_provider import data_provider
 # Import consolidated portfolio utilities
 from modules.portfolio_utils import (
     load_portfolio, update_portfolio_data, add_investment, 
@@ -63,12 +62,12 @@ from components.ml_prediction_component import create_ml_prediction_component, r
 myTitle = 'AIRS - AI Investment Recommendation System'
 
 # Initialize the Dash app with a Bootstrap theme
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.CERULEAN])
 server = app.server  # For production deployment
 
 app.title = myTitle
 # Initialize system components
-data_collector = DataCollector()
+# data_collector = DataCollector()
 market_analyzer = MarketAnalyzer()
 news_analyzer = NewsAnalyzer()
 recommendation_engine = RecommendationEngine()
@@ -370,7 +369,7 @@ def update_market_overview(n, timeframe):
         return fig
     
     # Import FMP API
-    from modules.fmp_api import fmp_api
+    # from modules.fmp_api import fmp_api
     
     # Define time period based on selected timeframe
     end_date = datetime.now()
@@ -410,13 +409,13 @@ def update_market_overview(n, timeframe):
     for symbol, details in tracked_assets.items():
         try:
             # Get historical price data from FMP API
-            hist = fmp_api.get_historical_price(symbol, start_date=start_date, end_date=end_date)
+            hist = data_provider.get_historical_price(symbol, start_date=start_date, end_date=end_date)
             
-            if not hist.empty and 'Close' in hist.columns:
+            if not hist.empty and 'close' in hist.columns:
                 # Normalize values to start at 100 for better comparison
-                first_valid_close = hist['Close'].dropna().iloc[0] if not hist['Close'].dropna().empty else 1
+                first_valid_close = hist['close'].dropna().iloc[0] if not hist['close'].dropna().empty else 1
                 if first_valid_close > 0:  # Avoid division by zero
-                    normalized = hist['Close'] / first_valid_close * 100
+                    normalized = hist['close'] / first_valid_close * 100
                     
                     # Add to chart
                     fig.add_trace(go.Scatter(
@@ -432,13 +431,13 @@ def update_market_overview(n, timeframe):
     
     # Add a benchmark index (S&P/TSX Composite for Canadian focus)
     try:
-        tsx_hist = fmp_api.get_historical_price("^GSPTSE", start_date=start_date, end_date=end_date)
+        tsx_hist = data_provider.get_historical_price("^GSPTSE", start_date=start_date, end_date=end_date)
         
-        if not tsx_hist.empty and 'Close' in tsx_hist.columns:
+        if not tsx_hist.empty and 'close' in tsx_hist.columns:
             # Normalize TSX values
-            first_valid_tsx = tsx_hist['Close'].dropna().iloc[0] if not tsx_hist['Close'].dropna().empty else 1
+            first_valid_tsx = tsx_hist['close'].dropna().iloc[0] if not tsx_hist['close'].dropna().empty else 1
             if first_valid_tsx > 0:  # Avoid division by zero
-                tsx_normalized = tsx_hist['Close'] / first_valid_tsx * 100
+                tsx_normalized = tsx_hist['close'] / first_valid_tsx * 100
                 
                 # Add to chart with dashed line
                 fig.add_trace(go.Scatter(
@@ -448,6 +447,9 @@ def update_market_overview(n, timeframe):
                     name="S&P/TSX Composite",
                     line=dict(dash='dash', width=3)
                 ))
+        else:
+            print("Warning: No benchmark data ('^GSPTSE') found for market overview.")
+
     except Exception as e:
         print(f"Error getting TSX data: {e}")
         import traceback
@@ -528,8 +530,8 @@ def update_news_analysis(n):
     canadian_symbols = [s for s in all_symbols if s.endswith(".TO") or s.endswith(".V")]
     us_symbols = [s for s in all_symbols if not s.endswith(".TO") and not s.endswith(".V") and not s.startswith("MAW")]
     
-    # Import FMP API
-    from modules.fmp_api import fmp_api
+    # # Import FMP API
+    # from modules.fmp_api import fmp_api
     
     # Get news for Canadian symbols (focusing on TSX for Canadian market news)
     canadian_news = []
@@ -539,7 +541,7 @@ def update_news_analysis(n):
             if "^GSPTSE" not in canadian_symbols:
                 canadian_symbols.append("^GSPTSE")
                 
-            canadian_news = fmp_api.get_news(tickers=canadian_symbols, limit=15)
+            canadian_news = data_provider.get_news(tickers=canadian_symbols, limit=15)
         except Exception as e:
             print(f"Error fetching Canadian news: {e}")
     
@@ -547,7 +549,7 @@ def update_news_analysis(n):
     us_news = []
     if us_symbols:
         try:
-            us_news = fmp_api.get_news(tickers=us_symbols, limit=15)
+            us_news = data_provider.get_news(tickers=us_symbols, limit=15)
         except Exception as e:
             print(f"Error fetching US news: {e}")
     
@@ -555,7 +557,7 @@ def update_news_analysis(n):
     general_news = []
     if len(canadian_news) + len(us_news) < 5:
         try:
-            general_news = fmp_api.get_news(limit=10)
+            general_news = data_provider.get_news(limit=10)
         except Exception as e:
             print(f"Error fetching general news: {e}")
     

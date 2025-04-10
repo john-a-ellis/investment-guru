@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 # Import custom modules
 from modules.price_prediction import get_price_predictions, train_price_prediction_models
 from modules.trend_analysis import TrendAnalyzer
-from modules.data_collector import DataCollector
+from modules.data_provider import DataProvider
 from modules.portfolio_utils import load_portfolio
 from modules.price_prediction import ProphetModel
 
@@ -32,7 +32,7 @@ class ModelIntegration:
     Integrates various ML models for investment recommendations.
     """
     def __init__(self):
-        self.data_collector = DataCollector()
+        self.data_provider = DataProvider()
         self.trend_analyzer = TrendAnalyzer()
         self.prediction_cache = {}
         self.trend_cache = {}
@@ -50,78 +50,112 @@ class ModelIntegration:
     def get_asset_analysis(self, symbol, days_to_predict=30, force_refresh=False):
         """
         Get comprehensive analysis for a specific asset, including price predictions
-        and trend analysis.
-        
+        and trend analysis. Ensures default values for failed sub-analyses.
+
         Args:
             symbol (str): Asset symbol
             days_to_predict (int): Number of days to predict prices for
             force_refresh (bool): Force refresh of cached data
-        
+
         Returns:
-            dict: Comprehensive asset analysis
+            dict: Comprehensive asset analysis or None on critical failure
         """
-        # Check if we have recent cached results
-        cache_key = f"{symbol}_analysis"
+        # --- DEFINE CACHE KEY ---
+        cache_key = f"{symbol}_analysis_{days_to_predict}"
+
+        # --- TEMPORARILY DISABLE CACHE CHECK FOR DEBUGGING ---
+        force_refresh = True # ADD THIS LINE TO FORCE RECALCULATION
+        # --- END TEMPORARY CHANGE ---
+
+        # --- OPTIONAL: RE-ENABLE CACHE CHECK ---
         if cache_key in self.prediction_cache and not force_refresh:
             cache_time, data = self.prediction_cache[cache_key]
-            # Return cached data if less than 6 hours old
-            if (datetime.now() - cache_time).total_seconds() < 21600:  # 6 hours
+            # Return cached data if less than 1 hour old (adjust as needed)
+            if (datetime.now() - cache_time).total_seconds() < 3600:
+                logger.info(f"Returning cached analysis for {symbol}")
                 return data
-        
+        # --- END OPTIONAL CACHE CHECK ---
+
         try:
             # Get historical data for analysis
-            historical_data = self.data_collector.get_market_data(symbols=[symbol], timeframe="1y")
-            
+            # --- Use self.data_provider, NOT self.data_collector ---
+            historical_data_df = self.data_provider.get_historical_price(symbol=symbol, period="1y")
+            # Convert the DataFrame back to the dictionary format expected by the rest of the function
+            historical_data = {symbol: historical_data_df} if not historical_data_df.empty else {}
+
             if symbol not in historical_data or historical_data[symbol].empty:
                 logger.error(f"No historical data available for {symbol}")
-                return None
-            
-            # Run trend analysis
+                return None # Return None if no historical data
+
             df = historical_data[symbol]
+
+            # --- Run analyses and ensure default values on failure ---
             trend_analysis = self.trend_analyzer.detect_trend(df)
+            if trend_analysis is None:
+                logger.warning(f"Trend analysis returned None for {symbol}. Using default.")
+                trend_analysis = {'overall_trend': 'unknown', 'trend_strength': 50, 'details': {}, 'latest_data': {}} # Provide default structure
+
             support_resistance = self.trend_analyzer.identify_support_resistance(df)
+            if support_resistance is None:
+                logger.warning(f"Support/Resistance analysis returned None for {symbol}. Using default.")
+                support_resistance = {'support': [], 'resistance': [], 'current_price': df['close'].iloc[-1] if not df.empty else None} # Default structure
+
             patterns = self.trend_analyzer.detect_patterns(df)
-            breakout = self.trend_analyzer.predict_breakout(df, support_resistance)
+            if patterns is None:
+                logger.warning(f"Pattern detection returned None for {symbol}. Using default.")
+                patterns = {'patterns': []} # Default structure
+
+            # Pass potentially defaulted support_resistance to predict_breakout
+            breakout = self.trend_analyzer.predict_breakout(df, support_resistance if support_resistance else None)
+            if breakout is None:
+                logger.warning(f"Breakout prediction returned None for {symbol}. Using default.")
+                breakout = {'prediction': 'neutral', 'confidence': 0, 'details': 'Analysis failed'} # Default structure
+
             market_regime = self.trend_analyzer.get_market_regime(df)
-            
-            # Get price predictions
+            if market_regime is None:
+                logger.warning(f"Market regime analysis returned None for {symbol}. Using default.")
+                market_regime = {'regime': 'unknown', 'trend': 'unknown'} # Default structure
+
+            # Get price predictions (already has fallback mechanisms)
             predictions = get_price_predictions(symbol, days=days_to_predict)
-            
+            if predictions is None:
+                 logger.warning(f"Price prediction returned None for {symbol}. Using default.")
+                 # Use the simple fallback structure if get_price_predictions fails completely
+                 from modules.price_prediction import create_simple_fallback
+                 predictions = create_simple_fallback(symbol, days_to_predict)
+
             # Check if model training is in progress
-            training_status = self.model_training_status.get(symbol, "not_started")
-            
-            # Combine all analyses
+            training_status = self.model_training_status.get(symbol, {'status': 'not_started'}) # Ensure dict format
+
+            # --- Combine all analyses ---
             analysis = {
                 'symbol': symbol,
                 'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 'price': {
-                    'current': df['Close'].iloc[-1],
-                    'change_1d': (df['Close'].iloc[-1] / df['Close'].iloc[-2] - 1) * 100 if len(df) > 1 else 0,
-                    'change_1w': (df['Close'].iloc[-1] / df['Close'].iloc[-5] - 1) * 100 if len(df) > 5 else 0,
-                    'change_1m': (df['Close'].iloc[-1] / df['Close'].iloc[-20] - 1) * 100 if len(df) > 20 else 0,
+                    'current': df['close'].iloc[-1],
+                    'change_1d': (df['close'].iloc[-1] / df['close'].iloc[-2] - 1) * 100 if len(df) > 1 else 0,
+                    'change_1w': (df['close'].iloc[-1] / df['close'].iloc[-5] - 1) * 100 if len(df) > 5 else 0,
+                    'change_1m': (df['close'].iloc[-1] / df['close'].iloc[-20] - 1) * 100 if len(df) > 20 else 0,
                 },
-                'trend': trend_analysis,
-                'support_resistance': support_resistance,
-                'patterns': patterns,
-                'breakout': breakout,
-                'market_regime': market_regime,
-                'price_predictions': predictions,
-                'model_training': {
-                    'status': training_status,
-                    'last_updated': self.model_training_status.get(f"{symbol}_updated", "never")
-                }
+                'trend': trend_analysis, # Now guaranteed to be a dict
+                'support_resistance': support_resistance, # Now guaranteed to be a dict
+                'patterns': patterns, # Now guaranteed to be a dict
+                'breakout': breakout, # Now guaranteed to be a dict
+                'market_regime': market_regime, # Now guaranteed to be a dict
+                'price_predictions': predictions, # Now guaranteed to be a dict
+                'model_training': training_status # Already handled
             }
-            
-            # Cache the results
+
+            # Cache the results (This line will now work)
             self.prediction_cache[cache_key] = (datetime.now(), analysis)
-            
+
             return analysis
-        
+
         except Exception as e:
-            logger.error(f"Error in get_asset_analysis for {symbol}: {e}")
+            logger.error(f"Critical Error in get_asset_analysis for {symbol}: {e}")
             import traceback
             traceback.print_exc()
-            return None
+            return None # Return None on any critical failure
     
     def train_models_for_symbol(self, symbol, lookback_period="2y", async_training=True):
         """
