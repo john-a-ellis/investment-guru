@@ -368,18 +368,21 @@ def create_allocation_drift_table(analysis):
 def create_rebalance_recommendations(rebalance_plan):
     """
     Create a component displaying rebalance recommendations.
-    
+
     Args:
-        rebalance_plan (dict): Portfolio rebalancing plan
-        
+        rebalance_plan (dict): Portfolio rebalancing plan (which is the analysis dict)
+
     Returns:
         html.Div: Component with recommendations
     """
-    # Check if rebalance_plan is valid
-    if not rebalance_plan or "recommendations" not in rebalance_plan:
+    # Check if rebalance_plan is valid and contains the CORRECT key
+    # --- FIX: Change "recommendations" to "specific_recommendations" ---
+    if not rebalance_plan or "specific_recommendations" not in rebalance_plan:
         return html.Div("No rebalancing recommendations available.")
-    
-    recommendations = rebalance_plan.get("recommendations", [])
+
+    # --- FIX: Get the list from the correct key ---
+    recommendations = rebalance_plan.get("specific_recommendations", [])
+
     if not recommendations:
         return html.Div(
             dbc.Alert("Your portfolio is well-balanced. No rebalancing actions needed at this time.", color="success"),

@@ -18,28 +18,35 @@ from dash.dependencies import MATCH
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Custom modules - consolidated imports from our improved architecture
+
 from modules.market_analyzer import MarketAnalyzer
 from modules.news_analyzer import NewsAnalyzer
 from modules.recommendation_engine import RecommendationEngine
-from modules.portfolio_tracker import PortfolioTracker
+# from modules.portfolio_tracker import PortfolioTracker
 from modules.mutual_fund_provider import MutualFundProvider
 from modules.data_provider import data_provider
 # Import consolidated portfolio utilities
 from modules.portfolio_utils import (
-    load_portfolio, update_portfolio_data, add_investment, 
-    remove_investment, load_tracked_assets, save_tracked_assets, 
-    save_user_profile, record_transaction, load_user_profile
+    load_portfolio, update_portfolio_data, add_investment,
+    remove_investment, load_tracked_assets, save_tracked_assets,
+    save_user_profile, record_transaction, load_user_profile,
+    get_earliest_transaction_date, load_transactions, # Added load_transactions if needed elsewhere
+    load_target_allocation, save_target_allocation, # Moved from rebalancer
+    analyze_current_vs_target # Moved from rebalancer
 )
-
+from modules.portfolio_tracker import PortfolioTracker
+from modules.portfolio_rebalancer import create_rebalance_plan
 from components.risk_metrics_component import create_risk_visualization_component
 from modules.portfolio_risk_metrics import create_risk_metrics_component
-# Components
 from components.asset_tracker import create_asset_tracker_component, create_tracked_assets_table
 from components.user_profile import create_user_profile_component
 from components.mutual_fund_manager import create_mutual_fund_manager_component
 from components.portfolio_management import create_portfolio_management_component, create_portfolio_table
-from components.portfolio_visualizer import (
-    create_portfolio_visualizer_component
+from components.portfolio_visualizer import create_portfolio_visualizer_component
+from components.portfolio_analysis import (
+    create_portfolio_analysis_component, create_allocation_chart, create_sector_chart,
+    create_correlation_chart, create_allocation_details, create_sector_details,
+    create_correlation_analysis
 )
 
 from components.portfolio_analysis import (
@@ -49,15 +56,12 @@ from components.portfolio_analysis import (
 )
 
 from components.rebalancing_component import (
-    create_rebalancing_component, create_allocation_sliders, create_current_vs_target_chart, 
-    create_target_allocation_chart, create_allocation_drift_table, 
+    create_rebalancing_component, create_allocation_sliders, create_current_vs_target_chart,
+    create_target_allocation_chart, create_allocation_drift_table,
     create_rebalance_recommendations, create_rebalance_summary
 )
-from modules.portfolio_rebalancer import (
-    analyze_current_vs_target, load_target_allocation, save_target_allocation, 
-    create_rebalance_plan
-)
 from components.ml_prediction_component import create_ml_prediction_component, register_ml_prediction_callbacks
+
 
 myTitle = 'AIRS - AI Investment Recommendation System'
 
@@ -1059,10 +1063,11 @@ def update_portfolio_graph(n_intervals, period, chart_type, calculation_method):
             tick_spacing = 60  # Show a tick every 2 months for 1 year
         else:  # "all"
             # Find earliest transaction date from the database
-            earliest_date_query = """
-            SELECT MIN(transaction_date) as earliest_date FROM transactions;
-            """
-            earliest_result = execute_query(earliest_date_query, fetchone=True)
+
+            # earliest_date_query = """
+            # SELECT MIN(transaction_date) as earliest_date FROM transactions;
+            # """
+            earliest_result = get_earliest_transaction_date()
             
             if earliest_result and earliest_result['earliest_date']:
                 start_date = earliest_result['earliest_date']
@@ -1364,42 +1369,44 @@ def update_risk_metrics(n_intervals, period):
     
     # Create and return the risk metrics component
     return create_risk_metrics_component(portfolio, period)
-@app.callback(
-    Output("current-vs-target-chart", "figure"),
-    [Input("rebalance-update-interval", "n_intervals"),
-     Input("rebalancing-tabs", "active_tab")]
-)
-def update_allocation_chart(n_intervals, active_tab):
-    """
-    Update the current vs target allocation chart
-    """
-    # Load portfolio data
-    portfolio = load_portfolio()
+# @app.callback(
+#     Output("current-vs-target-chart", "figure", allow_duplicate=True),
+#     Input("rebalance-update-interval", "n_intervals"),
+#     Input("rebalancing-tabs", "active_tab"),
+#     prevent_initial_call='initial_duplicate'
+# )
+# def update_allocation_chart(n_intervals, active_tab):
+#     """
+#     Update the current vs target allocation chart
+#     """
+#     # Load portfolio data
+#     portfolio = load_portfolio()
     
-    # Analyze current vs target allocation
-    analysis = analyze_current_vs_target(portfolio)
+#     # Analyze current vs target allocation
+#     analysis = analyze_current_vs_target(portfolio)
     
-    # Create and return the chart
-    return create_current_vs_target_chart(analysis)
+#     # Create and return the chart
+#     return create_current_vs_target_chart(analysis)
 
 # Callback to update allocation drift table
 @app.callback(
-    Output("allocation-drift-table", "children"),
-    [Input("rebalance-update-interval", "n_intervals"),
-     Input("rebalancing-tabs", "active_tab")]
+    Output("current-vs-target-chart", "figure", allow_duplicate=True),
+    Input("rebalance-update-interval", "n_intervals"),
+    Input("rebalancing-tabs", "active_tab"),
+    prevent_initial_call='initial_duplicate'
 )
-def update_allocation_drift_table(n_intervals, active_tab):
-    """
-    Update the allocation drift table
-    """
-    # Load portfolio data
-    portfolio = load_portfolio()
-    
-    # Analyze current vs target allocation
-    analysis = analyze_current_vs_target(portfolio)
-    
-    # Create and return the table
-    return create_allocation_drift_table(analysis)
+def update_allocation_chart_rebalance(n_intervals, active_tab): # Renamed to avoid conflict
+    """Update the current vs target allocation chart"""
+    portfolio = load_portfolio() # From portfolio_utils
+    analysis = analyze_current_vs_target(portfolio) # From portfolio_utils
+    return create_current_vs_target_chart(analysis) # From components
+
+def update_allocation_drift_table_rebalance(n_intervals, active_tab): # Renamed
+    """Update the allocation drift table"""
+    portfolio = load_portfolio() # From portfolio_utils
+    analysis = analyze_current_vs_target(portfolio) # From portfolio_utils
+    return create_allocation_drift_table(analysis) # From components
+
 
 # Callback to update rebalance summary
 @app.callback(
@@ -1407,18 +1414,11 @@ def update_allocation_drift_table(n_intervals, active_tab):
     [Input("rebalance-update-interval", "n_intervals"),
      Input("rebalancing-tabs", "active_tab")]
 )
-def update_rebalance_summary(n_intervals, active_tab):
-    """
-    Update the rebalance summary
-    """
-    # Load portfolio data
-    portfolio = load_portfolio()
-    
-    # Analyze current vs target allocation
-    analysis = analyze_current_vs_target(portfolio)
-    
-    # Create and return the summary
-    return create_rebalance_summary(analysis)
+def update_rebalance_summary_rebalance(n_intervals, active_tab): # Renamed
+    """Update the rebalance summary"""
+    portfolio = load_portfolio() # From portfolio_utils
+    analysis = analyze_current_vs_target(portfolio) # From portfolio_utils
+    return create_rebalance_summary(analysis) # From components
 
 # Callback to update rebalance recommendations
 @app.callback(
@@ -1426,47 +1426,27 @@ def update_rebalance_summary(n_intervals, active_tab):
     [Input("rebalance-update-interval", "n_intervals"),
      Input("rebalancing-tabs", "active_tab")]
 )
-def update_rebalance_recommendations(n_intervals, active_tab):
-    """
-    Update the rebalance recommendations
-    """
-    # Only update when on the Rebalancing Plan tab
+def update_rebalance_recommendations_rebalance(n_intervals, active_tab): # Renamed
+    """Update the rebalance recommendations"""
     if active_tab == "rebalancing-plan-tab":
-        # Load portfolio data
-        portfolio = load_portfolio()
-        
-        # Get user risk level from profile
-        profile = load_user_profile()
+        portfolio = load_portfolio() # From portfolio_utils
+        profile = load_user_profile() # From portfolio_utils
         risk_level = profile.get("risk_level", 5)
-        
-        # Create rebalance plan
+        # create_rebalance_plan is still in portfolio_rebalancer, but uses analyze_current_vs_target from portfolio_utils
         rebalance_plan = create_rebalance_plan(portfolio, risk_level)
-        
-        # Create and return the recommendations
-        return create_rebalance_recommendations(rebalance_plan)
-    
-    # Return empty div if not on the right tab
+        return create_rebalance_recommendations(rebalance_plan) # From components
     return html.Div()
 
-# Callback to initialize target allocation sliders
 # Callback to initialize target allocation sliders
 @app.callback(
     Output("target-allocation-sliders", "children"),
     [Input("rebalancing-tabs", "active_tab")]
 )
-def initialize_target_sliders(active_tab):
-    """
-    Initialize the target allocation sliders with current values
-    """
-    # Only update when on the Target Settings tab
-    if active_tab == "target-settings-tab":  # Using the new tab ID instead of "tab-2"
-        # Load current target allocation
-        target_allocation = load_target_allocation()
-        
-        # Create and return the sliders
-        return create_allocation_sliders(target_allocation)
-    
-    # Return empty div if not on the right tab
+def initialize_target_sliders_rebalance(active_tab): # Renamed
+    """Initialize the target allocation sliders with current values"""
+    if active_tab == "target-settings-tab":
+        target_allocation = load_target_allocation() # From portfolio_utils
+        return create_allocation_sliders(target_allocation) # From components
     return html.Div()
 
 # Callback to update target allocation chart based on slider values
@@ -1476,42 +1456,19 @@ def initialize_target_sliders(active_tab):
     [Input({"type": "target-slider", "asset_type": ALL}, "value"),
      Input({"type": "target-slider", "asset_type": ALL}, "id")]
 )
-def update_target_chart(slider_values, slider_ids):
-    """
-    Update the target allocation chart based on slider values
-    
-    Args:
-        slider_values (list): List of slider values
-        slider_ids (list): List of slider IDs containing asset types
-    
-    Returns:
-        tuple: (figure, warning)
-    """
-    # Create new target allocation using slider values and their corresponding asset types
+def update_target_chart_rebalance(slider_values, slider_ids): # Renamed
+    """Update the target allocation chart based on slider values"""
+    # ... (logic remains the same, uses create_target_allocation_chart from components) ...
     new_target = {}
-    
-    # Map each slider value to its corresponding asset type from the slider ID
     for i, slider_id in enumerate(slider_ids):
         if i < len(slider_values):
             asset_type = slider_id["asset_type"]
             new_target[asset_type] = slider_values[i]
-    
-    # Calculate total allocation
     total_allocation = sum(new_target.values())
-    
-    # Create warning if total is not 100%
-    if abs(total_allocation - 100) > 1:  # Allow for small rounding differences
-        warning = dbc.Alert(
-            f"Warning: Total allocation is {total_allocation:.1f}%. Target should sum to 100%.",
-            color="warning"
-        )
-    else:
-        warning = html.Div()
-    
-    # Create and return the chart
-    return create_target_allocation_chart(new_target), warning
+    warning = dbc.Alert(f"Warning: Total allocation is {total_allocation:.1f}%. Target should sum to 100%.", color="warning") if abs(total_allocation - 100) > 1 else html.Div()
+    return create_target_allocation_chart(new_target), warning # From components
 
-# Callback to save target allocation
+
 @app.callback(
     Output("target-allocation-feedback", "children"),
     Input("save-target-allocation", "n_clicks"),
@@ -1519,39 +1476,24 @@ def update_target_chart(slider_values, slider_ids):
     State({"type": "target-slider", "asset_type": ALL}, "value"),
     prevent_initial_call=True
 )
-def save_target_settings(n_clicks, slider_ids, slider_values):
-    """
-    Save the target allocation settings
-    """
-    if n_clicks is None:
-        raise dash.exceptions.PreventUpdate
-    
-    # Create new target allocation from slider values
+
+def save_target_settings_rebalance(n_clicks, slider_ids, slider_values): # Renamed
+    """Save the target allocation settings"""
+    if n_clicks is None: raise dash.exceptions.PreventUpdate
     new_target = {}
     for i, slider_id in enumerate(slider_ids):
         asset_type = slider_id["asset_type"]
-        if i < len(slider_values):
-            new_target[asset_type] = slider_values[i]
-    
-    # Check if total allocation is 100%
+        if i < len(slider_values): new_target[asset_type] = slider_values[i]
+
     total_allocation = sum(new_target.values())
-    if abs(total_allocation - 100) > 1:  # Allow for small rounding differences
-        return dbc.Alert(
-            f"Error: Total allocation must sum to 100%. Current total: {total_allocation:.1f}%",
-            color="danger"
-        )
-    
-    # Save target allocation
-    if save_target_allocation(new_target):
-        return dbc.Alert(
-            "Target allocation saved successfully.",
-            color="success"
-        )
+    if abs(total_allocation - 100) > 1:
+        return dbc.Alert(f"Error: Total allocation must sum to 100%. Current total: {total_allocation:.1f}%", color="danger")
+
+    if save_target_allocation(new_target): # From portfolio_utils
+        return dbc.Alert("Target allocation saved successfully.", color="success")
     else:
-        return dbc.Alert(
-            "Error saving target allocation.",
-            color="danger"
-        )
+        return dbc.Alert("Error saving target allocation.", color="danger")
+
 
 register_ml_prediction_callbacks(app)
 

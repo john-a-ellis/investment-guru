@@ -8,7 +8,7 @@ import numpy as np
 from datetime import datetime, timedelta
 import logging
 from modules.db_utils import execute_query
-from modules.portfolio_utils import get_historical_usd_to_cad_rates
+# from modules.portfolio_utils import get_historical_usd_to_cad_rates
 
 # Configure logging
 logging.basicConfig(

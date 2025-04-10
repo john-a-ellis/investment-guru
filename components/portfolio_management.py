@@ -84,7 +84,7 @@ def create_portfolio_table(portfolio):
     grouped by asset symbol, integrated with transaction history and transaction forms
     """
     # Load transactions to enhance the portfolio view
-    from modules.transaction_tracker import load_transactions
+    from modules.portfolio_utils import load_transactions
     transactions = load_transactions()
     
     if not portfolio:

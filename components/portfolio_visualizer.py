@@ -14,11 +14,11 @@ import plotly.graph_objects as go
 
 from modules.data_provider import data_provider
 from modules.portfolio_utils import get_money_weighted_return
-from modules.transaction_tracker import load_transactions
-from modules.portfolio_utils import get_usd_to_cad_rate, get_historical_usd_to_cad_rates
+from modules.portfolio_utils import load_transactions
+from modules.portfolio_utils import get_usd_to_cad_rate
 from modules.mutual_fund_provider import MutualFundProvider
 from modules.yf_utils import download_yf_data, get_ticker_history
-from modules.portfolio_utils import get_historical_usd_to_cad_rates
+# from modules.portfolio_utils import get_historical_usd_to_cad_rates
 # Import functions directly to avoid circular imports
 # We're already importing these individually above, so this commented code is just for reference
 # from modules.portfolio_utils import (
