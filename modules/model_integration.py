@@ -64,7 +64,7 @@ class ModelIntegration:
         cache_key = f"{symbol}_analysis_{days_to_predict}"
 
         # --- TEMPORARILY DISABLE CACHE CHECK FOR DEBUGGING ---
-        force_refresh = True # ADD THIS LINE TO FORCE RECALCULATION
+        # force_refresh = True # ADD THIS LINE TO FORCE RECALCULATION
         # --- END TEMPORARY CHANGE ---
 
         # --- OPTIONAL: RE-ENABLE CACHE CHECK ---
