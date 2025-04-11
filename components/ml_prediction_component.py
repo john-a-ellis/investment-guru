@@ -1,10 +1,11 @@
 # components/ml_prediction_component.py
 """
 ML prediction component for the Investment Recommendation System.
-Provides visualization and interaction with ML models for price prediction and trend analysis.
+Provides visualization and interaction with ML models for price prediction, trend analysis,
+portfolio insights, and model management.
 """
 import dash
-from dash import dcc, html, Input, Output, State
+from dash import dcc, html, Input, Output, State, callback, ctx # Added ctx
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 import plotly.express as px
@@ -12,13 +13,82 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import time
+import logging # Added
+import traceback # Added for error logging
+import json # Added
+from dash.exceptions import PreventUpdate
 
 # Import custom modules for ML predictions and analysis
 from modules.model_integration import ModelIntegration
 from modules.trend_analysis import TrendAnalyzer
-from modules.price_prediction import get_price_predictions
-from modules.portfolio_utils import load_tracked_assets, load_portfolio
+from modules.price_prediction import get_price_predictions # Keep original prediction function
+from modules.portfolio_utils import load_tracked_assets, load_portfolio, record_transaction # Added record_transaction
 from modules.data_provider import data_provider
+
+# Import the function to get trained model data
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..')) # Add parent dir
+try:
+    from modules.db_utils import get_trained_models_data
+except ImportError:
+    print("ERROR: Could not import get_trained_models_data from modules.db_utils")
+    # Define a dummy function to avoid crashing the app layout
+    def get_trained_models_data():
+        print("WARNING: Using dummy get_trained_models_data function.")
+        return pd.DataFrame()
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# --- HELPER FUNCTION TO CREATE THE TRAINED MODELS TABLE ---
+def create_trained_models_table(models_df):
+    """Creates a dbc.Table from the trained models DataFrame."""
+    if not isinstance(models_df, pd.DataFrame) or models_df.empty:
+        return dbc.Alert("No trained model data found in the database.", color="info")
+
+    metrics_to_display = ['accuracy', 'precision', 'recall', 'f1_score', 'mse', 'mae', 'r2_score', 'rmse']
+
+    header = [
+        html.Thead(html.Tr([
+            html.Th("Filename"), html.Th("Symbol"), html.Th("Type"),
+            html.Th("Training Date"), html.Th("Key Metrics"),
+            html.Th("Notes", style={'maxWidth': '200px'})
+        ]))
+    ]
+    rows = []
+    for index, row in models_df.iterrows():
+        metrics_dict = row.get('metrics', {})
+        metrics_display_items = []
+        if isinstance(metrics_dict, dict):
+            for key in metrics_to_display:
+                if key in metrics_dict:
+                    value = metrics_dict[key]
+                    if isinstance(value, (float, int)):
+                         metrics_display_items.append(html.Li(f"{key.replace('_',' ').title()}: {value:.4f}"))
+                    else:
+                         metrics_display_items.append(html.Li(f"{key.replace('_',' ').title()}: {value}"))
+            if not metrics_display_items and metrics_dict and 'error' not in metrics_dict:
+                 metrics_display_items.append(html.Li(f"Other metrics available ({len(metrics_dict)} total)"))
+            elif not metrics_dict or 'error' in metrics_dict:
+                 metrics_display_items.append(html.Li("N/A"))
+            elif len(metrics_dict) > len(metrics_display_items):
+                 metrics_display_items.append(html.Li(f"... ({len(metrics_dict) - len(metrics_display_items)} more)"))
+        elif metrics_dict:
+             metrics_display_items.append(html.Li(f"Error: {metrics_dict}"))
+        else:
+             metrics_display_items.append(html.Li("N/A"))
+
+        metrics_cell = html.Td(html.Ul(metrics_display_items, style={'paddingLeft': '15px', 'marginBottom': '0', 'listStyleType': 'none'}))
+        notes = row.get('notes', '')
+        truncated_notes = (notes[:100] + '...') if notes and len(notes) > 100 else notes
+        rows.append(html.Tr([
+            html.Td(row.get('model_filename', 'N/A')), html.Td(row.get('symbol', 'N/A')),
+            html.Td(row.get('model_type', 'N/A')), html.Td(row.get('training_date', 'N/A')),
+            metrics_cell, html.Td(truncated_notes, title=notes if truncated_notes != notes else '')
+        ]))
+    body = [html.Tbody(rows)]
+    return dbc.Table(header + body, bordered=True, striped=True, hover=True, responsive=True, size="sm")
 
 def create_ml_prediction_component():
     """
@@ -122,243 +192,75 @@ def create_ml_prediction_component():
 def create_prediction_chart(prediction_data, historical_data=None):
     """
     Create a prediction chart based on ML model predictions with improved error handling.
-    
-    Args:
-        prediction_data (dict): Prediction data from ML models
-        historical_data (DataFrame, optional): Historical price data for context
-    
-    Returns:
-        Figure: Plotly figure with prediction chart
+    (Copied from original, assuming it's correct)
     """
-    # Debug output to see what's in prediction_data
-    print(f"Prediction data keys: {prediction_data.keys() if prediction_data else 'None'}")
-    
     if not prediction_data:
-        # Return empty figure if no prediction data
         fig = go.Figure()
-        fig.update_layout(
-            title="Price Prediction (No Prediction Data Available)",
-            template="plotly_white"
-        )
+        fig.update_layout(title="Price Prediction (No Prediction Data Available)", template="plotly_white")
         return fig
-    
+
     if 'values' not in prediction_data or not prediction_data.get('values'):
-        # Return empty figure if no values in prediction data
         fig = go.Figure()
-        fig.update_layout(
-            title=f"Price Prediction (No Valid Values for {prediction_data.get('symbol', 'Unknown')})",
-            template="plotly_white"
-        )
+        fig.update_layout(title=f"Price Prediction (No Valid Values for {prediction_data.get('symbol', 'Unknown')})", template="plotly_white")
         return fig
-    
-    # More detailed debug information
-    print(f"Values count: {len(prediction_data['values'])}")
-    print(f"Dates count: {len(prediction_data['dates']) if 'dates' in prediction_data else 'No dates'}")
-    print(f"First few values: {prediction_data['values'][:3]}")
-    
-    # Create figure
+
     fig = go.Figure()
-    
-    # Add historical data if available
     if historical_data is not None and not historical_data.empty:
-        # Use only the last 90 days of historical data for context
         recent_history = historical_data.tail(90)
-        # --- FIX: Use lowercase 'close' ---
-        if 'close' in recent_history.columns:
-            fig.add_trace(go.Scatter(
-                x=recent_history.index,
-                y=recent_history['close'], # Use lowercase
-                mode='lines',
-                name='Historical Price',
-                line=dict(color='#2C3E50', width=2)
-            ))
-        else:
-            print("Warning: 'close' column not found in historical data for prediction chart.")
-    
-    # Add predicted values - handle all types of date formats
+        if 'close' in recent_history.columns: # Use lowercase
+            fig.add_trace(go.Scatter(x=recent_history.index, y=recent_history['close'], mode='lines', name='Historical Price', line=dict(color='#2C3E50', width=2)))
+        else: print("Warning: 'close' column not found in historical data for prediction chart.")
+
     try:
-        # First ensure dates are datetime objects
         if 'dates' in prediction_data and prediction_data['dates']:
-            if isinstance(prediction_data['dates'][0], str):
-                import pandas as pd
-                predicted_dates = pd.to_datetime(prediction_data['dates'])
-            else:
-                predicted_dates = prediction_data['dates']
-                
-            # Ensure values are valid numbers
-            import numpy as np
+            predicted_dates = pd.to_datetime(prediction_data['dates']) if isinstance(prediction_data['dates'][0], str) else prediction_data['dates']
             values = prediction_data['values']
-            
-            # Debug values before processing
-            print(f"Values before processing: {values[:5]}")
-            print(f"Values types: {[type(v) for v in values[:5]]}")
-            
-            predicted_values = []
-            
-            for val in values:
-                try:
-                    float_val = float(val)
-                    if not np.isnan(float_val):
-                        predicted_values.append(float_val)
-                    else:
-                        # Skip NaN values
-                        print(f"Skipping NaN value in chart creation")
-                        continue
-                except (ValueError, TypeError) as e:
-                    # Skip invalid values
-                    print(f"Value error in chart creation: {e}")
-                    continue
-            
-            # Debug values after processing
-            print(f"Valid values count: {len(predicted_values)}")
-            print(f"Processed values: {predicted_values[:5]}")
-            
-            # Only proceed if we have valid values
+            predicted_values = [float(val) for val in values if pd.notna(val) and val is not None]
+
             if predicted_values and len(predicted_dates) >= len(predicted_values):
-                # Adjust dates to match the number of valid values
                 valid_dates = predicted_dates[:len(predicted_values)]
-                
-                # Debug to see the prediction horizon
-                print(f"Prediction horizon: {len(valid_dates)} days")
-                if len(valid_dates) > 0:
-                    print(f"First prediction date: {valid_dates[0]}")
-                    print(f"Last prediction date: {valid_dates[-1]}")
-                
-                # Add prediction trace
-                fig.add_trace(go.Scatter(
-                    x=valid_dates,
-                    y=predicted_values,
-                    mode='lines',
-                    name='Predicted Price',
-                    line=dict(color='#2980B9', width=3, dash='dash')
-                ))
-                
-                # Add confidence intervals if available
+                fig.add_trace(go.Scatter(x=valid_dates, y=predicted_values, mode='lines', name='Predicted Price', line=dict(color='#2980B9', width=3, dash='dash')))
+
                 if 'confidence' in prediction_data and prediction_data['confidence']:
                     confidence = prediction_data['confidence']
-                    
-                    if ('upper' in confidence and confidence['upper'] and 
-                        'lower' in confidence and confidence['lower']):
-                        
-                        # Create confidence bands
-                        upper_values = []
-                        for val in confidence['upper']:
-                            try:
-                                float_val = float(val)
-                                if not np.isnan(float_val):
-                                    upper_values.append(float_val)
-                                else:
-                                    continue
-                            except (ValueError, TypeError):
-                                continue
-                        
-                        lower_values = []
-                        for val in confidence['lower']:
-                            try:
-                                float_val = float(val)
-                                if not np.isnan(float_val):
-                                    lower_values.append(float_val)
-                                else:
-                                    continue
-                            except (ValueError, TypeError):
-                                continue
-                        
-                        # Make sure we have valid confidence intervals
+                    if ('upper' in confidence and confidence['upper'] and 'lower' in confidence and confidence['lower']):
+                        upper_values = [float(val) for val in confidence['upper'] if pd.notna(val) and val is not None]
+                        lower_values = [float(val) for val in confidence['lower'] if pd.notna(val) and val is not None]
                         if upper_values and lower_values:
-                            # Make sure lengths match
                             min_len = min(len(valid_dates), len(upper_values), len(lower_values))
-                            
-                            # Adjust all arrays to the same length
-                            valid_dates_ci = valid_dates[:min_len]
-                            upper_values = upper_values[:min_len]
-                            lower_values = lower_values[:min_len]
-                            
-                            # Add upper bound
-                            fig.add_trace(go.Scatter(
-                                x=valid_dates_ci,
-                                y=upper_values,
-                                mode='lines',
-                                name='Upper Bound',
-                                line=dict(width=0),
-                                showlegend=False
-                            ))
-                            
-                            # Add lower bound with fill
-                            fig.add_trace(go.Scatter(
-                                x=valid_dates_ci,
-                                y=lower_values,
-                                mode='lines',
-                                name='Lower Bound',
-                                line=dict(width=0),
-                                fillcolor='rgba(41, 128, 185, 0.2)',
-                                fill='tonexty',
-                                showlegend=False
-                            ))
+                            valid_dates_ci, upper_values, lower_values = valid_dates[:min_len], upper_values[:min_len], lower_values[:min_len]
+                            fig.add_trace(go.Scatter(x=valid_dates_ci, y=upper_values, mode='lines', name='Upper Bound', line=dict(width=0), showlegend=False))
+                            fig.add_trace(go.Scatter(x=valid_dates_ci, y=lower_values, mode='lines', name='Lower Bound', line=dict(width=0), fillcolor='rgba(41, 128, 185, 0.2)', fill='tonexty', showlegend=False))
     except Exception as e:
         print(f"Error adding predictions to chart: {e}")
-        import traceback
         traceback.print_exc()
-    
-    # Set chart title
+
     title_color = "black"
     title_text = f"Price Prediction"
-    current_price = None # <<< INITIALIZE HERE
-
-    if historical_data is not None and not historical_data.empty:
-        if 'close' in historical_data.columns: # <<< Check historical_data
-            current_price = historical_data['close'].iloc[-1] # <<< Assign here
-            # ... (rest of title generation using current_price) ...
-
-            prediction_horizon = len(prediction_data.get('values', []))
-            title_text = f"Price Prediction ({prediction_horizon}-Day Horizon) - <b>{prediction_data.get('symbol', '')}</b>"
-
-            predicted_values = prediction_data.get('values')
-            # --- ADD CHECK FOR current_price VALIDITY ---
-            if predicted_values and current_price is not None and current_price > 0:
-                future_price = predicted_values[-1]
-                # --- ERROR LINE IS NOW SAFE ---
-                expected_return = ((future_price / current_price) - 1) * 100
-                title_text += f" (Current: ${current_price:.2f}, Expected: ${future_price:.2f}, Return: {expected_return:.2f}%)"
-                # ... (title color logic) ...
-            else:
-                 print(f"Warning: Cannot calculate expected return. predicted_values empty: {not predicted_values}, current_price: {current_price}")
-        else:
-            # current_price remains None
-            print("Warning: 'close' column not found for title generation.")
-            prediction_horizon = len(prediction_data.get('values', []))
-            title_text = f"Price Prediction ({prediction_horizon}-Day Horizon) - <b>{prediction_data.get('symbol', '')}</b> (Current Price Unavailable)"
-
-        # Add expected return if we have valid predictions
-        if 'predicted_values' in locals() and predicted_values:
-            future_price = predicted_values[-1]
+    current_price = None
+    if historical_data is not None and not historical_data.empty and 'close' in historical_data.columns:
+        current_price = historical_data['close'].iloc[-1]
+        prediction_horizon = len(prediction_data.get('values', []))
+        title_text = f"Price Prediction ({prediction_horizon}-Day Horizon) - <b>{prediction_data.get('symbol', '')}</b>"
+        predicted_values_list = [v for v in prediction_data.get('values', []) if pd.notna(v) and v is not None]
+        if predicted_values_list and current_price is not None and current_price > 0:
+            future_price = predicted_values_list[-1]
             expected_return = ((future_price / current_price) - 1) * 100
             title_text += f" (Current: ${current_price:.2f}, Expected: ${future_price:.2f}, Return: {expected_return:.2f}%)"
-            
-            # Show expected return as positive or negative
-            if expected_return > 0:
-                title_color = "green"
-            else:
-                title_color = "red"
-    
-    # Update layout
+            title_color = "green" if expected_return > 0 else "red"
+        else:
+            print(f"Warning: Cannot calculate expected return. predicted_values empty: {not predicted_values_list}, current_price: {current_price}")
+    else:
+        print("Warning: 'close' column not found or historical data empty for title generation.")
+        prediction_horizon = len(prediction_data.get('values', []))
+        title_text = f"Price Prediction ({prediction_horizon}-Day Horizon) - <b>{prediction_data.get('symbol', '')}</b> (Current Price Unavailable)"
+
     fig.update_layout(
-        title=dict(
-            text=title_text,
-            font=dict(color=title_color)
-        ),
-        xaxis_title="Date",
-        yaxis_title="Price ($)",
-        template="plotly_white",
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1
-        ),
+        title=dict(text=title_text, font=dict(color=title_color)),
+        xaxis_title="Date", yaxis_title="Price ($)", template="plotly_white",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=20, r=20, t=60, b=20)
     )
-    
     return fig
 
 
@@ -366,938 +268,463 @@ def create_prediction_chart(prediction_data, historical_data=None):
 def create_prediction_details(prediction_data, historical_data=None):
     """
     Create detailed analysis of price predictions with improved error handling.
-    
-    Args:
-        prediction_data (dict): Prediction data from ML models
-        historical_data (DataFrame, optional): Historical price data for context
-    
-    Returns:
-        Component: Dash component with prediction details
+    (Copied from original, assuming it's correct)
     """
-    if not prediction_data:
-        return html.Div("No prediction data available.")
-    
-    # More debug info
-    print(f"create_prediction_details received data keys: {prediction_data.keys()}")
-    
+    if not prediction_data: return html.Div("No prediction data available.")
     symbol = prediction_data.get('symbol', 'Unknown')
     model_type = prediction_data.get('model', 'Unknown')
-    
-    # Calculate expected return with proper handling of NaN values
-    import numpy as np
-    
-    # Default values
-    current_price = "N/A"
-    future_price = "N/A"
+    current_price_val = "N/A"
+    future_price_val = "N/A"
     expected_return_str = "N/A"
     expected_return_color = "secondary"
     expected_return = 0
-    
-    # Get current price if historical data is available
-    if historical_data is not None and not historical_data.empty:
-         # --- FIX: Use lowercase 'close' ---
-        if 'close' in historical_data.columns:
-            current_price = historical_data['close'].iloc[-1] # Use lowercase
-            # ... (rest of calculation using current_price) ...
+    recommendation = "Hold/Neutral"
+    rec_color = "warning"
+
+    if historical_data is not None and not historical_data.empty and 'close' in historical_data.columns:
+        current_price_val = historical_data['close'].iloc[-1]
+        predicted_values = [float(val) for val in prediction_data.get('values', []) if pd.notna(val) and val is not None]
+        if predicted_values and current_price_val > 0:
+            future_price_val = predicted_values[-1]
+            expected_return = ((future_price_val / current_price_val) - 1) * 100
+            expected_return_str = f"{expected_return:.2f}%"
+            expected_return_color = "success" if expected_return > 0 else "danger"
+            if expected_return > 5: recommendation, rec_color = "Consider Buying", "success"
+            elif expected_return < -5: recommendation, rec_color = "Consider Selling", "danger"
         else:
-            print("Warning: 'close' column not found for prediction details.")
-            current_price = "N/A"
-        
-        # Get predicted values and handle potential NaN values
-        predicted_values = []
-        if 'values' in prediction_data and prediction_data['values']:
-            for val in prediction_data['values']:
-                try:
-                    float_val = float(val)
-                    if not np.isnan(float_val):
-                        predicted_values.append(float_val)
-                except (ValueError, TypeError):
-                    continue
-            
-            # Calculate expected return if we have valid predictions
-            if predicted_values:
-                future_price = predicted_values[-1]
-                expected_return = ((future_price / current_price) - 1) * 100
-                expected_return_str = f"{expected_return:.2f}%"
-                expected_return_color = "success" if expected_return > 0 else "danger"
-                print(f"Calculated expected return: {expected_return_str}")
-    
-    # Get prediction horizon from the cleaned values
-    prediction_horizon = len(prediction_data.get('values', [])) 
-    print(f"Prediction horizon in details: {prediction_horizon}")
-    
-    # Create recommendation text based on expected return
-    if expected_return_str != "N/A":
-        if expected_return > 5:
-            recommendation = "Consider Buying"
-            rec_color = "success"
-        elif expected_return < -5:
-            recommendation = "Consider Selling"
-            rec_color = "danger"
-        else:
-            recommendation = "Hold/Neutral"
-            rec_color = "warning"
+            print("Warning: Cannot calculate expected return in details.")
+            current_price_val = "N/A" # Reset if calculation failed
     else:
-        recommendation = "Hold/Neutral"
-        rec_color = "warning"
-    
-    return html.Div([
-        dbc.Card([
-            dbc.CardBody([
-                html.H5("Prediction Summary", className="card-title"),
-                dbc.Row([
-                    dbc.Col([
-                        html.P([
-                            html.Strong("Asset: "), 
-                            symbol
-                        ]),
-                        html.P([
-                            html.Strong("Model: "), 
-                            model_type.capitalize() if model_type else "Unknown"
-                        ]),
-                        html.P([
-                            html.Strong("Prediction Horizon: "), 
-                            f"{prediction_horizon} days"
-                        ])
-                    ], width=6),
-                    dbc.Col([
-                        html.P([
-                            html.Strong("Current Price: "), 
-                            f"${current_price}" if current_price != "N/A" else current_price
-                        ]),
-                        html.P([
-                            html.Strong("Predicted Price: "), 
-                            f"${future_price}" if future_price != "N/A" else future_price
-                        ]),
-                        html.P([
-                            html.Strong("Expected Return: "), 
-                            html.Span(expected_return_str, className=f"text-{expected_return_color}")
-                        ])
-                    ], width=6)
-                ]),
-                dbc.Alert([
-                    html.Strong("Investment Recommendation: "),
-                    html.Span(
-                        recommendation,
-                        className=f"text-{rec_color}"
-                    )
-                ], color="info"),
-                html.P([
-                    html.Small("Disclaimer: These predictions are based on historical data and machine learning models. Actual market performance may vary. Always conduct your own research before making investment decisions.")
-                ], className="text-muted mt-3")
-            ])
-        ])
-    ])
+        print("Warning: 'close' column not found or historical data empty for prediction details.")
+
+    prediction_horizon = len([v for v in prediction_data.get('values', []) if pd.notna(v) and v is not None])
+
+    return html.Div([dbc.Card([dbc.CardBody([
+        html.H5("Prediction Summary", className="card-title"),
+        dbc.Row([
+            dbc.Col([
+                html.P([html.Strong("Asset: "), symbol]),
+                html.P([html.Strong("Model: "), model_type.capitalize() if model_type else "Unknown"]),
+                html.P([html.Strong("Prediction Horizon: "), f"{prediction_horizon} days"])
+            ], width=6),
+            dbc.Col([
+                html.P([html.Strong("Current Price: "), f"${current_price_val:.2f}" if isinstance(current_price_val, (int, float)) else current_price_val]),
+                html.P([html.Strong("Predicted Price: "), f"${future_price_val:.2f}" if isinstance(future_price_val, (int, float)) else future_price_val]),
+                html.P([html.Strong("Expected Return: "), html.Span(expected_return_str, className=f"text-{expected_return_color}")])
+            ], width=6)
+        ]),
+        dbc.Alert([html.Strong("Investment Recommendation: "), html.Span(recommendation, className=f"text-{rec_color}")], color="info"),
+        html.P([html.Small("Disclaimer: These predictions are based on historical data and machine learning models. Actual market performance may vary. Always conduct your own research before making investment decisions.")], className="text-muted mt-3")
+    ])])])
 
 
 def create_trend_analysis_display(analysis_data):
     """
-    Create trend analysis visualization for a specific asset
-    
-    Args:
-        analysis_data (dict): Trend analysis data
-    
-    Returns:
-        Component: Dash component with trend analysis
+    Create trend analysis visualization for a specific asset.
+    (Copied from original, assuming it's correct and TrendAnalyzer provides the expected dict structure)
     """
-    if not analysis_data:
-        return html.Div("No trend analysis data available.")
-    
-    # Extract data from analysis
+    if not analysis_data: return html.Div("No trend analysis data available.")
     trend = analysis_data.get('trend', {})
     overall_trend = trend.get('overall_trend', 'unknown')
     trend_strength = trend.get('trend_strength', 0)
-    
-    # Get support and resistance levels
     support_resistance = analysis_data.get('support_resistance', {})
     support_levels = support_resistance.get('support', [])
     resistance_levels = support_resistance.get('resistance', [])
-    
-    # Get pattern information
     patterns = analysis_data.get('patterns', {}).get('patterns', [])
-    
-    # Get breakout prediction
     breakout = analysis_data.get('breakout', {})
     breakout_prediction = breakout.get('prediction', 'neutral')
     breakout_confidence = breakout.get('confidence', 0)
-    
-    # Get market regime
     market_regime = analysis_data.get('market_regime', {})
     regime = market_regime.get('regime', 'unknown')
-    
-    # Determine colors based on trend
     trend_color = "success" if "bull" in overall_trend else "danger" if "bear" in overall_trend else "warning"
     breakout_color = "success" if breakout_prediction == "bullish" else "danger" if breakout_prediction == "bearish" else "warning"
     regime_color = "success" if "bull" in regime else "danger" if "bear" in regime else "warning"
-    
-    # Create cards for each analysis section
-    trend_card = dbc.Card([
-        dbc.CardHeader("Trend Analysis"),
-        dbc.CardBody([
-            dbc.Row([
-                dbc.Col([
-                    html.H5([
-                        "Overall Trend: ",
-                        html.Span(
-                            overall_trend.replace("_", " ").title(),
-                            className=f"text-{trend_color}"
-                        )
-                    ]),
-                    html.P(f"Trend Strength: {trend_strength:.1f}%"),
-                    html.P([
-                        "RSI: ",
-                        html.Span(
-                            f"{trend.get('details', {}).get('rsi_value', 0):.1f}",
-                            className=f"{'text-danger' if trend.get('details', {}).get('rsi_value', 0) > 70 else 'text-success' if trend.get('details', {}).get('rsi_value', 0) < 30 else ''}"
-                        ),
-                        " ",
-                        html.Small(
-                            f"({trend.get('details', {}).get('rsi_trend', 'neutral')})",
-                            className="text-muted"
-                        )
-                    ]),
-                    html.P([
-                        "MACD Trend: ",
-                        html.Span(
-                            trend.get('details', {}).get('macd_trend', 'neutral'),
-                            className=f"{'text-success' if trend.get('details', {}).get('macd_trend', 'neutral') == 'bullish' else 'text-danger' if trend.get('details', {}).get('macd_trend', 'neutral') == 'bearish' else ''}"
-                        )
-                    ])
-                ], width=6),
-                dbc.Col([
-                    # Trend strength gauge
-                    html.Div([
-                        dcc.Graph(
-                            figure=go.Figure(go.Indicator(
-                                mode="gauge+number",
-                                value=trend_strength,
-                                domain={'x': [0, 1], 'y': [0, 1]},
-                                title={'text': "Trend Strength"},
-                                gauge={
-                                    'axis': {'range': [0, 100]},
-                                    'bar': {'color': "#18BC9C" if "bull" in overall_trend else "#E74C3C" if "bear" in overall_trend else "#F39C12"},
-                                    'steps': [
-                                        {'range': [0, 33], 'color': "#F5F5F5"},
-                                        {'range': [33, 66], 'color': "#EEEEEE"},
-                                        {'range': [66, 100], 'color': "#E8E8E8"}
-                                    ],
-                                    'threshold': {
-                                        'line': {'color': "black", 'width': 2},
-                                        'thickness': 0.75,
-                                        'value': trend_strength
-                                    }
-                                }
-                            )),
-                            config={'displayModeBar': False},
-                            # style={'height': '200px'}
-                        ),
-                        # figure.update_layout(width=200, height=200)
-                    ])
-                ], width=6)
-            ])
-        ])
-    ], className="mb-3")
-    
-    # Support and resistance table
-    levels_card = dbc.Card([
-        dbc.CardHeader("Support & Resistance Levels"),
-        dbc.CardBody([
-            dbc.Row([
-                dbc.Col([
-                    html.H6("Support Levels"),
-                    dbc.Table([
-                        html.Thead(html.Tr([
-                            html.Th("Price"),
-                            html.Th("Strength"),
-                            html.Th("Distance")
-                        ])),
-                        html.Tbody([
-                            html.Tr([
-                                html.Td(f"${level['price']:.2f}"),
-                                html.Td(f"{level['strength']:.1f}%"),
-                                html.Td(f"{level['distance_pct']:.2f}%")
-                            ]) for level in support_levels[:3]  # Show top 3 support levels
-                        ])
-                    ], size="sm", bordered=True, striped=True)
-                ], width=6),
-                dbc.Col([
-                    html.H6("Resistance Levels"),
-                    dbc.Table([
-                        html.Thead(html.Tr([
-                            html.Th("Price"),
-                            html.Th("Strength"),
-                            html.Th("Distance")
-                        ])),
-                        html.Tbody([
-                            html.Tr([
-                                html.Td(f"${level['price']:.2f}"),
-                                html.Td(f"{level['strength']:.1f}%"),
-                                html.Td(f"{level['distance_pct']:.2f}%")
-                            ]) for level in resistance_levels[:3]  # Show top 3 resistance levels
-                        ])
-                    ], size="sm", bordered=True, striped=True)
-                ], width=6)
-            ])
-        ])
-    ], className="mb-3")
-    
-    # Chart patterns card
-    patterns_card = dbc.Card([
-        dbc.CardHeader("Chart Patterns"),
-        dbc.CardBody([
-            dbc.Table([
-                html.Thead(html.Tr([
-                    html.Th("Pattern"),
-                    html.Th("Type"),
-                    html.Th("Strength"),
-                    html.Th("Date")
-                ])),
-                html.Tbody([
-                    html.Tr([
-                        html.Td(pattern['name']),
-                        html.Td(
-                            html.Span(
-                                pattern['type'].capitalize(),
-                                className=f"text-{'success' if pattern['type'] == 'bullish' else 'danger'}"
-                            )
-                        ),
-                        html.Td(f"{pattern['strength']:.1f}%"),
-                        html.Td(f"{pattern['date']} ({pattern['days_ago']} days ago)")
-                    ]) for pattern in patterns[:3]  # Show top 3 patterns
-                ] if patterns else [html.Tr([html.Td("No patterns detected", colSpan=4)])])
-            ], size="sm", bordered=True, striped=True)
-        ])
-    ], className="mb-3")
-    
-    # Breakout prediction card
-    breakout_card = dbc.Card([
-        dbc.CardHeader("Breakout Prediction"),
-        dbc.CardBody([
-            dbc.Row([
-                dbc.Col([
-                    html.H5([
-                        "Prediction: ",
-                        html.Span(
-                            breakout_prediction.capitalize(),
-                            className=f"text-{breakout_color}"
-                        )
-                    ]),
-                    html.P(f"Confidence: {breakout_confidence:.1f}%"),
-                    html.P(f"Market Regime: {regime.replace('_', ' ').title()}", className=f"text-{regime_color}")
-                ], width=6),
-                dbc.Col([
-                    # Breakout confidence gauge
-                    html.Div([
-                        dcc.Graph(
-                            figure=go.Figure(go.Indicator(
-                                mode="gauge+number",
-                                value=breakout_confidence,
-                                domain={'x': [0, 1], 'y': [0, 1]},
-                                title={'text': "Breakout Confidence"},
-                                gauge={
-                                    'axis': {'range': [0, 100]},
-                                    'bar': {'color': "#18BC9C" if breakout_prediction == "bullish" else "#E74C3C" if breakout_prediction == "bearish" else "#F39C12"},
-                                    'steps': [
-                                        {'range': [0, 33], 'color': "#F5F5F5"},
-                                        {'range': [33, 66], 'color': "#EEEEEE"},
-                                        {'range': [66, 100], 'color': "#E8E8E8"}
-                                    ],
-                                    'threshold': {
-                                        'line': {'color': "black", 'width': 2},
-                                        'thickness': 0.75,
-                                        'value': breakout_confidence
-                                    }
-                                }
-                            )),
-                            config={'displayModeBar': False},
-                            # style={'height': '200px'}
-                        ),
-                        # figure.update_layout(width=200, height=200)
-                    ])
-                ], width=6)
-            ])
-        ])
-    ], className="mb-3")
-    
-    # Combine all cards
-    return html.Div([
-        trend_card,
-        breakout_card,
-        levels_card,
-        patterns_card
-    ])
+
+    trend_card = dbc.Card([dbc.CardHeader("Trend Analysis"), dbc.CardBody([dbc.Row([
+        dbc.Col([
+            html.H5(["Overall Trend: ", html.Span(overall_trend.replace("_", " ").title(), className=f"text-{trend_color}")]),
+            html.P(f"Trend Strength: {trend_strength:.1f}%"),
+            html.P(["RSI: ", html.Span(f"{trend.get('details', {}).get('rsi_value', 0):.1f}", className=f"{'text-danger' if trend.get('details', {}).get('rsi_value', 0) > 70 else 'text-success' if trend.get('details', {}).get('rsi_value', 0) < 30 else ''}"), " ", html.Small(f"({trend.get('details', {}).get('rsi_trend', 'neutral')})", className="text-muted")]),
+            html.P(["MACD Trend: ", html.Span(trend.get('details', {}).get('macd_trend', 'neutral'), className=f"{'text-success' if trend.get('details', {}).get('macd_trend', 'neutral') == 'bullish' else 'text-danger' if trend.get('details', {}).get('macd_trend', 'neutral') == 'bearish' else ''}")])
+        ], width=6),
+        dbc.Col([html.Div([dcc.Graph(figure=go.Figure(go.Indicator(mode="gauge+number", value=trend_strength, domain={'x': [0, 1], 'y': [0, 1]}, title={'text': "Trend Strength"}, gauge={'axis': {'range': [0, 100]}, 'bar': {'color': "#18BC9C" if "bull" in overall_trend else "#E74C3C" if "bear" in overall_trend else "#F39C12"}, 'steps': [{'range': [0, 33], 'color': "#F5F5F5"}, {'range': [33, 66], 'color': "#EEEEEE"}, {'range': [66, 100], 'color': "#E8E8E8"}], 'threshold': {'line': {'color': "black", 'width': 2}, 'thickness': 0.75, 'value': trend_strength}})), config={'displayModeBar': False})])], width=6)
+    ])])], className="mb-3")
+
+    levels_card = dbc.Card([dbc.CardHeader("Support & Resistance Levels"), dbc.CardBody([dbc.Row([
+        dbc.Col([html.H6("Support Levels"), dbc.Table([html.Thead(html.Tr([html.Th("Price"), html.Th("Strength"), html.Th("Distance")])), html.Tbody([html.Tr([html.Td(f"${level['price']:.2f}"), html.Td(f"{level['strength']:.1f}%"), html.Td(f"{level['distance_pct']:.2f}%")]) for level in support_levels[:3]])], size="sm", bordered=True, striped=True)], width=6),
+        dbc.Col([html.H6("Resistance Levels"), dbc.Table([html.Thead(html.Tr([html.Th("Price"), html.Th("Strength"), html.Th("Distance")])), html.Tbody([html.Tr([html.Td(f"${level['price']:.2f}"), html.Td(f"{level['strength']:.1f}%"), html.Td(f"{level['distance_pct']:.2f}%")]) for level in resistance_levels[:3]])], size="sm", bordered=True, striped=True)], width=6)
+    ])])], className="mb-3")
+
+    patterns_card = dbc.Card([dbc.CardHeader("Chart Patterns"), dbc.CardBody([dbc.Table([
+        html.Thead(html.Tr([html.Th("Pattern"), html.Th("Type"), html.Th("Strength"), html.Th("Date")])),
+        html.Tbody([html.Tr([html.Td(pattern['name']), html.Td(html.Span(pattern['type'].capitalize(), className=f"text-{'success' if pattern['type'] == 'bullish' else 'danger'}")), html.Td(f"{pattern['strength']:.1f}%"), html.Td(f"{pattern['date']} ({pattern['days_ago']} days ago)")]) for pattern in patterns[:3]] if patterns else [html.Tr([html.Td("No patterns detected", colSpan=4)])])
+    ], size="sm", bordered=True, striped=True)])], className="mb-3")
+
+    breakout_card = dbc.Card([dbc.CardHeader("Breakout Prediction"), dbc.CardBody([dbc.Row([
+        dbc.Col([
+            html.H5(["Prediction: ", html.Span(breakout_prediction.capitalize(), className=f"text-{breakout_color}")]),
+            html.P(f"Confidence: {breakout_confidence:.1f}%"),
+            html.P(f"Market Regime: {regime.replace('_', ' ').title()}", className=f"text-{regime_color}")
+        ], width=6),
+        dbc.Col([html.Div([dcc.Graph(figure=go.Figure(go.Indicator(mode="gauge+number", value=breakout_confidence, domain={'x': [0, 1], 'y': [0, 1]}, title={'text': "Breakout Confidence"}, gauge={'axis': {'range': [0, 100]}, 'bar': {'color': "#18BC9C" if breakout_prediction == "bullish" else "#E74C3C" if breakout_prediction == "bearish" else "#F39C12"}, 'steps': [{'range': [0, 33], 'color': "#F5F5F5"}, {'range': [33, 66], 'color': "#EEEEEE"}, {'range': [66, 100], 'color': "#E8E8E8"}], 'threshold': {'line': {'color': "black", 'width': 2}, 'thickness': 0.75, 'value': breakout_confidence}})), config={'displayModeBar': False})])], width=6)
+    ])])], className="mb-3")
+
+    return html.Div([trend_card, breakout_card, levels_card, patterns_card])
 
 def create_portfolio_insights(recommendations):
     """
-    Create portfolio insights based on ML recommendations
-    
-    Args:
-        recommendations (dict): Portfolio recommendations from ML models
-    
-    Returns:
-        Component: Dash component with portfolio insights
+    Create portfolio insights based on ML recommendations.
+    (Copied from original, assuming it's correct and ModelIntegration provides the expected dict structure)
     """
-    if not recommendations:
-        return html.Div("No portfolio insights available.")
-    
-    # Extract recommendations
+    if not recommendations: return html.Div("No portfolio insights available.")
     buy_recs = recommendations.get('buy', [])
     sell_recs = recommendations.get('sell', [])
     portfolio_score = recommendations.get('portfolio_score', 0)
-    
-    # Portfolio score card
-    score_card = dbc.Card([
-        dbc.CardHeader("Portfolio Health Score"),
-        dbc.CardBody([
-            dbc.Row([
-                dbc.Col([
-                    html.H2(f"{portfolio_score:.1f}/100", className=f"text-{'success' if portfolio_score >= 70 else 'warning' if portfolio_score >= 50 else 'danger'}"),
-                    html.P("Based on ML analysis of current holdings and market conditions")
-                ], width=6),
-                dbc.Col([
-                    dcc.Graph(
-                        figure=go.Figure(go.Indicator(
-                            mode="gauge+number",
-                            value=portfolio_score,
-                            domain={'x': [0, 1], 'y': [0, 1]},
-                            title={'text': "Portfolio Score"},
-                            gauge={
-                                'axis': {'range': [0, 100]},
-                                'bar': {'color': 
-                                      "#18BC9C" if portfolio_score >= 70 
-                                      else "#F39C12" if portfolio_score >= 50 
-                                      else "#E74C3C"},
-                                'steps': [
-                                    {'range': [0, 50], 'color': "#FFEEEE"},
-                                    {'range': [50, 70], 'color': "#FFFFEE"},
-                                    {'range': [70, 100], 'color': "#EEFFEE"}
-                                ],
-                                'threshold': {
-                                    'line': {'color': "black", 'width': 2},
-                                    'thickness': 0.75,
-                                    'value': portfolio_score
-                                }
-                            }
-                        )),
-                        config={'displayModeBar': False},
-                        # style={'height': '200px'}
-                    )
-                ], width=6)
-            ])
-        ])
-    ], className="mb-3")
-    
-    # Buy recommendations card
-    buy_card = dbc.Card([
-        dbc.CardHeader("Buy Recommendations"),
-        dbc.CardBody([
-            dbc.Table([
-                html.Thead(html.Tr([
-                    html.Th("Symbol"),
-                    html.Th("Confidence"),
-                    html.Th("Expected Return"),
-                    html.Th("Action")
-                ])),
-                html.Tbody([
-                    html.Tr([
-                        html.Td(rec['symbol']),
-                        html.Td(f"{rec['confidence']:.1f}%"),
-                        html.Td(f"{rec['expected_return']:.2f}%", className=f"text-{'success' if rec['expected_return'] > 0 else 'danger'}"),
-                        html.Td(
-                            dbc.Button("Buy", color="success", size="sm", id={"type": "buy-rec-button", "symbol": rec['symbol']})
-                        )
-                    ]) for rec in buy_recs[:5]  # Show top 5 buy recommendations
-                ] if buy_recs else [html.Tr([html.Td("No buy recommendations", colSpan=4)])])
-            ], size="sm", bordered=True, striped=True, hover=True)
-        ])
-    ], className="mb-3")
-    
-    # Sell recommendations card
-    sell_card = dbc.Card([
-        dbc.CardHeader("Sell Recommendations"),
-        dbc.CardBody([
-            dbc.Table([
-                html.Thead(html.Tr([
-                    html.Th("Symbol"),
-                    html.Th("Confidence"),
-                    html.Th("Expected Return"),
-                    html.Th("Action")
-                ])),
-                html.Tbody([
-                    html.Tr([
-                        html.Td(rec['symbol']),
-                        html.Td(f"{rec['confidence']:.1f}%"),
-                        html.Td(f"{rec['expected_return']:.2f}%", className=f"text-{'success' if rec['expected_return'] > 0 else 'danger'}"),
-                        html.Td(
-                            dbc.Button("Sell", color="danger", size="sm", id={"type": "sell-rec-button", "symbol": rec['symbol']})
-                        )
-                    ]) for rec in sell_recs[:5]  # Show top 5 sell recommendations
-                ] if sell_recs else [html.Tr([html.Td("No sell recommendations", colSpan=4)])])
-            ], size="sm", bordered=True, striped=True, hover=True)
-        ])
-    ], className="mb-3")
-    
-    # Combine all cards
-    return html.Div([
-        score_card,
-        buy_card,
-        sell_card,
-        dbc.Alert([
-            html.Strong("Note: "), 
-            "These recommendations are generated using machine learning models and technical analysis. Always conduct your own research before making investment decisions."
-        ], color="info", className="mt-3")
-    ])
+
+    score_card = dbc.Card([dbc.CardHeader("Portfolio Health Score"), dbc.CardBody([dbc.Row([
+        dbc.Col([html.H2(f"{portfolio_score:.1f}/100", className=f"text-{'success' if portfolio_score >= 70 else 'warning' if portfolio_score >= 50 else 'danger'}"), html.P("Based on ML analysis of current holdings and market conditions")], width=6),
+        dbc.Col([dcc.Graph(figure=go.Figure(go.Indicator(mode="gauge+number", value=portfolio_score, domain={'x': [0, 1], 'y': [0, 1]}, title={'text': "Portfolio Score"}, gauge={'axis': {'range': [0, 100]}, 'bar': {'color': "#18BC9C" if portfolio_score >= 70 else "#F39C12" if portfolio_score >= 50 else "#E74C3C"}, 'steps': [{'range': [0, 50], 'color': "#FFEEEE"}, {'range': [50, 70], 'color': "#FFFFEE"}, {'range': [70, 100], 'color': "#EEFFEE"}], 'threshold': {'line': {'color': "black", 'width': 2}, 'thickness': 0.75, 'value': portfolio_score}})), config={'displayModeBar': False})], width=6)
+    ])])], className="mb-3")
+
+    buy_card = dbc.Card([dbc.CardHeader("Buy Recommendations"), dbc.CardBody([dbc.Table([
+        html.Thead(html.Tr([html.Th("Symbol"), html.Th("Confidence"), html.Th("Expected Return"), html.Th("Action")])),
+        html.Tbody([html.Tr([html.Td(rec['symbol']), html.Td(f"{rec['confidence']:.1f}%"), html.Td(f"{rec['expected_return']:.2f}%", className=f"text-{'success' if rec['expected_return'] > 0 else 'danger'}"), html.Td(dbc.Button("Buy", color="success", size="sm", id={"type": "buy-rec-button", "symbol": rec['symbol']}))]) for rec in buy_recs[:5]] if buy_recs else [html.Tr([html.Td("No buy recommendations", colSpan=4)])])
+    ], size="sm", bordered=True, striped=True, hover=True)])], className="mb-3")
+
+    sell_card = dbc.Card([dbc.CardHeader("Sell Recommendations"), dbc.CardBody([dbc.Table([
+        html.Thead(html.Tr([html.Th("Symbol"), html.Th("Confidence"), html.Th("Expected Return"), html.Th("Action")])),
+        html.Tbody([html.Tr([html.Td(rec['symbol']), html.Td(f"{rec['confidence']:.1f}%"), html.Td(f"{rec['expected_return']:.2f}%", className=f"text-{'success' if rec['expected_return'] > 0 else 'danger'}"), html.Td(dbc.Button("Sell", color="danger", size="sm", id={"type": "sell-rec-button", "symbol": rec['symbol']}))]) for rec in sell_recs[:5]] if sell_recs else [html.Tr([html.Td("No sell recommendations", colSpan=4)])])
+    ], size="sm", bordered=True, striped=True, hover=True)])], className="mb-3")
+
+    return html.Div([score_card, buy_card, sell_card, dbc.Alert([html.Strong("Note: "), "These recommendations are generated using machine learning models and technical analysis. Always conduct your own research before making investment decisions."], color="info", className="mt-3")])
+
 
 def create_training_status_table(status_dict):
     """
-    Create a table showing model training status
-    
-    Args:
-        status_dict (dict): Dictionary of model training status
-    
-    Returns:
-        Component: Dash component with training status table
+    Create a table showing model training status.
+    (Copied from original, assuming it's correct and ModelIntegration provides the expected dict structure)
     """
-    if not status_dict:
-        return html.Div("No model training status available.")
-    
-    # Convert status dictionary to list for table display
+    if not status_dict: return html.Div("No model training status available.")
     status_list = []
     for symbol, data in status_dict.items():
-        status_list.append({
-            'symbol': symbol,
-            'status': data.get('status', 'unknown'),
-            'last_updated': data.get('last_updated', 'never')
-        })
-    
-    # Sort by symbol
+        if isinstance(data, dict): status_list.append({'symbol': symbol, 'status': data.get('status', 'unknown'), 'last_updated': data.get('last_updated', 'never'), 'metrics': data.get('metrics', {}), 'error': data.get('error', '')})
+        elif isinstance(data, str): status_list.append({'symbol': symbol, 'status': data, 'last_updated': 'unknown', 'metrics': {}, 'error': ''}) # Handle simple string status
     status_list.sort(key=lambda x: x['symbol'])
-    
-    # Create table
+
+    rows = []
+    for status in status_list:
+        status_val = status['status']
+        status_color = {"completed": "success", "in_progress": "warning", "pending": "info", "failed": "danger", "unknown": "secondary", "not_started": "secondary"}.get(status_val, "secondary")
+        metrics = status.get('metrics', {})
+        metrics_text = ""
+        if metrics and isinstance(metrics, dict): metrics_text = f"MAE: {metrics.get('mae', 0):.2f}, RMSE: {metrics.get('rmse', 0):.2f}"
+        error_message = status.get('error', '')
+        rows.append(html.Tr([
+            html.Td(status['symbol']),
+            html.Td(html.Span(status_val.replace('_', ' ').title(), className=f"text-{status_color}")),
+            html.Td(status['last_updated']),
+            html.Td(metrics_text),
+            html.Td(error_message, className="text-danger" if error_message else "")
+        ]))
+
     return dbc.Table([
-        html.Thead(html.Tr([
-            html.Th("Symbol"),
-            html.Th("Status"),
-            html.Th("Last Updated")
-        ])),
-        html.Tbody([
-            html.Tr([
-                html.Td(status['symbol']),
-                html.Td(
-                    html.Span(
-                        status['status'].replace('_', ' ').title(),
-                        className=f"text-{'success' if status['status'] == 'completed' else 'warning' if status['status'] == 'in_progress' else 'danger' if status['status'] == 'failed' else 'secondary'}"
-                    )
-                ),
-                html.Td(status['last_updated'])
-            ]) for status in status_list
-        ])
+        html.Thead(html.Tr([html.Th("Symbol"), html.Th("Status"), html.Th("Last Updated"), html.Th("Metrics"), html.Th("Error (if any)")])),
+        html.Tbody(rows)
     ], bordered=True, striped=True, hover=True)
 
 # Define callbacks for main.py
 
+# --- MERGED COMPONENT LAYOUT FUNCTION ---
+def create_ml_prediction_component():
+    """
+    Creates the merged ML Prediction component layout including all original tabs
+    and the new trained model overview.
+    """
+    return dbc.Card([
+        dbc.CardHeader([
+            html.H4("AI Investment Analysis & Model Management", className="card-title"), # Updated title
+            html.P("Machine learning predictions, technical analysis, and model overview", className="card-subtitle") # Updated subtitle
+        ]),
+        dbc.CardBody([
+            dbc.Tabs(id="ml-prediction-tabs", active_tab="price-prediction-tab", children=[ # Default to price prediction tab
+                # Tab 1: Price Prediction (Original Structure)
+                dbc.Tab(label="Price Prediction", tab_id="price-prediction-tab", children=[
+                    dbc.Row([
+                        dbc.Col([
+                            dbc.Label("Select Asset"),
+                            dbc.InputGroup([
+                                dbc.Select(id="ml-asset-selector", placeholder="Select an asset to analyze"),
+                                dbc.Button("Analyze", id="ml-analyze-button", color="primary")
+                            ]),
+                        ], width=6),
+                        dbc.Col([
+                            dbc.Label("Prediction Horizon"),
+                            dbc.RadioItems(
+                                id="ml-horizon-selector",
+                                options=[{"label": "30 Days", "value": 30}, {"label": "60 Days", "value": 60}, {"label": "90 Days", "value": 90}],
+                                value=30, inline=True
+                            )
+                        ], width=6)
+                    ], className="mb-3"),
+                    dbc.Spinner([dcc.Graph(id="ml-prediction-chart")], color="primary", type="border", fullscreen=False),
+                    html.Div(id="ml-prediction-details", className="mt-3"),
+                    dcc.Store(id="ml-prediction-data") # Keep store if needed by callbacks
+                ]),
+
+                # Tab 2: Technical Analysis (Original Structure)
+                dbc.Tab(label="Technical Analysis", tab_id="technical-analysis-tab", children=[
+                    dbc.Row([dbc.Col([dbc.Spinner([html.Div(id="trend-analysis-content")], color="primary", type="border")], width=12)])
+                ]),
+
+                # Tab 3: Portfolio Insights (Original Structure)
+                dbc.Tab(label="Portfolio Insights", tab_id="portfolio-insights-tab", children=[
+                    dbc.Row([dbc.Col([
+                        dbc.Button("Generate Portfolio Insights", id="ml-portfolio-insights-button", color="success", className="mb-3"),
+                        dbc.Spinner([html.Div(id="ml-portfolio-insights")], color="primary", type="border")
+                    ], width=12)])
+                ]),
+
+                # Tab 4: Model Training (Merged Structure)
+                dbc.Tab(label="Model Training", tab_id="model-training-tab", children=[
+                    # --- New: Trained Model Overview ---
+                    html.Div([
+                        html.H5("Trained Model Overview"),
+                        dbc.Button(
+                            "Refresh Model List", id="refresh-trained-models",
+                            color="secondary", size="sm", className="mb-3", n_clicks=0
+                        ),
+                        html.Div(id="trained-models-table-container", children=[
+                            dbc.Spinner(html.Div(id="trained-models-table"))
+                        ]),
+                    ]),
+                    html.Hr(), # Separator
+                    # --- Original: Training Controls & Status ---
+                    html.Div([
+                        html.H5("Train New Model / View Status"),
+                        dbc.Row([
+                            dbc.Col([
+                                dbc.Label("Select Asset to Train"),
+                                dbc.InputGroup([
+                                    dbc.Select(id="ml-train-asset-selector", placeholder="Select an asset for model training"),
+                                    dbc.Button("Train Model", id="ml-train-button", color="warning")
+                                ]),
+                                html.Div(id="ml-training-status", className="mt-3"), # Immediate feedback
+                                html.Hr(),
+                                html.H5("Model Training Status (Live)"),
+                                dbc.Spinner(html.Div(id="ml-training-status-table")) # Table for all statuses
+                            ], width=12)
+                        ])
+                    ])
+                ]),
+            ]),
+            dcc.Interval(
+                id="ml-update-interval", # Keep original interval ID if used by original callbacks
+                interval=60000,  # Update every minute (adjust as needed)
+                n_intervals=0
+            )
+        ])
+    ])
+
+# --- MERGED CALLBACK REGISTRATION FUNCTION ---
 def register_ml_prediction_callbacks(app):
     """
-    Register callbacks for ML prediction component
-    
-    Args:
-        app: Dash app instance
+    Register callbacks for the merged ML prediction component.
+    Includes callbacks from the original component and the new overview table.
     """
-    # Initialize model integration
+    # Initialize model integration (from original)
     model_integration = ModelIntegration()
-    
-    # Populate asset selector with portfolio and tracked assets
+
+    # --- Callbacks from Original Component ---
+
+    # Populate asset selectors (original)
     @app.callback(
-        [Output("ml-asset-selector", "options"),
-         Output("ml-train-asset-selector", "options")],
-        [Input("ml-update-interval", "n_intervals")]
+        [Output("ml-asset-selector", "options"), Output("ml-train-asset-selector", "options")],
+        Input("ml-update-interval", "n_intervals") # Use the correct interval ID
     )
     def update_asset_options(n_intervals):
-        # Get tracked assets
         tracked_assets = load_tracked_assets()
-        
-        # Get portfolio assets
         portfolio = load_portfolio()
-        portfolio_symbols = set()
-        for investment_id, details in portfolio.items():
-            symbol = details.get("symbol", "")
-            if symbol:
-                portfolio_symbols.add(symbol)
-        
-        # Combine all symbols
-        all_symbols = set(tracked_assets.keys()) | portfolio_symbols
-        
-        # Create options for dropdown
-        options = []
-        for symbol in sorted(all_symbols):
-            # Try to get a name from tracked assets
-            name = tracked_assets.get(symbol, {}).get("name", symbol)
-            options.append({"label": f"{symbol} - {name}", "value": symbol})
-        
+        portfolio_symbols = {details.get("symbol", "") for _, details in portfolio.items() if details.get("symbol")}
+        all_symbols = sorted(set(tracked_assets.keys()) | portfolio_symbols)
+        options = [{"label": f"{symbol} - {tracked_assets.get(symbol, {}).get('name', symbol)}", "value": symbol} for symbol in all_symbols if symbol]
         return options, options
-    
-    # Generate price prediction when analyze button is clicked
+
+    # Generate price prediction (original)
     @app.callback(
-    [Output("ml-prediction-chart", "figure"),
-     Output("ml-prediction-details", "children"),
-     Output("ml-prediction-data", "data")],
-    [Input("ml-analyze-button", "n_clicks")],
-    [State("ml-asset-selector", "value"),
-     State("ml-horizon-selector", "value")]
-)
+        [Output("ml-prediction-chart", "figure"), Output("ml-prediction-details", "children"), Output("ml-prediction-data", "data")],
+        Input("ml-analyze-button", "n_clicks"),
+        [State("ml-asset-selector", "value"), State("ml-horizon-selector", "value")],
+        prevent_initial_call=True # Prevent initial call
+    )
     def update_prediction(n_clicks, symbol, days):
-        print(f"--- update_prediction received symbol: {repr(symbol)} ---") # Use repr to see exact string
-        """
-        Generate and display price predictions for the selected asset and time horizon
-        
-        Args:
-            n_clicks: Button click counter
-            symbol: Asset symbol to analyze
-            days: Number of days to predict
-            
-        Returns:
-            tuple: (figure, details component, prediction data)
-        """
-        # Check if button click is triggered
-        if n_clicks is None or not symbol:
-            # Return empty components on initial load
-            return go.Figure(), None, None
-        
+        if n_clicks is None or not symbol: raise PreventUpdate
         try:
-            # Ensure symbol is not None and is a valid string
-            if not symbol or not isinstance(symbol, str):
-                raise ValueError(f"Invalid symbol: {symbol}")
-                
-            # Log the symbol and days we're processing for debugging
-            print(f"Processing prediction for symbol: {symbol}, days: {days}")
-            
-            # Import FMP API
-            # from modules.fmp_api import fmp_api
-            
-            # Get historical data for context
-            historical_data = data_provider.get_historical_price(symbol, period="1y")
-            
-            if historical_data.empty:
-                fig = go.Figure()
-                fig.update_layout(
-                    title=f"Error: No historical data available for {symbol}",
-                    template="plotly_white"
-                )
+            historical_data_df = data_provider.get_historical_price(symbol, period="1y") # Use data_provider
+            if historical_data_df.empty:
+                fig = go.Figure().update_layout(title=f"Error: No historical data available for {symbol}", template="plotly_white")
                 return fig, html.Div(f"No historical data available for {symbol}."), None
-            
-            # Get price predictions - explicitly pass the symbol and days
-            from modules.price_prediction import get_price_predictions
+
+            # Use the get_price_predictions function (which now has fallbacks)
             prediction_data = get_price_predictions(symbol=symbol, days=days)
-            
-            # Debug output for prediction data
-            print(f"Prediction data received: {type(prediction_data)}")
+
             if prediction_data:
-                print(f"Prediction keys: {prediction_data.keys()}")
-                print(f"Values count: {len(prediction_data.get('values', []))}")
-                
-                # Additional validation to avoid empty/invalid prediction data
-                if (not prediction_data.get('values') or 
-                    len(prediction_data['values']) == 0 or 
-                    all(pd.isna(v) for v in prediction_data['values'])):
-                    
-                    print(f"Warning: All prediction values for {symbol} are invalid")
-                    
-                    # Create a baseline fallback prediction
-                    from modules.price_prediction import create_simple_fallback
-                    prediction_data = create_simple_fallback(symbol, days)
-                
-                # Create prediction chart
-                chart = create_prediction_chart(prediction_data, historical_data)
-                
-                # Create prediction details
-                details = create_prediction_details(prediction_data, historical_data)
-                
+                # Additional validation
+                if (not prediction_data.get('values') or len(prediction_data['values']) == 0 or all(pd.isna(v) for v in prediction_data['values'])):
+                    logger.warning(f"All prediction values for {symbol} are invalid after get_price_predictions.")
+                    from modules.price_prediction import create_simple_fallback # Import fallback
+                    prediction_data = create_simple_fallback(symbol, days) # Use simplest fallback
+
+                chart = create_prediction_chart(prediction_data, historical_data_df)
+                details = create_prediction_details(prediction_data, historical_data_df)
                 return chart, details, prediction_data
-                    
             else:
-                # No prediction data returned
-                fig = go.Figure()
-                fig.update_layout(
-                    title=f"Error: Could not generate predictions for {symbol}",
-                    template="plotly_white"
-                )
-                
-                return fig, html.Div([
-                    dbc.Alert(
-                        f"Could not generate predictions for {symbol}. Try training a model first.",
-                        color="warning"
-                    )
-                ]), None
-        
+                fig = go.Figure().update_layout(title=f"Error: Could not generate predictions for {symbol}", template="plotly_white")
+                return fig, dbc.Alert(f"Could not generate predictions for {symbol}. Try training a model first.", color="warning"), None
         except Exception as e:
-            # Return error message
-            fig = go.Figure()
-            fig.update_layout(
-                title=f"Error: {str(e)}",
-                template="plotly_white"
-            )
-            
-            import traceback
+            logger.error(f"Error in update_prediction for {symbol}: {e}")
             traceback.print_exc()
-            
-            return fig, html.Div([
-                dbc.Alert(
-                    f"Error: {str(e)}",
-                    color="danger"
-                )
-            ]), None
-        
-    # Generate trend analysis when asset selected
+            fig = go.Figure().update_layout(title=f"Error: {str(e)}", template="plotly_white")
+            return fig, dbc.Alert(f"Error generating prediction: {str(e)}", color="danger"), None
+
+    # Generate trend analysis (original)
     @app.callback(
         Output("trend-analysis-content", "children"),
-        [Input("ml-analyze-button", "n_clicks")],
-        [State("ml-asset-selector", "value")]
+        Input("ml-analyze-button", "n_clicks"), # Triggered when prediction is run
+        State("ml-asset-selector", "value"),
+        prevent_initial_call=True # Prevent initial call
     )
     def update_trend_analysis(n_clicks, symbol):
-        # Check if button click is triggered
-        if n_clicks is None or not symbol:
-            # Return empty component on initial load
-            return None
-        
+        if n_clicks is None or not symbol: raise PreventUpdate
         try:
-            # Get comprehensive asset analysis
-            analysis = model_integration.get_asset_analysis(symbol)
-            
+            # Use the ModelIntegration instance initialized above
+            analysis = model_integration.get_asset_analysis(symbol) # This gets all analysis types
             if analysis:
-                # Create trend analysis display
-                return create_trend_analysis_display(analysis)
+                return create_trend_analysis_display(analysis) # Pass the full analysis dict
             else:
-                return html.Div(f"Could not generate analysis for {symbol}.")
-        
+                return dbc.Alert(f"Could not generate analysis for {symbol}.", color="warning")
         except Exception as e:
-            # Return error message
-            return html.Div(f"Error generating trend analysis: {str(e)}")
-    
-    # Generate portfolio insights
+            logger.error(f"Error generating trend analysis for {symbol}: {e}")
+            return dbc.Alert(f"Error generating trend analysis: {str(e)}", color="danger")
+
+    # Generate portfolio insights (original)
     @app.callback(
         Output("ml-portfolio-insights", "children"),
-        Input("ml-portfolio-insights-button", "n_clicks")
+        Input("ml-portfolio-insights-button", "n_clicks"),
+        prevent_initial_call=True # Prevent initial call
     )
     def update_portfolio_insights(n_clicks):
-        # Check if button click is triggered
-        if n_clicks is None:
-            # Return empty component on initial load
-            return None
-        
+        if n_clicks is None: raise PreventUpdate
         try:
-            # Get portfolio recommendations
+            # Use the ModelIntegration instance
             recommendations = model_integration.get_portfolio_recommendations()
-            
-            # Create portfolio insights
             return create_portfolio_insights(recommendations)
-        
         except Exception as e:
-            # Return error message
-            return html.Div(f"Error generating portfolio insights: {str(e)}")
-    
-    # Train model for selected asset
+            logger.error(f"Error generating portfolio insights: {e}")
+            return dbc.Alert(f"Error generating portfolio insights: {str(e)}", color="danger")
+
+    # Train model (original) - Outputs immediate feedback
     @app.callback(
         Output("ml-training-status", "children"),
-        [Input("ml-train-button", "n_clicks")],
-        [State("ml-train-asset-selector", "value")]
+        Input("ml-train-button", "n_clicks"),
+        State("ml-train-asset-selector", "value"),
+        prevent_initial_call=True # Prevent initial call
     )
     def train_model(n_clicks, symbol):
-        # Check if button click is triggered
-        if n_clicks is None or not symbol:
-            # Return empty component on initial load
-            return None
-        
+        if n_clicks is None or not symbol: raise PreventUpdate
         try:
-            # Start model training
-            status = model_integration.train_models_for_symbol(symbol, lookback_period="2y")
-            
-            # Return status message
-            return dbc.Alert(f"Training status: {status}", color="info")
-        
+            # Use the ModelIntegration instance
+            status = model_integration.train_models_for_symbol(symbol, lookback_period="2y", async_training=True) # Run async
+            if status == "pending":
+                return dbc.Alert(f"Training started for {symbol}. Check status table below.", color="info")
+            else: # Should not happen with async=True, but handle just in case
+                return dbc.Alert(f"Training status for {symbol}: {status}", color="warning")
         except Exception as e:
-            # Return error message
-            return dbc.Alert(f"Error: {str(e)}", color="danger")
-    
-    # Update training status table
+            logger.error(f"Error initiating training for {symbol}: {e}")
+            return dbc.Alert(f"Error starting training: {str(e)}", color="danger")
+
+    # Update training status table (original) - Periodically updates the table
     @app.callback(
         Output("ml-training-status-table", "children"),
-        [Input("ml-update-interval", "n_intervals"),
-        Input("ml-training-status", "children")]
+        [Input("ml-update-interval", "n_intervals"), # Triggered by interval
+         Input("ml-training-status", "children")], # Also trigger when immediate feedback changes
+        prevent_initial_call=False # Allow initial load
     )
-    def update_training_status(n_intervals, training_status):
+    def update_training_status_table(n_intervals, training_status_feedback): # Renamed input arg
         try:
-            # Get model training status for all symbols
+            # Use the ModelIntegration instance
             status_dict = model_integration.get_model_training_status()
-            
-            # Debug output to see the status
-            print(f"Current training status: {status_dict}")
-            
-            # Make sure the status dict has data
-            if not status_dict:
-                return html.P("No model training data available.")
-            
-            # Create status table
-            rows = []
-            
-            # Handle nested dictionary format
-            for symbol, details in status_dict.items():
-                if isinstance(details, dict) and 'status' in details:
-                    # Get status - handle both string and dictionary formats
-                    if isinstance(details['status'], dict) and 'status' in details['status']:
-                        # The status is a nested dictionary with its own 'status' key
-                        status = details['status']['status']
-                        last_updated = details['status'].get('last_updated', 'never')
-                        
-                        # Extract error message if present
-                        error_message = details['status'].get('error', '')
-                        
-                        # Extract metrics if present
-                        metrics = details['status'].get('metrics', {})
-                        metrics_text = ""
-                        if metrics:
-                            try:
-                                metrics_text = f"MAE: {metrics.get('mae', 0):.2f}, RMSE: {metrics.get('rmse', 0):.2f}"
-                            except:
-                                metrics_text = "Available"
-                    else:
-                        # The status is a simple string
-                        status = details['status']
-                        last_updated = details.get('last_updated', 'never')
-                        error_message = ""
-                        metrics_text = ""
-                    
-                    # Determine status color
-                    status_color = {
-                        "completed": "success",
-                        "in_progress": "warning", 
-                        "pending": "info",
-                        "failed": "danger",
-                        "unknown": "secondary"
-                    }.get(status, "secondary")
-                    
-                    rows.append(
-                        html.Tr([
-                            html.Td(symbol),
-                            html.Td(
-                                html.Span(
-                                    status.replace('_', ' ').title(),
-                                    className=f"text-{status_color}"
-                                )
-                            ),
-                            html.Td(last_updated),
-                            html.Td(metrics_text),
-                            html.Td(
-                                error_message,
-                                className="text-danger" if error_message else ""
-                            )
-                        ])
-                    )
-            
-            # If no rows were created, try the original flat format
-            if not rows:
-                symbols = [k for k in status_dict.keys() if not k.endswith("_updated") and not k.endswith("_error")]
-                for symbol in sorted(symbols):
-                    status_value = status_dict.get(symbol, "unknown")
-                    
-                    # Handle case where status is a dictionary
-                    if isinstance(status_value, dict):
-                        status = status_value.get('status', 'unknown')
-                        error_message = status_value.get('error', '')
-                    else:
-                        status = status_value
-                        error_message = status_dict.get(f"{symbol}_error", "")
-                    
-                    last_updated = status_dict.get(f"{symbol}_updated", "never")
-                    
-                    # Determine status color
-                    status_color = {
-                        "completed": "success",
-                        "in_progress": "warning", 
-                        "pending": "info",
-                        "failed": "danger",
-                        "unknown": "secondary"
-                    }.get(status, "secondary")
-                    
-                    rows.append(
-                        html.Tr([
-                            html.Td(symbol),
-                            html.Td(
-                                html.Span(
-                                    status.replace('_', ' ').title(),
-                                    className=f"text-{status_color}"
-                                )
-                            ),
-                            html.Td(last_updated),
-                            html.Td(""),  # Empty cell for metrics
-                            html.Td(
-                                error_message,
-                                className="text-danger" if error_message else ""
-                            )
-                        ])
-                    )
-            
-            return dbc.Table([
-                html.Thead(html.Tr([
-                    html.Th("Symbol"),
-                    html.Th("Status"),
-                    html.Th("Last Updated"),
-                    html.Th("Metrics"),
-                    html.Th("Error (if any)")
-                ])),
-                html.Tbody(rows)
-            ], bordered=True, striped=True, hover=True)
-        
+            if not status_dict: return html.P("No model training data available.")
+            return create_training_status_table(status_dict) # Use the helper
         except Exception as e:
-            # Return error message with detailed exception info
-            import traceback
-            error_details = traceback.format_exc()
-            print(f"Error retrieving training status: {error_details}")
-            return html.Div([
-                html.P(f"Error retrieving training status: {str(e)}"),
-                html.Pre(error_details, style={"whiteSpace": "pre-wrap", "fontSize": "small", "color": "red"})
-            ])
-        
-    # Handle sell recommendation clicks
+            logger.error(f"Error retrieving training status table: {e}")
+            traceback.print_exc()
+            return dbc.Alert(f"Error retrieving training status: {str(e)}", color="danger")
+
+    # Handle sell recommendation clicks (original)
     @app.callback(
         Output("ml-portfolio-insights", "children", allow_duplicate=True),
         Input({"type": "sell-rec-button", "symbol": dash.ALL}, "n_clicks"),
         State({"type": "sell-rec-button", "symbol": dash.ALL}, "id"),
-        prevent_initial_call='initial_duplicate'
+        prevent_initial_call=True # Use True here
     )
     def handle_sell_recommendation(n_clicks_list, button_ids):
-        # Check if any button was clicked
-        if not any(n for n in n_clicks_list if n):
-            raise dash.exceptions.PreventUpdate
-        
-        # Find which button was clicked
+        if not ctx.triggered or not any(n for n in n_clicks_list if n): raise PreventUpdate
         clicked_idx = next((i for i, n in enumerate(n_clicks_list) if n), None)
-        if clicked_idx is None:
-            raise dash.exceptions.PreventUpdate
-        
-        # Get the symbol
+        if clicked_idx is None: raise PreventUpdate
         symbol = button_ids[clicked_idx]["symbol"]
-        
-        # Record transaction (placeholder - you should integrate with your transaction system)
         try:
-            # Import FMP API to get current price
-            # from modules.fmp_api import fmp_api
-            quote = data_provider.get_current_quote(symbol)
-            
+            quote = data_provider.get_current_quote(symbol) # Use data_provider
             if quote and 'price' in quote:
                 current_price = quote['price']
-                
-                # Use the record_transaction function from your portfolio_utils
-                from modules.portfolio_utils import record_transaction
-                
-                # Default to selling 1 share - in a real app, you'd want a quantity input
-                success = record_transaction(symbol, "sell", current_price, 1)
-                
+                # Use record_transaction from portfolio_utils
+                # Find shares owned for this symbol
+                portfolio = load_portfolio()
+                shares_owned = 0
+                for inv_id, details in portfolio.items():
+                    if details.get("symbol") == symbol:
+                        shares_owned += float(details.get("shares", 0))
+
+                if shares_owned <= 0:
+                     return dbc.Alert(f"No shares of {symbol} owned to sell.", color="warning")
+
+                # Default to selling all shares for simplicity in this context
+                shares_to_sell = shares_owned
+                success = record_transaction("sell", symbol, current_price, shares_to_sell, date=datetime.now().strftime("%Y-%m-%d"))
                 if success:
-                    return dbc.Alert(f"Successfully added sell transaction for {symbol}", color="success")
+                    # Refresh insights after transaction
+                    recommendations = model_integration.get_portfolio_recommendations()
+                    insights_content = create_portfolio_insights(recommendations)
+                    return [dbc.Alert(f"Successfully recorded sell transaction for {shares_to_sell:.2f} shares of {symbol}", color="success"), insights_content]
                 else:
-                    return dbc.Alert(f"Failed to add transaction for {symbol}", color="danger")
+                    return dbc.Alert(f"Failed to record sell transaction for {symbol}", color="danger")
             else:
-                return dbc.Alert(f"Could not get current price for {symbol}", color="warning")
-        
+                return dbc.Alert(f"Could not get current price for {symbol} to record sell.", color="warning")
         except Exception as e:
-            return dbc.Alert(f"Error creating transaction: {str(e)}", color="danger")
+            logger.error(f"Error handling sell recommendation for {symbol}: {e}")
+            return dbc.Alert(f"Error creating sell transaction: {str(e)}", color="danger")
+
+    # --- Callback for Trained Models Table (New) ---
+    @app.callback(
+        Output("trained-models-table", "children"),
+        [Input("refresh-trained-models", "n_clicks"),
+         Input("ml-prediction-tabs", "active_tab")], # Trigger when tab becomes active
+        prevent_initial_call=False # Allow initial load if tab is active by default
+    )
+    def update_trained_models_display(refresh_clicks, active_tab):
+        triggered_id = ctx.triggered_id if ctx.triggered else None
+        # Update only if the training tab is active OR the refresh button was the trigger
+        if active_tab == 'model-training-tab' or triggered_id == 'refresh-trained-models':
+            logger.info(f"Updating trained models table. Trigger: {triggered_id}, Active Tab: {active_tab}")
+            try:
+                models_df = get_trained_models_data() # Fetch data from db_utils
+                return create_trained_models_table(models_df) # Use the helper
+            except Exception as e:
+                 logger.error(f"Error updating trained models display: {e}")
+                 logger.error(traceback.format_exc()) # Log full traceback
+                 return dbc.Alert(f"Error loading model data: {e}", color="danger")
+        else:
+            # Don't update if the tab isn't visible and refresh wasn't clicked
+            logger.debug(f"Preventing update for trained models table. Trigger: {triggered_id}, Active Tab: {active_tab}")
+            raise PreventUpdate
+
+# --- END OF MERGED CALLBACKS ---

@@ -40,62 +40,51 @@ class PricePredictionModel:
         # Create model directory if it doesn't exist
         os.makedirs(self.model_dir, exist_ok=True)
         
+class PricePredictionModel:
+    """Base class for price prediction models with fixed symbol handling."""
+    def __init__(self, model_name="base", prediction_days=30, symbol=None):
+        self.model_name = model_name
+        self.prediction_days = prediction_days
+        self.model = None
+        self.scaler = MinMaxScaler(feature_range=(0, 1))
+        self.is_trained = False
+        self.model_dir = "models"
+        self.symbol = symbol # Store the symbol
+        os.makedirs(self.model_dir, exist_ok=True)
+        logger.debug(f"Initializing {model_name} model with symbol: {symbol}") # Use logger
+
     def load_model(self):
-        """
-        Load model from disk with improved error handling.
-        
-        Returns:
-            bool: Success status
-        """
+        """Load model from disk with improved error handling."""
         try:
-            # Print debugging info
-            print(f"In load_model for {self.model_name}, symbol is: {self.symbol}")
-            
             if not hasattr(self, 'symbol') or not self.symbol:
-                print(f"Symbol not provided for {self.model_name} model")
+                logger.error(f"Symbol not provided for {self.model_name} model during load") # Use logger
                 return False
-            
-            # Create symbol-specific model path
+
             model_path = os.path.join(self.model_dir, f"{self.model_name}_{self.symbol}.pkl")
-            
-            print(f"Looking for model at: {os.path.abspath(model_path)}")
-            
-            # Check if the file exists
+            logger.debug(f"Looking for model at: {os.path.abspath(model_path)}") # Use logger
+
             if os.path.exists(model_path):
-                print(f"Found model file for {self.symbol}: {model_path}")
+                logger.info(f"Found model file for {self.symbol}: {model_path}") # Use logger
                 with open(model_path, 'rb') as f:
                     self.model = pickle.load(f)
                 self.is_trained = True
-                print(f"Successfully loaded model for {self.symbol}")
+                logger.info(f"Successfully loaded model for {self.symbol}") # Use logger
                 return True
-                
-            # List available model files for debugging
-            model_files = [f for f in os.listdir(self.model_dir) if f.endswith('.pkl')]
-            print(f"Available model files: {model_files}")
-            
-            # Only look for matching models of the current type
-            # This prevents loading the wrong model type
-            matching_model_files = [f for f in model_files if f.startswith(f"{self.model_name}_")]
-            symbol_models = [f for f in matching_model_files if self.symbol in f]
-            
-            if symbol_models:
-                symbol_model_path = os.path.join(self.model_dir, symbol_models[0])
-                print(f"Found matching {self.model_name} model file: {symbol_models[0]}")
-                with open(symbol_model_path, 'rb') as f:
-                    self.model = pickle.load(f)
-                self.is_trained = True
-                print(f"Successfully loaded {self.model_name} model for {self.symbol}")
-                return True
-            
-            print(f"No {self.model_name} model file found for {self.symbol}")
-            return False
-            
+            else:
+                logger.warning(f"No {self.model_name} model file found for {self.symbol} at {model_path}") # Use logger
+                return False
         except Exception as e:
-            print(f"Error loading {self.model_name} model for {self.symbol}: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Error loading {self.model_name} model for {self.symbol}: {e}") # Use logger
+            logger.error(traceback.format_exc()) # Log traceback
             return False
-
+        
+    def preprocess_data(self, historical_data):
+        """Preprocess data using the scaler."""
+        if 'close' not in historical_data.columns:
+            raise ValueError("Data must contain 'close' column")
+        close_prices = historical_data['close'].values.reshape(-1, 1)
+        scaled_data = self.scaler.fit_transform(close_prices)
+        return scaled_data
 
 class ARIMAModel(PricePredictionModel):
     """
@@ -218,162 +207,72 @@ class ARIMAModel(PricePredictionModel):
 
 
 class ProphetModel(PricePredictionModel):
-    """
-    Price prediction model using Facebook Prophet.
-    """
+    """Price prediction model using Facebook Prophet."""
     def __init__(self, prediction_days=30, symbol=None):
+        # --- Ensure super().__init__ is called correctly ---
         super().__init__(model_name="prophet", prediction_days=prediction_days, symbol=symbol)
-        # self.symbol = symbol
-    
+
     def train(self, historical_data):
-        """
-        Train Prophet model on historical data.
-        
-        Args:
-            historical_data (DataFrame): Historical price data with 'Close' column
-        
-        Returns:
-            bool: Success status
-        """
+        """Train Prophet model on historical data."""
         try:
             from prophet import Prophet
-            
-            # Preprocess data
             data = historical_data.sort_index().copy()
-            
-            # Extract close prices
-            if 'close' in data.columns:
-                # Prophet requires 'ds' (date) and 'y' (target) columns
-                prophet_data = pd.DataFrame({
-                    'ds': data.index,
-                    'y': data['close']
-                })
-            else:
-                raise ValueError("Data must contain 'close' column")
-            
-            # Train Prophet model
-            self.model = Prophet(
-                daily_seasonality=True,
-                yearly_seasonality=True,
-                weekly_seasonality=True,
-                changepoint_prior_scale=0.05
-            )
+            if 'close' not in data.columns: raise ValueError("Data must contain 'close' column")
+
+            prophet_data = pd.DataFrame({'ds': data.index, 'y': data['close']})
+            self.model = Prophet(daily_seasonality=True, yearly_seasonality=True, weekly_seasonality=True, changepoint_prior_scale=0.05)
             self.model.fit(prophet_data)
-            
             self.is_trained = True
-            logger.info("Prophet model trained successfully")
+            logger.info(f"Prophet model trained successfully for {self.symbol}")
             return True
-        
         except Exception as e:
-            logger.error(f"Error training Prophet model: {e}")
+            logger.error(f"Error training Prophet model for {self.symbol}: {e}")
+            logger.error(traceback.format_exc())
             return False
-    
+
     def predict(self, historical_data, days=None):
-        """
-        Make predictions using Prophet model with improved error handling.
-        
-        Args:
-            historical_data (DataFrame): Historical price data
-            days (int): Number of days to predict
-        
-        Returns:
-            DataFrame: Predicted prices
-        """
+        """Make predictions using Prophet model."""
         if not self.is_trained and not self.load_model():
-            logger.error("Prophet model not trained and could not be loaded")
+            logger.error(f"Prophet model for {self.symbol} not trained and could not be loaded")
             return pd.DataFrame()
-        
         try:
-            # Use provided days or default
             pred_days = days if days is not None else self.prediction_days
-            
-            # Convert to Prophet format - needs 'ds' and 'y' columns
-            # First ensure historical_data has a date index
             hist_data = historical_data.copy()
-            if not isinstance(hist_data.index, pd.DatetimeIndex):
-                logger.error("Historical data must have DatetimeIndex")
-                return pd.DataFrame()
-            
-            # Create prophet data
-            prophet_data = pd.DataFrame({
-                'ds': hist_data.index,
-                'y': hist_data['close']
-            })
-            
-            # Create future dataframe
+            if not isinstance(hist_data.index, pd.DatetimeIndex): raise ValueError("Historical data must have DatetimeIndex")
+
             future = self.model.make_future_dataframe(periods=pred_days)
-            
-            # Make predictions
             forecast = self.model.predict(future)
-            
-            # Extract predictions for future dates only
             last_historical_date = hist_data.index[-1]
             future_predictions = forecast[forecast['ds'] > last_historical_date].copy()
-            
-            # Make sure we have predictions
+
             if future_predictions.empty:
-                logger.error(f"No future predictions generated for {self.symbol}")
+                logger.error(f"No future predictions generated by Prophet for {self.symbol}")
                 return pd.DataFrame()
-            
-            # Convert to DataFrame with date index
+
             result = pd.DataFrame({
                 'Close': future_predictions['yhat'],
                 'Upper': future_predictions['yhat_upper'],
                 'Lower': future_predictions['yhat_lower']
             }, index=pd.DatetimeIndex(future_predictions['ds']))
-            
-            # Debug this output
-            logger.info(f"Prophet prediction result for {self.symbol}: {len(result)} rows")
-            logger.info(f"Date range: {result.index.min()} to {result.index.max()}")
-            
+
+            logger.info(f"Prophet prediction successful for {self.symbol}: {len(result)} rows")
             return result
-        
         except Exception as e:
-            logger.error(f"Error making predictions with Prophet model: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Error making predictions with Prophet model for {self.symbol}: {e}")
+            logger.error(traceback.format_exc())
             return pd.DataFrame()
-    
+
     def evaluate(self, test_data):
-        """
-        Evaluate Prophet model performance.
-        
-        Args:
-            test_data (DataFrame): Test data with actual prices
-        
-        Returns:
-            dict: Evaluation metrics
-        """
+        """Evaluate Prophet model performance."""
         if not self.is_trained and not self.load_model():
-            logger.error("Prophet model not trained and could not be loaded")
+            logger.error(f"Prophet model for {self.symbol} not trained and could not be loaded")
             return {}
-        
         try:
-            # Create dataframe for the test period
-            prophet_data = pd.DataFrame({
-                'ds': test_data.index,
-            })
-            
-            # Make predictions
-            predictions = self.model.predict(prophet_data)
-            
-            # Calculate evaluation metrics
-            mae = mean_absolute_error(test_data['Close'], predictions['yhat'])
-            mse = mean_squared_error(test_data['Close'], predictions['yhat'])
-            rmse = np.sqrt(mse)
-            
-            # Calculate MAPE (Mean Absolute Percentage Error)
-            mape = np.mean(np.abs((test_data['Close'] - predictions['yhat']) / test_data['Close'])) * 100
-            
-            return {
-                'mae': mae,
-                'mse': mse,
-                'rmse': rmse,
-                'mape': mape
-            }
-        
+            # --- Call the standalone calculate_prophet_metrics function ---
+            return calculate_prophet_metrics(self.model, test_data)
         except Exception as e:
-            logger.error(f"Error evaluating Prophet model: {e}")
+            logger.error(f"Error evaluating Prophet model for {self.symbol}: {e}")
+            logger.error(traceback.format_exc())
             return {}
 
 
@@ -807,539 +706,254 @@ class EnsembleModel(PricePredictionModel):
 
 def calculate_prophet_metrics(model, test_data):
     """
-    Calculate evaluation metrics for a Prophet model
-    
-    Args:
-        model: Trained Prophet model
-        test_data (DataFrame): Test data with actual prices
-        
-    Returns:
-        dict: Evaluation metrics
+    Calculate evaluation metrics for a Prophet model.
+    Ensures it uses the 'close' column and handles alignment issues.
     """
     try:
         from sklearn.metrics import mean_absolute_error, mean_squared_error
         import numpy as np
-        
-        # Create dataframe for model prediction on test data
-        prophet_data = pd.DataFrame({
-            'ds': test_data.index
-        })
-        
-        # Make predictions
+
+        # Ensure 'close' column exists (standardized name)
+        if 'close' not in test_data.columns:
+             raise ValueError("Test data must contain 'close' column for metrics calculation")
+
+        prophet_data = pd.DataFrame({'ds': test_data.index})
         predictions = model.predict(prophet_data)
-        
-        # Get actual values
-        actual = test_data['Close'].values
-        
-        # Get predicted values (align indices)
-        predicted = []
-        for date in test_data.index:
-            pred_row = predictions[predictions['ds'] == pd.Timestamp(date)]
-            if not pred_row.empty:
-                predicted.append(pred_row['yhat'].iloc[0])
-            else:
-                # If no prediction for this date, use the last known prediction
-                predicted.append(predicted[-1] if predicted else actual[0])
-        
+
+        # Align actual and predicted values using merge on date index
+        merged_data = pd.merge(test_data[['close']], predictions[['ds', 'yhat']], left_index=True, right_on='ds', how='inner')
+
+        if merged_data.empty or len(merged_data) < 2:
+             logger.warning("No matching dates or insufficient overlap between test data and predictions for metrics calculation.")
+             return {'mae': 0.0, 'mse': 0.0, 'rmse': 0.0, 'mape': 0.0, 'error': 'No matching dates or insufficient overlap'}
+
+        actual = merged_data['close'].values
+        predicted = merged_data['yhat'].values
+
         # Calculate metrics
         mae = mean_absolute_error(actual, predicted)
         mse = mean_squared_error(actual, predicted)
         rmse = np.sqrt(mse)
-        
-        # Calculate MAPE (Mean Absolute Percentage Error)
-        # Handle division by zero by excluding zero values
+
+        # Calculate MAPE safely
         non_zero_indices = actual != 0
         if np.any(non_zero_indices):
-            mape = np.mean(np.abs((actual[non_zero_indices] - np.array(predicted)[non_zero_indices]) / actual[non_zero_indices])) * 100
+            mape = np.mean(np.abs((actual[non_zero_indices] - predicted[non_zero_indices]) / actual[non_zero_indices])) * 100
         else:
-            mape = 0.0
-        
-        return {
-            'mae': float(mae),
-            'mse': float(mse),
-            'rmse': float(rmse),
-            'mape': float(mape)
-        }
-    
+            mape = 0.0 # Avoid division by zero if all actual values are zero
+
+        return {'mae': float(mae), 'mse': float(mse), 'rmse': float(rmse), 'mape': float(mape)}
+
     except Exception as e:
-        print(f"Error calculating Prophet metrics: {e}")
-        import traceback
-        traceback.print_exc()
-        return {
-            'mae': 0.0,
-            'mse': 0.0,
-            'rmse': 0.0,
-            'mape': 0.0,
-            'error': str(e)
-        }
+        logger.error(f"Error calculating Prophet metrics: {e}")
+        logger.error(traceback.format_exc())
+        return {'mae': 0.0, 'mse': 0.0, 'rmse': 0.0, 'mape': 0.0, 'error': str(e)}
 
 # Make sure this is AFTER the function definition, not before
 def train_price_prediction_models(symbol, lookback_period="1y"):
     """
-    Train price prediction models for a specific symbol.
-    
+    Train price prediction models (currently Prophet) for a specific symbol.
+    Saves the model file and returns necessary info for metadata saving.
+
     Args:
         symbol (str): Stock symbol to train models for
         lookback_period (str): Historical period to use for training (e.g., "1y", "2y")
-    
+
     Returns:
-        dict: Trained models and performance metrics
+        tuple: (model_object, metrics_dict, model_type_str, model_filename_str)
+               Returns (None, {'error': msg}, None, None) on failure.
     """
-    # Input validation for symbol parameter
     if not symbol:
         error_msg = "Symbol parameter cannot be None or empty"
         logger.error(error_msg)
-        return {"error": error_msg}
-        
+        return None, {"error": error_msg}, None, None # Return consistent tuple
+
     try:
         # Check if Prophet is installed
         if not check_prophet_installed():
             raise ImportError("Prophet package is required for model training")
-            
+
         logger.info(f"Starting model training for symbol: {symbol}")
-            
-        # Get historical data - try FMP first, fallback to YFinance
-        try:
-            # Import FMP API
-            # from modules.fmp_api import fmp_api
-            
-            # Get historical price data
-            historical_data = data_provider.get_historical_price(symbol, period=lookback_period)
-            
-            if historical_data.empty:
-                logger.warning(f"No data from FMP for {symbol}, trying direct YFinance approach")
-                # FMP failed or returned empty, try YFinance directly
-                import yfinance as yf
-                ticker = yf.Ticker(symbol)
-                historical_data = ticker.history(period=lookback_period)
-                
-                # Ensure timezone is localized to None (timezone-naive)
-                if historical_data.index.tz is not None:
-                    historical_data.index = historical_data.index.tz_localize(None)
-                
-                logger.info(f"Retrieved {len(historical_data)} rows from YFinance for {symbol}")
-            else:
-                logger.info(f"Retrieved {len(historical_data)} rows from FMP for {symbol}")
-        except Exception as data_error:
-            logger.error(f"Error getting historical data: {data_error}")
-            import traceback
-            traceback.print_exc()
-            return {"error": f"Failed to retrieve historical data: {str(data_error)}"}
-        
+
+        # Get historical data using DataProvider (standardized)
+        historical_data = data_provider.get_historical_price(symbol, period=lookback_period)
         if historical_data.empty:
-            logger.error(f"No historical data available for {symbol}")
-            return {"error": f"No historical data available for {symbol}"}
-        
-        # Make sure we have the necessary columns
-        required_columns = ['Close', 'Open', 'High', 'Low']
-        for col in required_columns:
-            if col not in historical_data.columns:
-                # Try to map column names from lowercase if necessary
-                lowercase_map = {'close': 'Close', 'open': 'Open', 'high': 'High', 'low': 'Low'}
-                for lcol, ucol in lowercase_map.items():
-                    if lcol in historical_data.columns:
-                        historical_data[ucol] = historical_data[lcol]
-        
-        # Check if we have the required columns after mapping
-        missing_cols = [col for col in required_columns if col not in historical_data.columns]
-        if missing_cols:
-            logger.error(f"Missing required columns: {missing_cols}")
-            return {"error": f"Missing required columns: {missing_cols}"}
-        
-        # Ensure we have enough data for training (at least 60 days)
-        if len(historical_data) < 60:
-            logger.error(f"Not enough historical data for {symbol} (got {len(historical_data)} rows, need at least 60)")
-            return {"error": f"Not enough historical data (got {len(historical_data)} rows, need at least 60)"}
-            
-        # Split data into training and testing sets (80/20 split)
+            raise ValueError(f"No historical data available for {symbol} via DataProvider")
+
+        # Ensure required columns ('close') and enough data
+        if 'close' not in historical_data.columns:
+            raise ValueError("Missing required column: 'close'")
+        if len(historical_data) < 60: # Need sufficient data for train/test split
+            raise ValueError(f"Not enough historical data for {symbol} (got {len(historical_data)} rows, need at least 60)")
+
+        # Split data (80/20)
         split_idx = int(len(historical_data) * 0.8)
         train_data = historical_data.iloc[:split_idx]
         test_data = historical_data.iloc[split_idx:]
-        
         logger.info(f"Training data: {len(train_data)} days, Testing data: {len(test_data)} days")
-        
-        # Make sure 'models' directory exists
-        import os
-        os.makedirs("models", exist_ok=True)
-        
-        # Train Prophet model
+
+        # --- Train Prophet Model ---
         try:
-            from prophet import Prophet
-            
-            # Prophet requires 'ds' (date) and 'y' (target) columns
-            prophet_data = pd.DataFrame({
-                'ds': train_data.index,
-                'y': train_data['Close']
-            })
-            
-            # Train Prophet model with basic settings
-            model = Prophet(
-                daily_seasonality=True,
-                yearly_seasonality=True,
-                weekly_seasonality=True,
-                changepoint_prior_scale=0.05
-            )
-            model.fit(prophet_data)
-            
-            # Create future dataframe for 30 days
-            future = model.make_future_dataframe(periods=30)
-            
-            # Make predictions
-            forecast = model.predict(future)
-            
-            # Extract predictions for future dates
-            predictions = forecast[forecast['ds'] > historical_data.index[-1]][['ds', 'yhat', 'yhat_lower', 'yhat_upper']]
-            
-            # Convert to DataFrame with date index
-            result = pd.DataFrame({
-                'Close': predictions['yhat'],
-                'Lower': predictions['yhat_lower'],
-                'Upper': predictions['yhat_upper']
-            }, index=pd.DatetimeIndex(predictions['ds']))
-            
-            # Calculate actual metrics using the test data
-            metrics = calculate_prophet_metrics(model, test_data)
-            
-            # Create a structured model result
-            model_result = {
-                'prophet': {
-                    'model': model,
-                    'metrics': metrics
-                }
-            }
-            
-            # Save the model WITH THE SYMBOL in the filename (this is critical)
-            import pickle
-            model_filename = f"prophet_{symbol}.pkl"
-            model_path = os.path.join("models", model_filename)
-            
-            # Log the exact path we're saving to
-            logger.info(f"Saving model to path: {os.path.abspath(model_path)}")
-            
+            # Instantiate the ProphetModel class
+            prophet_trainer = ProphetModel(symbol=symbol) # Pass symbol here
+
+            # Train the model using its train method
+            train_success = prophet_trainer.train(train_data)
+
+            if not train_success:
+                raise RuntimeError("Prophet model training failed.")
+
+            # Evaluate the trained model
+            metrics = prophet_trainer.evaluate(test_data)
+            if not metrics or 'error' in metrics:
+                 logger.warning(f"Metrics calculation failed or returned error for {symbol}. Metrics: {metrics}")
+                 # Decide if this is critical - maybe proceed but log error in metrics?
+                 if isinstance(metrics, dict) and 'error' in metrics:
+                     pass # Keep error metrics
+                 else:
+                     metrics = {'error': 'Metrics calculation failed'}
+
+            # --- Save the Prophet model ---
+            model_type = 'prophet' # Define model type
+            model_filename = f"{model_type}_{symbol}.pkl"
+            model_dir = "models" # Ensure this matches ModelIntegration
+            os.makedirs(model_dir, exist_ok=True)
+            model_path = os.path.join(model_dir, model_filename)
+
+            logger.info(f"Saving Prophet model to path: {os.path.abspath(model_path)}")
             with open(model_path, 'wb') as f:
-                pickle.dump(model, f)
-            
+                # --- Save the TRAINED model object from the class instance ---
+                pickle.dump(prophet_trainer.model, f)
             logger.info(f"Successfully trained and saved Prophet model for {symbol} as {model_filename}")
-            logger.info(f"Metrics for {symbol}: {metrics}")
-            
-            return model_result
-            
+
+            # --- Return the necessary info ---
+            # Return the trained model object itself, metrics, type, and filename
+            return prophet_trainer.model, metrics, model_type, model_filename
+
         except Exception as prophet_error:
-            logger.error(f"Error training Prophet model: {prophet_error}")
-            import traceback
-            traceback.print_exc()
-            
-            # If Prophet fails, return a simplified result with error information
-            return {
-                'prophet': {
-                    'model': None,
-                    'metrics': {
-                        'mae': 0.0,
-                        'mse': 0.0,
-                        'rmse': 0.0,
-                        'mape': 0.0,
-                        'error': str(prophet_error)
-                    }
-                }
-            }
-    
+            logger.error(f"Error during Prophet model training/saving for {symbol}: {prophet_error}")
+            logger.error(traceback.format_exc())
+            # Return None and error metrics
+            return None, {'error': str(prophet_error)}, 'prophet', None # Keep type if known
+
     except Exception as e:
         logger.error(f"Error in train_price_prediction_models for {symbol}: {e}")
-        import traceback
-        traceback.print_exc()
-        return {"error": str(e)}
+        logger.error(traceback.format_exc())
+        # Return None and error metrics
+        return None, {"error": str(e)}, None, None
 
 def get_price_predictions(symbol, days=30):
-    """
-    Get price predictions for a specific symbol using the best available model.
-    Simplified by removing the complex sanity check block.
-
-    Args:
-        symbol (str): Stock symbol to predict
-        days (int): Number of days to predict
-
-    Returns:
-        dict: Predictions with dates, values, and confidence intervals
-    """
-    print(f"get_price_predictions called with symbol: {symbol}, days: {days}")
-
-    if not symbol:
-        logger.error("Symbol parameter cannot be None or empty")
-        return None
+    """Get price predictions, using Prophet model with fallbacks."""
+    logger.info(f"Getting price predictions for {symbol} for {days} days.")
+    if not symbol: return create_simple_fallback("UNKNOWN", days)
 
     try:
-        # Get recent historical data
         historical_data = data_provider.get_historical_price(symbol, period="1y")
-
         if historical_data.empty:
-            logger.error(f"No historical data available for {symbol}")
-            return create_simple_fallback(symbol, days) # Use simple fallback if no history
+            logger.error(f"No historical data for {symbol} in get_price_predictions.")
+            return create_fallback_prediction(symbol, days)
 
-        # Store current price for reference (but don't use for complex adjustments here)
-        current_price = historical_data['close'].iloc[-1]
-        print(f"Current price for {symbol}: {current_price}")
+        # --- Use ProphetModel class instance ---
+        prophet_predictor = ProphetModel(symbol=symbol, prediction_days=days)
+        predictions_df = pd.DataFrame()
 
-        # Initialize ProphetModel directly
-        prophet_model = ProphetModel(prediction_days=days, symbol=symbol)
-
-        predictions = pd.DataFrame() # Initialize empty DataFrame
-
-        # Try to load and use the model
-        if prophet_model.load_model():
-            print(f"Successfully loaded Prophet model for {symbol}")
-            predictions = prophet_model.predict(historical_data, days=days)
-
-            # Debug prediction output
-            print(f"Prophet predictions shape: {predictions.shape if not predictions.empty else 'Empty'}")
-            if not predictions.empty:
-                print(f"Prediction date range: {predictions.index.min()} to {predictions.index.max()}")
-                print(f"First few predicted values: {predictions['Close'].head().tolist()}")
-            else:
-                 # Log if Prophet returned empty, triggering fallback later
-                 logger.warning(f"Prophet model for {symbol} returned empty predictions.")
-
+        if prophet_predictor.load_model():
+            logger.info(f"Loaded existing Prophet model for {symbol}.")
+            predictions_df = prophet_predictor.predict(historical_data, days=days)
         else:
-            print(f"Could not load Prophet model for {symbol}")
-            logger.warning(f"Prophet model file not found or failed to load for {symbol}.")
+            logger.warning(f"No pre-trained Prophet model found for {symbol}. Using fallback.")
+            # Optionally trigger training here if desired, but for prediction, use fallback
+            # self.train_models_for_symbol(symbol) # This would block or run async
+            return create_fallback_prediction(symbol, days)
 
-
-        # --- REMOVED/COMMENTED OUT SANITY CHECK BLOCK ---
-        # if not predictions.empty:
-        #     max_predicted_price = predictions['Close'].max()
-        #     min_predicted_price = predictions['Close'].min()
-        #     max_reasonable_change = 0.30
-        #     if (max_predicted_price > current_price * (1 + max_reasonable_change) or
-        #         min_predicted_price < current_price * (1 - max_reasonable_change)):
-        #         print(f"WARNING: Prediction for {symbol} is outside reasonable bounds!")
-        #         # ... (rest of the complex adjustment logic removed) ...
-        #         # Force using the main fallback instead of this complex adjustment
-        #         predictions = pd.DataFrame() # Clear predictions to trigger main fallback
-        # --- END REMOVED/COMMENTED OUT SANITY CHECK BLOCK ---
-
-
-        # Check if predictions are valid (not empty)
-        if not predictions.empty:
-            # Format results
+        # --- Process predictions ---
+        if not predictions_df.empty:
             result = {
-                'symbol': symbol,
-                'model': 'prophet',
-                'dates': predictions.index.strftime('%Y-%m-%d').tolist(),
-                'values': predictions['Close'].tolist()
+                'symbol': symbol, 'model': 'prophet',
+                'dates': predictions_df.index.strftime('%Y-%m-%d').tolist(),
+                'values': predictions_df['Close'].tolist()
             }
+            if 'Upper' in predictions_df.columns and 'Lower' in predictions_df.columns:
+                result['confidence'] = {'upper': predictions_df['Upper'].tolist(), 'lower': predictions_df['Lower'].tolist()}
+            else: # Add simple confidence if missing
+                result['confidence'] = {'upper': [v*1.05 for v in result['values']], 'lower': [v*0.95 for v in result['values']]}
 
-            # Add confidence intervals if they exist
-            if 'Upper' in predictions.columns and 'Lower' in predictions.columns:
-                result['confidence'] = {
-                    'upper': predictions['Upper'].tolist(),
-                    'lower': predictions['Lower'].tolist()
-                }
-            else:
-                # Create simple confidence intervals if not provided
-                values = predictions['Close'].tolist()
-                result['confidence'] = {
-                    'upper': [val * 1.05 for val in values],
-                    'lower': [val * 0.95 for val in values]
-                }
-
-            # Clean and verify the result
             cleaned_result = handle_nan_values(result)
-            if cleaned_result is None:
-                 print("Warning: NaN handling returned None - using simple fallback")
-                 return create_simple_fallback(symbol, days) # Use simple fallback if cleaning fails
-
-            print(f"Cleaned result dates count: {len(cleaned_result['dates'])}")
-            print(f"Cleaned result values count: {len(cleaned_result['values'])}")
-            return cleaned_result
+            return cleaned_result if cleaned_result else create_simple_fallback(symbol, days)
         else:
-            # If Prophet model failed or predictions were cleared by sanity check (now removed)
-            # Use the main fallback prediction
-            print(f"Using main fallback prediction for {symbol}")
-            fallback_result = create_fallback_prediction(symbol, days)
-            cleaned_fallback = handle_nan_values(fallback_result)
-            # If even fallback cleaning fails, use the simplest one
-            return cleaned_fallback if cleaned_fallback else create_simple_fallback(symbol, days)
+            logger.warning(f"Prophet prediction returned empty DataFrame for {symbol}. Using fallback.")
+            return create_fallback_prediction(symbol, days)
 
     except Exception as e:
-        print(f"Error in get_price_predictions for {symbol}: {e}")
-        import traceback
-        traceback.print_exc()
-        # Use the simplest fallback on any error
-        return create_simple_fallback(symbol, days)
+        logger.error(f"Error in get_price_predictions for {symbol}: {e}")
+        logger.error(traceback.format_exc())
+        return create_simple_fallback(symbol, days) # Simplest fallback on error
 
 def check_prophet_installed():
-    """
-    Check if Prophet is installed and provide installation instructions if not.
-    
-    Returns:
-        bool: True if Prophet is installed, False otherwise
-    """
+    """Check if Prophet is installed."""
     try:
         import prophet
         return True
     except ImportError:
-        import logging
-        logger = logging.getLogger(__name__)
-        
-        logger.error("""
-        ---------------------------------------------------
-        Prophet is not installed. This is required for model training.
-        
-        Install Prophet with:
-        
-        pip install prophet
-        
-        Note: Prophet has additional dependencies like Stan that may 
-        require further installation steps on some systems.
-        
-        For more information, see:
-        https://facebook.github.io/prophet/docs/installation.html
-        ---------------------------------------------------
-        """)
+        logger.error("Prophet is not installed. Required for model training. Run: pip install prophet")
         return False
 
-def create_fallback_prediction(symbol, days=30):
-    """
-    Create a fallback prediction when model training fails or is not available.
-    This uses a simple moving average projection instead of ML models.
-    Handles potential column name differences from direct YFinance calls.
-
-    Args:
-        symbol (str): Stock symbol
-        days (int): Number of days to predict
-
-    Returns:
-        dict: Simple prediction data
-    """
-    print(f"Using fallback prediction for {symbol} with {days} days")
-
+def create_simple_fallback(symbol, days=30):
+    """Create a very simple fallback prediction."""
+    logger.warning(f"Using SIMPLE fallback prediction for {symbol}")
     try:
-        import pandas as pd
-        import numpy as np
-        from datetime import datetime, timedelta
+        last_price = 100.0 # Default base price
+        try:
+            quote = data_provider.get_current_quote(symbol)
+            if quote and quote.get('price'): last_price = float(quote['price'])
+        except: pass # Ignore errors getting current price for fallback
 
-        # --- Attempt 1: Use DataProvider (preferred, returns standardized data) ---
-        historical_data = data_provider.get_historical_price(symbol, period="90days")
+        last_date = datetime.now()
+        future_dates = [(last_date + timedelta(days=i+1)).strftime('%Y-%m-%d') for i in range(days)]
+        values = [last_price] * days # Flat prediction
 
-        # --- Check if DataProvider succeeded ---
-        if historical_data.empty or len(historical_data) < 30:
-            print(f"Not enough historical data from DataProvider for fallback prediction for {symbol}. Trying direct YFinance.")
-            # --- Attempt 2: Direct YFinance (returns unstandardized data) ---
-            try:
-                import yfinance as yf
-                ticker = yf.Ticker(symbol)
-                historical_data = ticker.history(period="3mo") # This overwrites the previous variable
-                if historical_data.empty or len(historical_data) < 30:
-                    raise ValueError("Insufficient data from YFinance")
-                # --- IMPORTANT: Data from direct YFinance is NOT standardized ---
-                print(f"Direct YFinance call returned {len(historical_data)} rows.")
+        return {
+            'symbol': symbol, 'model': 'simple_fallback', 'dates': future_dates, 'values': values,
+            'confidence': {'upper': [v * 1.05 for v in values], 'lower': [v * 0.95 for v in values]}
+        }
+    except Exception as e:
+         logger.error(f"CRITICAL ERROR in simple fallback for {symbol}: {e}")
+         # Absolute last resort
+         return {'symbol': symbol, 'model': 'error_fallback', 'dates': [], 'values': [], 'confidence': {}}
 
-            except Exception as yf_error:
-                print(f"YFinance fallback error: {yf_error}")
-                # If both attempts fail, go to the emergency fallback immediately
-                raise # Re-raise the exception to trigger the outer except block's emergency fallback
+def create_fallback_prediction(symbol, days=30):
+    """Create a fallback prediction using simple projection."""
+    logger.warning(f"Using standard fallback prediction for {symbol}")
+    try:
+        historical_data = data_provider.get_historical_price(symbol, period="90d")
+        if historical_data.empty or len(historical_data) < 10 or 'close' not in historical_data.columns:
+            logger.error(f"Insufficient data for standard fallback for {symbol}")
+            return create_simple_fallback(symbol, days)
 
-        # --- Determine the correct close column name ---
-        # DataProvider returns 'close', direct YFinance returns 'Close'
-        close_col_name = None
-        if 'close' in historical_data.columns:
-            close_col_name = 'close'
-        elif 'Close' in historical_data.columns:
-            close_col_name = 'Close'
-        else:
-            raise ValueError("Could not find 'close' or 'Close' column in historical data.")
-
-        # --- Proceed with calculation using the correct column name ---
-        last_price = historical_data[close_col_name].iloc[-1]
+        last_price = historical_data['close'].iloc[-1]
         last_date = historical_data.index[-1]
+        daily_returns = historical_data['close'].pct_change().dropna()
+        avg_daily_return = np.clip(daily_returns.mean(), -0.005, 0.005) # Bounded average
+        std_dev = np.clip(daily_returns.std(), 0.005, 0.02) # Bounded std dev
 
-        # Calculate average daily return with some bounds
-        daily_returns = historical_data[close_col_name].pct_change().dropna()
-        avg_daily_return = np.clip(daily_returns.mean(), -0.005, 0.005)
-        std_dev = np.clip(daily_returns.std(), 0.005, 0.02)
-
-        # Generate future dates
-        future_dates = [last_date + timedelta(days=i+1) for i in range(days)]
-
-        # Calculate predicted prices
+        future_dates = [(last_date + timedelta(days=i+1)) for i in range(days)]
         predicted_prices = []
         current_price = last_price
-        for i in range(days):
-            daily_return = avg_daily_return + np.random.normal(0, std_dev/3)
-            daily_return = np.clip(daily_return, -0.01, 0.01)
-            current_price = current_price * (1 + daily_return)
+        for _ in range(days):
+            daily_return = np.clip(avg_daily_return + np.random.normal(0, std_dev/3), -0.01, 0.01) # Add noise, clip
+            current_price *= (1 + daily_return)
             predicted_prices.append(current_price)
 
-        # Calculate bounds
-        upper_bounds = [price * (1 + std_dev) for price in predicted_prices]
-        lower_bounds = [price * (1 - std_dev) for price in predicted_prices]
-
-        # Format result
-        result = {
-            'symbol': symbol,
-            'model': 'simple_forecast', # Indicate it's the intended fallback
-            'dates': [date.strftime('%Y-%m-%d') for date in future_dates],
+        return {
+            'symbol': symbol, 'model': 'fallback_projection',
+            'dates': [d.strftime('%Y-%m-%d') for d in future_dates],
             'values': predicted_prices,
-            'confidence': {
-                'upper': upper_bounds,
-                'lower': lower_bounds
-            }
+            'confidence': {'upper': [p * (1 + std_dev) for p in predicted_prices], 'lower': [p * (1 - std_dev) for p in predicted_prices]}
         }
-
-        print(f"Successfully created fallback prediction for {symbol} with {days} days, starting near {last_price:.2f}")
-        return result
-
     except Exception as e:
-        # --- This block now handles errors from data fetching OR calculation ---
-        print(f"Error creating fallback prediction for {symbol}: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error creating standard fallback prediction for {symbol}: {e}")
+        return create_simple_fallback(symbol, days) # Use simplest if this fails
 
-        # --- Emergency Fallback Logic ---
-        print(f"Executing EMERGENCY fallback for {symbol}")
-        try:
-            # Try to get a reasonable default price
-            last_price = 50.0 # Arbitrary fallback price
-            try:
-                # Try to get actual price data one last time
-                current_quote = data_provider.get_current_quote(symbol)
-                if current_quote and 'price' in current_quote:
-                    last_price = current_quote['price']
-                else: # If quote fails, try yfinance again just for price
-                    import yfinance as yf
-                    ticker = yf.Ticker(symbol)
-                    data = ticker.history(period="1d")
-                    if not data.empty:
-                        # Check for 'Close' or 'close'
-                        if 'Close' in data.columns: last_price = data['Close'].iloc[-1]
-                        elif 'close' in data.columns: last_price = data['close'].iloc[-1]
-
-            except Exception as price_err:
-                print(f"Could not get current price for emergency fallback: {price_err}")
-                # Use hash-based price if even current price fails
-                symbol_hash = sum(ord(c) for c in symbol) % 100 + 20
-                last_price = float(symbol_hash) # Ensure float
-
-            # Generate very basic synthetic data starting from last_price
-            last_date = datetime.now()
-            future_dates = [(last_date + timedelta(days=i+1)).strftime('%Y-%m-%d') for i in range(days)]
-            values = [last_price * (1 + np.random.normal(0.0001, 0.0015))**i for i in range(days)] # Slight random walk
-
-            result = {
-                'symbol': symbol,
-                'model': 'emergency_fallback',
-                'dates': future_dates,
-                'values': values,
-                'confidence': {
-                    'upper': [v * 1.02 for v in values],
-                    'lower': [v * 0.98 for v in values]
-                }
-            }
-            print(f"Created EMERGENCY fallback prediction for {symbol}, starting near {last_price:.2f}")
-            return result
-        except Exception as emergency_e:
-            # Absolute last resort if even emergency fallback fails
-            print(f"CRITICAL ERROR: Emergency fallback failed: {emergency_e}")
-            return create_simple_fallback(symbol, days) # Use the simplest possible fallback
 
         
 # Modify get_price_predictions to use the fallback when needed
@@ -1428,142 +1042,29 @@ def get_asset_analysis(self, symbol, days_to_predict=30, force_refresh=False):
         return None
     
 def handle_nan_values(prediction_data):
-    """
-    Clean prediction data by handling NaN values with improved debugging.
-    
-    Args:
-        prediction_data (dict): The prediction data dictionary
-        
-    Returns:
-        dict: Cleaned prediction data with NaN values removed or replaced
-    """
-    import numpy as np
-    import pandas as pd
-    
-    if not prediction_data:
-        print("Warning: handle_nan_values received None or empty prediction_data")
-        return None
-    
-    # Make a copy to avoid modifying the original
+    """Clean prediction data by handling NaN values."""
+    if not prediction_data: return None
     cleaned_data = prediction_data.copy()
-    
-    # Debug the input
-    print(f"NaN handler received data with keys: {cleaned_data.keys()}")
-    
-    # Check and clean values
-    if 'values' in cleaned_data:
-        # Debug values before cleaning
-        original_values_count = len(cleaned_data['values'])
-        nan_count = sum(1 for val in cleaned_data['values'] if pd.isna(val) or val is None)
-        print(f"Original values: {original_values_count}, NaN count: {nan_count}")
-        
-        # Convert values to float and replace NaN with None
-        cleaned_values = []
-        for val in cleaned_data['values']:
+    cleaned_values = []
+    valid_indices = []
+
+    if 'values' in cleaned_data and isinstance(cleaned_data['values'], list):
+        for i, val in enumerate(cleaned_data['values']):
             try:
                 float_val = float(val)
-                if not np.isnan(float_val):
+                if not pd.isna(float_val):
                     cleaned_values.append(float_val)
-                else:
-                    print(f"Skipping NaN value")
-                    continue
-            except (ValueError, TypeError) as e:
-                print(f"Value conversion error: {e} for value: {val}")
-                continue
-        
-        # Debug cleaned values
-        print(f"Cleaned values count: {len(cleaned_values)}")
-        
-        # If we lost all values, return None
-        if not cleaned_values:
-            print("Warning: All values were NaN or invalid")
-            return None
-            
-        # Update the values list
-        cleaned_data['values'] = cleaned_values
-        
-        # Ensure dates and values have same length
-        if 'dates' in cleaned_data and len(cleaned_data['dates']) != len(cleaned_values):
-            print(f"Adjusting dates list from {len(cleaned_data['dates'])} to {len(cleaned_values)}")
-            # Keep only the dates corresponding to valid values
-            cleaned_data['dates'] = cleaned_data['dates'][:len(cleaned_values)]
-    else:
-        print("Warning: No 'values' key found in prediction data")
-    
-    # Check and clean confidence intervals with similar debugging
-    if 'confidence' in cleaned_data:
-        confidence = cleaned_data['confidence']
-        if confidence:
-            # Clean upper bounds
-            if 'upper' in confidence:
-                cleaned_upper = []
-                for val in confidence['upper']:
-                    try:
-                        float_val = float(val)
-                        if not np.isnan(float_val):
-                            cleaned_upper.append(float_val)
-                        else:
-                            continue
-                    except (ValueError, TypeError):
-                        continue
-                confidence['upper'] = cleaned_upper
-            
-            # Clean lower bounds
-            if 'lower' in confidence:
-                cleaned_lower = []
-                for val in confidence['lower']:
-                    try:
-                        float_val = float(val)
-                        if not np.isnan(float_val):
-                            cleaned_lower.append(float_val)
-                        else:
-                            continue
-                    except (ValueError, TypeError):
-                        continue
-                confidence['lower'] = cleaned_lower
-            
-            # Update confidence data
-            cleaned_data['confidence'] = confidence
-    
-    return cleaned_data
+                    valid_indices.append(i)
+            except (ValueError, TypeError): continue # Skip non-numeric
 
-# New fallback function for more reliability
-def create_simple_fallback(symbol, days=30):
-    """
-    Create a very simple fallback prediction when all else fails.
-    
-    Args:
-        symbol (str): Stock symbol
-        days (int): Number of days to predict
-        
-    Returns:
-        dict: Simple prediction data
-    """
-    from datetime import datetime, timedelta
-    import numpy as np
-    
-    # Create basic prediction structure
-    current_date = datetime.now()
-    future_dates = [(current_date + timedelta(days=i+1)).strftime('%Y-%m-%d') for i in range(days)]
-    
-    # Use a fixed value that won't be NaN
-    base_value = 100.0
-    values = [base_value + i * 0.1 for i in range(days)]
-    
-    # Simple confidence intervals
-    upper = [val * 1.05 for val in values]
-    lower = [val * 0.95 for val in values]
-    
-    result = {
-        'symbol': symbol,
-        'model': 'simple_fallback',
-        'dates': future_dates,
-        'values': values,
-        'confidence': {
-            'upper': upper,
-            'lower': lower
-        }
-    }
-    
-    print(f"Created simple fallback prediction for {symbol} with {len(values)} days")
-    return result
+        if not cleaned_values: return None # All values were invalid
+
+        cleaned_data['values'] = cleaned_values
+        if 'dates' in cleaned_data and isinstance(cleaned_data['dates'], list):
+            cleaned_data['dates'] = [cleaned_data['dates'][i] for i in valid_indices if i < len(cleaned_data['dates'])]
+        if 'confidence' in cleaned_data and isinstance(cleaned_data['confidence'], dict):
+            if 'upper' in cleaned_data['confidence'] and isinstance(cleaned_data['confidence']['upper'], list):
+                 cleaned_data['confidence']['upper'] = [cleaned_data['confidence']['upper'][i] for i in valid_indices if i < len(cleaned_data['confidence']['upper'])]
+            if 'lower' in cleaned_data['confidence'] and isinstance(cleaned_data['confidence']['lower'], list):
+                 cleaned_data['confidence']['lower'] = [cleaned_data['confidence']['lower'][i] for i in valid_indices if i < len(cleaned_data['confidence']['lower'])]
+    return cleaned_data

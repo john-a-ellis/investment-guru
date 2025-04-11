@@ -21,8 +21,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Import database utilities
-from modules.db_utils import initialize_database, execute_query, initialize_pool
+# Make sure initialize_database and execute_query are imported correctly
+from modules.db_utils import initialize_database, execute_query, initialize_pool, save_model_metadata # Added save_model_metadata for potential testing
 
+# --- (Keep load_json_file and all migration functions as they are) ---
 def load_json_file(filename):
     """Load data from a JSON file"""
     try:
@@ -38,17 +40,34 @@ def migrate_transactions():
     """Migrate transactions from JSON to database"""
     logger.info("Migrating transactions to database...")
     transactions = load_json_file('data/transactions.json')
+    migrated_count = 0
     
     for trans_id, trans in transactions.items():
+        # Check if transaction already exists
+        check_query = "SELECT id FROM transactions WHERE id = %s;"
+        existing = execute_query(check_query, (trans_id,), fetchone=True)
+        
+        if existing:
+            logger.debug(f"Transaction {trans_id} already exists, skipping migration.")
+            continue
+
         # Format transaction for insertion
         insert_query = """
         INSERT INTO transactions (
             id, type, symbol, price, shares, amount, transaction_date, notes, recorded_at
         ) VALUES (
             %s, %s, %s, %s, %s, %s, %s, %s, %s
-        ) ON CONFLICT (id) DO NOTHING;
+        );
         """
         
+        # Ensure date is valid, default if not
+        trans_date = trans.get("date", datetime.now().strftime("%Y-%m-%d"))
+        try:
+            datetime.strptime(trans_date, "%Y-%m-%d")
+        except ValueError:
+            logger.warning(f"Invalid date format '{trans_date}' for transaction {trans_id}. Defaulting to today.")
+            trans_date = datetime.now().strftime("%Y-%m-%d")
+
         params = (
             trans_id,
             trans.get("type", ""),
@@ -56,24 +75,41 @@ def migrate_transactions():
             float(trans.get("price", 0)),
             float(trans.get("shares", 0)),
             float(trans.get("amount", 0)),
-            trans.get("date", datetime.now().strftime("%Y-%m-%d")),
+            trans_date,
             trans.get("notes", ""),
             trans.get("recorded_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         )
         
         result = execute_query(insert_query, params, commit=True)
-        if result is not None:
+        if result:
             logger.info(f"Migrated transaction {trans_id}")
+            migrated_count += 1
+        else:
+             logger.error(f"Failed to migrate transaction {trans_id}")
     
-    logger.info(f"Migrated {len(transactions)} transactions")
+    logger.info(f"Migration check complete. Migrated {migrated_count} new transactions.")
     return True
 
 def migrate_portfolio():
     """Migrate portfolio from JSON to database"""
     logger.info("Migrating portfolio to database...")
     portfolio = load_json_file('data/portfolio.json')
+    migrated_count = 0
     
     for inv_id, inv in portfolio.items():
+        symbol_upper = inv.get("symbol", "").upper()
+        if not symbol_upper:
+            logger.warning(f"Skipping portfolio item with missing symbol (ID: {inv_id})")
+            continue
+
+        # Check if portfolio item for this symbol already exists
+        check_query = "SELECT symbol FROM portfolio WHERE symbol = %s;"
+        existing = execute_query(check_query, (symbol_upper,), fetchone=True)
+        
+        if existing:
+            logger.debug(f"Portfolio item for symbol {symbol_upper} already exists, skipping migration.")
+            continue
+
         # Format investment for insertion
         insert_query = """
         INSERT INTO portfolio (
@@ -82,15 +118,27 @@ def migrate_portfolio():
             added_date, last_updated
         ) VALUES (
             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-        ) ON CONFLICT (id) DO NOTHING;
+        );
         """
         
+        # Ensure date is valid, default if not
+        purchase_date = inv.get("purchase_date", datetime.now().strftime("%Y-%m-%d"))
+        try:
+             if purchase_date: datetime.strptime(purchase_date, "%Y-%m-%d")
+        except ValueError:
+            logger.warning(f"Invalid date format '{purchase_date}' for portfolio item {symbol_upper}. Defaulting to today.")
+            purchase_date = datetime.now().strftime("%Y-%m-%d")
+        except TypeError: # Handle if purchase_date is not a string
+             logger.warning(f"Invalid date type for portfolio item {symbol_upper}. Defaulting to today.")
+             purchase_date = datetime.now().strftime("%Y-%m-%d")
+
+
         params = (
-            inv_id,
-            inv.get("symbol", "").upper(),
+            inv_id, # Use the ID from JSON
+            symbol_upper,
             float(inv.get("shares", 0)),
             float(inv.get("purchase_price", 0)),
-            inv.get("purchase_date", datetime.now().strftime("%Y-%m-%d")),
+            purchase_date,
             inv.get("asset_type", "stock"),
             float(inv.get("current_price", 0)) if inv.get("current_price") else None,
             float(inv.get("current_value", 0)) if inv.get("current_value") else None,
@@ -102,39 +150,65 @@ def migrate_portfolio():
         )
         
         result = execute_query(insert_query, params, commit=True)
-        if result is not None:
-            logger.info(f"Migrated investment {inv_id}")
-    
-    logger.info(f"Migrated {len(portfolio)} investments")
+        if result:
+            logger.info(f"Migrated investment {symbol_upper} (ID: {inv_id})")
+            migrated_count += 1
+        else:
+            logger.error(f"Failed to migrate investment {symbol_upper} (ID: {inv_id})")
+
+    logger.info(f"Migration check complete. Migrated {migrated_count} new portfolio items.")
     return True
 
 def migrate_tracked_assets():
     """Migrate tracked assets from JSON to database"""
     logger.info("Migrating tracked assets to database...")
     assets = load_json_file('data/tracked_assets.json')
+    migrated_count = 0
     
     for symbol, details in assets.items():
+        symbol_upper = symbol.upper()
+        # Check if asset already exists
+        check_query = "SELECT symbol FROM tracked_assets WHERE symbol = %s;"
+        existing = execute_query(check_query, (symbol_upper,), fetchone=True)
+        
+        if existing:
+            logger.debug(f"Tracked asset {symbol_upper} already exists, skipping migration.")
+            continue
+
         # Format asset for insertion
         insert_query = """
         INSERT INTO tracked_assets (
             symbol, name, type, added_date
         ) VALUES (
             %s, %s, %s, %s
-        ) ON CONFLICT (symbol) DO NOTHING;
+        );
         """
-        
+         # Ensure date is valid, default if not
+        added_date = details.get("added_date", datetime.now().strftime("%Y-%m-%d"))
+        try:
+             if added_date: datetime.strptime(added_date, "%Y-%m-%d")
+        except ValueError:
+            logger.warning(f"Invalid date format '{added_date}' for tracked asset {symbol_upper}. Defaulting to today.")
+            added_date = datetime.now().strftime("%Y-%m-%d")
+        except TypeError:
+             logger.warning(f"Invalid date type for tracked asset {symbol_upper}. Defaulting to today.")
+             added_date = datetime.now().strftime("%Y-%m-%d")
+
         params = (
-            symbol.upper(),
+            symbol_upper,
             details.get("name", ""),
             details.get("type", "stock"),
-            details.get("added_date", datetime.now().strftime("%Y-%m-%d"))
+            added_date
         )
         
         result = execute_query(insert_query, params, commit=True)
-        if result is not None:
-            logger.info(f"Migrated tracked asset {symbol}")
+        if result:
+            logger.info(f"Migrated tracked asset {symbol_upper}")
+            migrated_count += 1
+        else:
+            logger.error(f"Failed to migrate tracked asset {symbol_upper}")
     
-    logger.info(f"Migrated {len(assets)} tracked assets")
+    logger.info(f"Migration check complete. Migrated {migrated_count} new tracked assets.")
     return True
 
 def migrate_user_profile():
@@ -143,12 +217,13 @@ def migrate_user_profile():
     profile = load_json_file('data/user_profile.json')
     
     if profile:
-        # First, check if a profile already exists
+        # Check if a profile already exists
         check_query = "SELECT COUNT(*) as count FROM user_profile;"
         result = execute_query(check_query, fetchone=True)
         
         if result and result['count'] == 0:
             # Insert the profile if none exists
+            logger.info("No existing user profile found, inserting from JSON...")
             insert_query = """
             INSERT INTO user_profile (
                 risk_level, investment_horizon, initial_investment, last_updated
@@ -164,37 +239,27 @@ def migrate_user_profile():
                 profile.get("last_updated", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
             )
             
-            result = execute_query(insert_query, params, commit=True)
-            if result is not None:
-                logger.info("Migrated user profile")
+            insert_success = execute_query(insert_query, params, commit=True)
+            if insert_success:
+                logger.info("Migrated user profile from JSON.")
+            else:
+                logger.error("Failed to migrate user profile from JSON.")
+                return False
         else:
-            # Update existing profile
-            update_query = """
-            UPDATE user_profile SET
-                risk_level = %s,
-                investment_horizon = %s,
-                initial_investment = %s,
-                last_updated = %s
-            WHERE id = (SELECT id FROM user_profile ORDER BY id LIMIT 1);
-            """
-            
-            params = (
-                profile.get("risk_level", 5),
-                profile.get("investment_horizon", "medium"),
-                float(profile.get("initial_investment", 10000)),
-                profile.get("last_updated", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-            )
-            
-            result = execute_query(update_query, params, commit=True)
-            if result is not None:
-                logger.info("Updated existing user profile")
-    
+            logger.info("Existing user profile found in database. JSON data will not overwrite it.")
+            # Optionally, you could implement an update strategy here if desired
+            # update_query = """ UPDATE user_profile SET ... WHERE id = ... """
+            # execute_query(update_query, params, commit=True)
+            # logger.info("Updated existing user profile from JSON (if update logic implemented).")
+    else:
+        logger.info("No user profile JSON file found or it's empty.")
+
     return True
+
 
 def migrate_mutual_fund_data():
     """Migrate mutual fund data from JSON to database"""
     logger.info("Migrating mutual fund data to database...")
-    # Path to the mutual fund cache file
     cache_file = 'data/mutual_fund_cache.json'
     
     if not os.path.exists(cache_file):
@@ -202,46 +267,63 @@ def migrate_mutual_fund_data():
         return True
     
     try:
-        # Load the cache file
         cache_data = load_json_file(cache_file)
-        total_entries = 0
+        total_entries_migrated = 0
         
-        # Migrate each fund's data
         for fund_code, entries in cache_data.items():
+            fund_code_upper = fund_code.upper()
             for date_str, price in entries.items():
                 try:
+                    # Check if this specific entry already exists
+                    check_query = """
+                    SELECT id FROM mutual_fund_prices 
+                    WHERE fund_code = %s AND price_date = %s;
+                    """
+                    date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
+                    existing = execute_query(check_query, (fund_code_upper, date_obj), fetchone=True)
+
+                    if existing:
+                        logger.debug(f"Price for {fund_code_upper} on {date_str} already exists, skipping.")
+                        continue
+
                     # Format for insertion
                     insert_query = """
                     INSERT INTO mutual_fund_prices (
                         fund_code, price_date, price, added_at
                     ) VALUES (
                         %s, %s, %s, %s
-                    ) ON CONFLICT (fund_code, price_date) 
-                    DO UPDATE SET price = EXCLUDED.price, added_at = EXCLUDED.added_at;
+                    );
                     """
                     
-                    date = datetime.strptime(date_str, '%Y-%m-%d')
                     params = (
-                        fund_code.upper(),
-                        date,
+                        fund_code_upper,
+                        date_obj,
                         float(price),
-                        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        datetime.now() # Use current timestamp for added_at during migration
                     )
                     
                     result = execute_query(insert_query, params, commit=True)
-                    if result is not None:
-                        total_entries += 1
+                    if result:
+                        total_entries_migrated += 1
+                    else:
+                         logger.error(f"Failed migrating data for {fund_code_upper} on {date_str}")
+
+                except ValueError:
+                     logger.error(f"Invalid date format '{date_str}' for fund {fund_code_upper}, skipping entry.")
                 except Exception as e:
-                    logger.error(f"Error migrating data for {fund_code} on {date_str}: {e}")
+                    logger.error(f"Error migrating data for {fund_code_upper} on {date_str}: {e}")
         
-        logger.info(f"Migrated {total_entries} mutual fund price entries")
+        logger.info(f"Migration check complete. Migrated {total_entries_migrated} new mutual fund price entries.")
         
-        # Rename the original file as backup
-        backup_file = f"{cache_file}.bak"
-        if os.path.exists(cache_file):
-            os.rename(cache_file, backup_file)
-            logger.info(f"Original cache file renamed to {backup_file}")
-        
+        # Optional: Rename the original file as backup after successful migration check
+        # backup_file = f"{cache_file}.migrated_bak_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        # if os.path.exists(cache_file):
+        #     try:
+        #         os.rename(cache_file, backup_file)
+        #         logger.info(f"Original cache file renamed to {backup_file}")
+        #     except OSError as e:
+        #          logger.error(f"Could not rename cache file {cache_file}: {e}")
+
         return True
     except Exception as e:
         logger.error(f"Error during mutual fund data migration: {e}")
@@ -250,66 +332,73 @@ def migrate_mutual_fund_data():
 def migrate_json_to_db():
     """
     Migrate all data from JSON files to PostgreSQL database.
+    Only migrates data that doesn't already exist based on primary/unique keys.
     """
+    logger.info("Starting data migration check from JSON files to database...")
+    all_success = True
     try:
-        # Create data directory if it doesn't exist
         os.makedirs('data', exist_ok=True)
         
-        # Migrate each data type
-        if not migrate_transactions():
-            logger.error("Failed to migrate transactions")
-            return False
+        if not migrate_transactions(): all_success = False
+        if not migrate_portfolio(): all_success = False
+        if not migrate_tracked_assets(): all_success = False
+        if not migrate_user_profile(): all_success = False
+        if not migrate_mutual_fund_data(): all_success = False
         
-        if not migrate_portfolio():
-            logger.error("Failed to migrate portfolio")
-            return False
+        if all_success:
+            logger.info("Migration check from JSON to database completed.")
+        else:
+            logger.warning("Some migrations encountered issues (see logs above).")
+            
+        return all_success # Return overall success status
         
-        if not migrate_tracked_assets():
-            logger.error("Failed to migrate tracked assets")
-            return False
-        
-        if not migrate_user_profile():
-            logger.error("Failed to migrate user profile")
-            return False
-        
-        if not migrate_mutual_fund_data():
-            logger.error("Failed to migrate mutual fund data")
-            return False
-        
-        logger.info("Migration from JSON to database completed successfully.")
-        return True
     except Exception as e:
-        logger.error(f"Error during migration: {e}")
+        logger.error(f"Critical error during migration process: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def main():
     """Main function to initialize database and migrate data"""
-    logger.info("Initializing database connection...")
+    logger.info("--- Starting Database Initialization ---")
     
-    # Initialize connection pool
+    logger.info("Initializing database connection pool...")
     if not initialize_pool():
-        logger.error("Failed to initialize connection pool")
+        logger.critical("Failed to initialize connection pool. Aborting.")
         return False
     
-    logger.info("Initializing database schema...")
-    # Create database tables if they don't exist
-    if not initialize_database():
-        logger.error("Failed to initialize database schema")
+    logger.info("Initializing/Verifying database schema...")
+    if not initialize_database(): # This now creates the trained_models table too
+        logger.critical("Failed to initialize database schema. Aborting.")
         return False
     
-    logger.info("Migrating data from JSON files to database...")
-    # Migrate data from JSON files to database
+    logger.info("Checking for data migration from JSON files...")
     if not migrate_json_to_db():
-        logger.error("Failed to migrate data from JSON files to database")
-        return False
+        logger.warning("Data migration check from JSON encountered issues or failed.")
+        # Decide if this should be a fatal error or just a warning
+        # return False # Uncomment this line if migration failure should stop the process
     
-    logger.info("Database initialization completed successfully!")
+    # --- Optional: Add a dummy model entry for testing ---
+    # logger.info("Adding a dummy trained model entry for testing purposes...")
+    # dummy_metrics = {"accuracy": 0.85, "mse": 0.015, "r2_score": 0.75}
+    # save_model_metadata(
+    #     filename="DUMMY_LSTM_TEST.pkl",
+    #     symbol="TEST",
+    #     model_type="LSTM",
+    #     metrics=dummy_metrics,
+    #     notes="This is a test entry added during initialization."
+    # )
+    # ----------------------------------------------------
+
+    logger.info("--- Database Initialization Process Completed ---")
     return True
 
 if __name__ == "__main__":
     if main():
-        print("Database initialization completed successfully!")
+        print("\nDatabase initialization and migration check completed successfully!")
         sys.exit(0)
     else:
-        print("Database initialization failed!")
+        print("\nDatabase initialization or migration check failed! Check logs for details.")
         sys.exit(1)
+
+# --- END OF initialize_db.py modifications ---
