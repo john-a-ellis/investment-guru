@@ -18,7 +18,7 @@ from dash.dependencies import MATCH
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Custom modules - consolidated imports from our improved architecture
-
+from modules.help_system import get_help_content_html, get_available_topics
 from modules.market_analyzer import MarketAnalyzer
 from modules.news_analyzer import NewsAnalyzer
 from modules.recommendation_engine import RecommendationEngine
@@ -66,7 +66,10 @@ from components.ml_prediction_component import create_ml_prediction_component, r
 myTitle = 'AIRS - AI Investment Recommendation System'
 
 # Initialize the Dash app with a Bootstrap theme
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.CERULEAN])
+app = dash.Dash(__name__, 
+                external_stylesheets=[dbc.themes.CERULEAN],
+                suppress_callback_exceptions=True)
+
 server = app.server  # For production deployment
 
 app.title = myTitle
@@ -79,14 +82,16 @@ portfolio_tracker = PortfolioTracker()
 
 # App layout
 app.layout = dbc.Container([
+    
     dbc.Row([
         dbc.Col([
             html.H1("AI Investment Recommendation System", className="text-primary my-4"),
             html.P("Advanced investment strategies powered by AI market analysis")
-        ], width=8),
+        ], width=10),
+        dbc.Col(dbc.Button("Help", id="open-help-button", color="info", className="float-end bi bi-question-circle-fill"), width=1),
         dbc.Col([
             html.Img(src="assets/NearNorthClean.png", height="100px", className="float-end")
-        ], width=4)
+        ], width=1)
     ], className="mb-4"),
     dbc.Row([
             dbc.Col([
@@ -209,6 +214,9 @@ app.layout = dbc.Container([
             create_portfolio_visualizer_component()
         ], width=12)
     ], className="mb-4"),
+
+    html.Div(id="help-modal-container") # Placeholder for the modal
+
 ])
 
 # Callbacks
@@ -1496,6 +1504,92 @@ def save_target_settings_rebalance(n_clicks, slider_ids, slider_values): # Renam
         return dbc.Alert("Target allocation saved successfully.", color="success")
     else:
         return dbc.Alert("Error saving target allocation.", color="danger")
+
+@app.callback(
+    Output("help-offcanvas", "is_open"),
+    Input("open-help-button", "n_clicks"),
+    State("help-offcanvas", "is_open"),
+    prevent_initial_call=True,
+)
+def toggle_help_offcanvas(n_clicks, is_open):
+    # Only toggle the state if the button was actually clicked (n_clicks is not None and > 0)
+    if n_clicks:
+        print(f"Help button clicked (n_clicks={n_clicks}). Toggling state from {is_open} to {not is_open}") # Add debug print
+        return not is_open
+    # If the callback was triggered by something else, don't change the state.
+    # Returning the current state 'is_open' is safer than dash.no_update here.
+    print(f"toggle_help_offcanvas triggered but not by button click (n_clicks={n_clicks}). Returning current state: {is_open}") # Add debug print
+    return is_open
+
+# Add the component to the layout
+@app.callback(
+    Output("help-modal-container", "children"),
+    Input("open-help-button", "n_clicks") # Trigger on first load potentially
+)
+# def load_help_component(_):
+#      # Only load it once or when needed
+#      # This ensures get_available_topics runs when the component is added
+#      from components.help_display import create_help_display_component
+#      return create_help_display_component()
+
+@app.callback(
+    Output("help-content-area", "children"),
+    Output("help-content-title", "children"),
+    Output({"type": "help-topic-link", "index": ALL}, "active"),
+    Input({"type": "help-topic-link", "index": ALL}, "n_clicks"),
+    # Add State for the button to check its ID if needed, though ctx.triggered_id is better
+    # State("open-help-button", "id"), # Optional, ctx.triggered_id is preferred
+    prevent_initial_call=True,
+)
+def display_help_topic(n_clicks_list):
+    # --- START DEBUGGING/FIX ---
+    triggered_id = ctx.triggered_id
+    print(f"--- display_help_topic triggered ---")
+    print(f"Value of n_clicks_list: {n_clicks_list}")
+    print(f"Type of n_clicks_list: {type(n_clicks_list)}")
+    print(f"ctx.triggered_id: {triggered_id}")
+
+    # --- FIX: Explicitly ignore triggers from the main help button ---
+    if triggered_id == "open-help-button":
+        print("Triggered by open-help-button, preventing update for content display.")
+        raise PreventUpdate
+    # --- END FIX ---
+
+    # Determine if a link was clicked or if it's the initial load state
+    # A link click trigger will be a dictionary like {'type': 'help-topic-link', 'index': 'some_topic'}
+    is_link_trigger = isinstance(triggered_id, dict) and triggered_id.get("type") == "help-topic-link"
+
+    # --- Original logic continues, slightly adjusted ---
+    # Load default topic ONLY if no specific link was the trigger
+    if not is_link_trigger:
+        print("No specific link trigger detected, loading default topic.") # Debug print
+        topics = get_available_topics()
+        if topics:
+            first_topic_id = next(iter(topics))
+            html_content = get_help_content_html(first_topic_id)
+            title = topics.get(first_topic_id, "Help")
+            # Correctly generate active states based on all topics
+            active_states = [topic_id == first_topic_id for topic_id in topics.keys()]
+            return dcc.Markdown(html_content, dangerously_allow_html=True), title, active_states
+        else:
+            return "No help topics available.", "Error", []
+
+    # This part executes ONLY when a link *was* clicked
+    print(f"Link trigger detected: {triggered_id}") # Debug print
+    topic_id = triggered_id["index"] # Get index from the dictionary ID
+    html_content = get_help_content_html(topic_id)
+    topics = get_available_topics() # Get topics again to generate active states correctly
+    title = topics.get(topic_id, "Help Content")
+
+    # Update active state for the clicked link based on ALL available links
+    all_topic_ids = list(topics.keys())
+    # Ensure n_clicks_list is treated as a list for determining active states
+    # (Although this part should only run if triggered by a link, where n_clicks_list *is* a list)
+    active_states = [tid == topic_id for tid in all_topic_ids]
+
+    # Use dcc.Markdown to render the HTML safely
+    return dcc.Markdown(html_content, dangerously_allow_html=True), title, active_states
+
 
 
 register_ml_prediction_callbacks(app)

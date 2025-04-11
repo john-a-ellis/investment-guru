@@ -194,3 +194,9 @@
     background-color: #d3d3d3;
     color: #212529;
 }
+# Add some basic CSS to assets/styles.css or similar:
+/* Custom styles for the help offcanvas */
+.help-offcanvas-container { height: 100vh; }
+.help-nav-col { height: calc(100vh - 90px); overflow-y: auto; } /* Adjust height based on header */
+.help-content-col { height: calc(100vh - 90px); overflow-y: auto; }
+.help-nav-link.active { background-color: #e9ecef; border-left: 3px solid var(--bs-primary); }
