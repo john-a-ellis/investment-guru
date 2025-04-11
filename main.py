@@ -88,6 +88,27 @@ app.layout = dbc.Container([
             html.Img(src="assets/NearNorthClean.png", height="100px", className="float-end")
         ], width=4)
     ], className="mb-4"),
+    dbc.Row([
+            dbc.Col([
+                create_risk_visualization_component()
+            ], width=12)
+
+        ], className="mb-4"),
+
+    # Portfolio Analysis Component
+    dbc.Row([
+            dbc.Col([
+                create_portfolio_analysis_component()
+            ], width=12)
+        ], className="mb-4"),
+
+        
+    # Rebalancing Component
+    dbc.Row([
+            dbc.Col([
+                create_rebalancing_component()
+            ], width=12)
+        ], className="mb-4"),
 
     # Add Asset Tracker component
     dbc.Row([
@@ -156,24 +177,6 @@ app.layout = dbc.Container([
         ], width=12)
     ], className="mb-4"),
     
-    dbc.Row([
-        dbc.Col([
-            create_portfolio_analysis_component()
-        ], width=12)
-    ], className="mb-4"),
-
-    dbc.Row([
-        dbc.Col([
-            create_risk_visualization_component()
-        ], width=12)
-
-    ], className="mb-4"),
-    dbc.Row([
-        dbc.Col([
-            create_rebalancing_component()
-        ], width=12)
-    ], className="mb-4"),
-
     dbc.Row([
         dbc.Col([
             dbc.Card([

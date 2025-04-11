@@ -94,6 +94,62 @@ class ARIMAModel(PricePredictionModel):
         super().__init__(model_name="arima", prediction_days=prediction_days, symbol=symbol)
         self.order = order
 
+    # --- Add or ensure load_model exists and uses self.symbol ---
+    def load_model(self):
+        """Load ARIMA model from disk."""
+        try:
+            if not self.symbol:
+                logger.error(f"Symbol not provided for {self.model_name} model during load")
+                return False
+            # --- FIX: Ensure filename includes symbol ---
+            model_path = os.path.join(self.model_dir, f"{self.model_name}_{self.symbol}.pkl")
+            logger.debug(f"Looking for ARIMA model at: {os.path.abspath(model_path)}")
+
+            if os.path.exists(model_path):
+                logger.info(f"Found ARIMA model file for {self.symbol}: {model_path}")
+                with open(model_path, 'rb') as f:
+                    # ARIMA model might be saved directly or as part of a dict/tuple
+                    loaded_content = pickle.load(f)
+                    # Adjust based on how you save it in train()
+                    if isinstance(loaded_content, dict) and 'model' in loaded_content:
+                         self.model = loaded_content['model']
+                    else: # Assume direct model object save
+                         self.model = loaded_content
+
+                self.is_trained = True
+                logger.info(f"Successfully loaded ARIMA model for {self.symbol}")
+                return True
+            else:
+                logger.warning(f"No {self.model_name} model file found for {self.symbol} at {model_path}")
+                return False
+        except Exception as e:
+            logger.error(f"Error loading {self.model_name} model for {self.symbol}: {e}")
+            logger.error(traceback.format_exc())
+            return False
+
+    # --- Add or ensure save_model exists and uses self.symbol ---
+    def save_model(self):
+        """Save ARIMA model to disk."""
+        if not self.is_trained:
+            logger.warning(f"ARIMA model for {self.symbol} not trained, cannot save")
+            return False
+        if not self.symbol:
+            logger.error(f"Symbol not provided for {self.model_name} model during save")
+            return False
+
+        try:
+            # --- FIX: Ensure filename includes symbol ---
+            model_path = os.path.join(self.model_dir, f"{self.model_name}_{self.symbol}.pkl")
+            logger.info(f"Saving ARIMA model for {self.symbol} to {model_path}")
+            with open(model_path, 'wb') as f:
+                # Save the fitted model object
+                pickle.dump(self.model, f)
+            logger.info(f"ARIMA model saved successfully for {self.symbol}")
+            return True
+        except Exception as e:
+            logger.error(f"Error saving ARIMA model for {self.symbol}: {e}")
+            return False
+
     def train(self, historical_data):
         """
         Train ARIMA model on historical data.
@@ -281,11 +337,14 @@ class LSTMModel(PricePredictionModel):
     Price prediction model using LSTM (Long Short-Term Memory) neural networks.
     """
     def __init__(self, prediction_days=30, lookback=60, units=50, epochs=50, batch_size=32, symbol=None):
+        # --- FIX: Ensure super init includes symbol ---
         super().__init__(model_name="lstm", prediction_days=prediction_days, symbol=symbol)
         self.lookback = lookback
         self.units = units
         self.epochs = epochs
         self.batch_size = batch_size
+        # --- FIX: Store scaler with the instance ---
+        self.scaler = MinMaxScaler(feature_range=(0, 1))
     
     def _create_sequences(self, data):
         """
@@ -304,117 +363,123 @@ class LSTMModel(PricePredictionModel):
         
         return np.array(X), np.array(y)
     
+    def preprocess_data(self, historical_data):
+        """Preprocess data using the instance's scaler."""
+        if 'close' not in historical_data.columns:
+            raise ValueError("Data must contain 'close' column")
+        close_prices = historical_data['close'].values.reshape(-1, 1)
+        # Use fit_transform during training, transform during prediction/evaluation
+        # For simplicity here, we'll fit_transform, but ideally, fit only on training data.
+        scaled_data = self.scaler.fit_transform(close_prices)
+        return scaled_data
+
     def train(self, historical_data):
         """
         Train LSTM model on historical data.
-        
-        Args:
-            historical_data (DataFrame): Historical price data with 'Close' column
-        
-        Returns:
-            bool: Success status
         """
         try:
-            # Import TensorFlow inside this method for better isolation and memory management
+            # Import TensorFlow inside this method
             import tensorflow as tf
             from tensorflow.keras.models import Sequential
             from tensorflow.keras.layers import LSTM, Dense, Dropout
-            
-            # Preprocess data
-            scaled_data = self.preprocess_data(historical_data)
-            
+
+            if not self.symbol:
+                 logger.error("Cannot train LSTM model without a symbol.")
+                 return False
+
+            logger.info(f"Starting LSTM training for {self.symbol}...")
+
+            # Preprocess data using self.scaler
+            scaled_data = self.preprocess_data(historical_data) # This now fits the scaler
+
             # Create sequences
             X, y = self._create_sequences(scaled_data)
-            
+
             # Reshape for LSTM [samples, time steps, features]
             X = np.reshape(X, (X.shape[0], X.shape[1], 1))
-            
+
             # Build LSTM model
             self.model = Sequential()
-            
-            # First LSTM layer with return sequences
             self.model.add(LSTM(units=self.units, return_sequences=True, input_shape=(X.shape[1], 1)))
             self.model.add(Dropout(0.2))
-            
-            # Second LSTM layer
             self.model.add(LSTM(units=self.units))
             self.model.add(Dropout(0.2))
-            
-            # Output layer
             self.model.add(Dense(units=1))
-            
-            # Compile model
             self.model.compile(optimizer='adam', loss='mean_squared_error')
-            
+
             # Train model
+            logger.info(f"Fitting LSTM model for {self.symbol}...")
             self.model.fit(X, y, epochs=self.epochs, batch_size=self.batch_size, verbose=0)
-            
+
             self.is_trained = True
-            logger.info("LSTM model trained successfully")
+            logger.info(f"LSTM model trained successfully for {self.symbol}")
+
+            # --- Save the trained model and scaler ---
+            self.save_model() # Call save method
+
             return True
-        
+
+        except ImportError:
+             logger.error("TensorFlow/Keras not installed. Cannot train LSTM model.")
+             return False
         except Exception as e:
-            logger.error(f"Error training LSTM model: {e}")
+            logger.error(f"Error training LSTM model for {self.symbol}: {e}")
+            logger.error(traceback.format_exc())
             return False
-    
+
     def predict(self, historical_data, days=None):
         """
         Make predictions using LSTM model.
-        
-        Args:
-            historical_data (DataFrame): Historical price data
-            days (int): Number of days to predict
-        
-        Returns:
-            DataFrame: Predicted prices
         """
-        if not self.is_trained and not self.load_model():
-            logger.error("LSTM model not trained and could not be loaded")
+        if not self.is_trained and not self.load_model(): # load_model should load model AND scaler
+            logger.error(f"LSTM model for {self.symbol} not trained and could not be loaded")
             return pd.DataFrame()
-        
+
         try:
             # Use TensorFlow inside the method
             import tensorflow as tf
-            
-            # Use provided days or default
+
             pred_days = days if days is not None else self.prediction_days
-            
-            # Preprocess data
-            scaled_data = self.preprocess_data(historical_data)
-            
-            # Get the last sequence
-            last_sequence = scaled_data[-self.lookback:].reshape(1, self.lookback, 1)
-            
-            # Make predictions one by one
-            predictions = []
+
+            # --- FIX: Use only transform with the loaded scaler ---
+            # We need the full history to scale correctly relative to training data
+            # This assumes the scaler was fit during training/loading
+            full_history_close = historical_data['close'].values.reshape(-1, 1)
+            # Avoid re-fitting the scaler here, just transform
+            # scaled_full_history = self.scaler.transform(full_history_close) # Ideal, but requires scaler fitted previously
+            # --- Temporary workaround: fit_transform on the history provided ---
+            # This isn't perfect as scaling might differ slightly from training
+            scaled_full_history = self.scaler.fit_transform(full_history_close)
+            # --- End workaround ---
+
+
+            # Get the last sequence from the scaled full history
+            last_sequence = scaled_full_history[-self.lookback:].reshape(1, self.lookback, 1)
+
+            predictions_scaled = []
             current_sequence = last_sequence.copy()
-            
+
             for _ in range(pred_days):
-                # Predict next value
-                next_pred = self.model.predict(current_sequence)[0][0]
-                predictions.append(next_pred)
-                
-                # Update sequence for next prediction (roll the window)
-                current_sequence = np.append(current_sequence[:, 1:, :], 
-                                           [[next_pred]], 
-                                           axis=1)
-            
-            # Inverse transform predictions
-            predictions = self.scaler.inverse_transform(np.array(predictions).reshape(-1, 1))
-            
-            # Get the last date in the historical data
+                next_pred_scaled = self.model.predict(current_sequence, verbose=0)[0][0]
+                predictions_scaled.append(next_pred_scaled)
+                # Update sequence
+                current_sequence = np.append(current_sequence[:, 1:, :], [[[next_pred_scaled]]], axis=1)
+
+            # Inverse transform predictions using the *same* scaler instance
+            predictions = self.scaler.inverse_transform(np.array(predictions_scaled).reshape(-1, 1))
+
             last_date = historical_data.index[-1]
-            
-            # Generate future dates
             future_dates = pd.date_range(start=last_date + timedelta(days=1), periods=pred_days)
-            
-            # Create a DataFrame with predictions
             result = pd.DataFrame(predictions, index=future_dates, columns=['Close'])
-            
+            logger.info(f"LSTM prediction successful for {self.symbol}")
             return result
-        
+
+        except ImportError:
+             logger.error("TensorFlow/Keras not installed. Cannot predict with LSTM model.")
+             return pd.DataFrame()
         except Exception as e:
-            logger.error(f"Error making predictions with LSTM model: {e}")
+            logger.error(f"Error making predictions with LSTM model for {self.symbol}: {e}")
+            logger.error(traceback.format_exc())
             return pd.DataFrame()
     
     def evaluate(self, test_data):
@@ -468,63 +533,76 @@ class LSTMModel(PricePredictionModel):
             return {}
     
     def save_model(self):
-        """
-        Save LSTM model to disk.
-        
-        Returns:
-            bool: Success status
-        """
+        """Save LSTM model and scaler to disk."""
         if not self.is_trained:
-            logger.warning("LSTM model not trained, cannot save")
+            logger.warning(f"LSTM model for {self.symbol} not trained, cannot save")
             return False
-        
-        try:
-            # Save model architecture and weights separately
-            model_path = os.path.join(self.model_dir, f"{self.model_name}")
-            self.model.save(model_path)
-            
-            # Save scaler
-            scaler_path = os.path.join(self.model_dir, f"{self.model_name}_scaler.pkl")
-            with open(scaler_path, 'wb') as f:
-                pickle.dump(self.scaler, f)
-                
-            logger.info(f"LSTM model saved to {model_path}")
-            return True
-        
-        except Exception as e:
-            logger.error(f"Error saving LSTM model: {e}")
+        if not self.symbol:
+            logger.error(f"Symbol not provided for LSTM model during save")
             return False
-    
-    def load_model(self):
-        """
-        Load LSTM model from disk.
-        
-        Returns:
-            bool: Success status
-        """
+
         try:
             import tensorflow as tf
-            
-            # Load model
-            model_path = os.path.join(self.model_dir, f"{self.model_name}")
-            if not os.path.exists(model_path):
-                logger.warning(f"LSTM model file {model_path} not found")
-                return False
-            
-            self.model = tf.keras.models.load_model(model_path)
-            
-            # Load scaler
-            scaler_path = os.path.join(self.model_dir, f"{self.model_name}_scaler.pkl")
-            if os.path.exists(scaler_path):
-                with open(scaler_path, 'rb') as f:
-                    self.scaler = pickle.load(f)
-            
-            self.is_trained = True
-            logger.info(f"LSTM model loaded from {model_path}")
+            # --- FIX: Include symbol in filename ---
+            model_filename = f"{self.model_name}_{self.symbol}.h5" # Use .h5 for Keras models
+            model_path = os.path.join(self.model_dir, model_filename)
+            scaler_filename = f"{self.model_name}_{self.symbol}_scaler.pkl"
+            scaler_path = os.path.join(self.model_dir, scaler_filename)
+
+            logger.info(f"Saving LSTM model to {model_path}")
+            self.model.save(model_path) # Save Keras model
+
+            logger.info(f"Saving LSTM scaler to {scaler_path}")
+            with open(scaler_path, 'wb') as f:
+                pickle.dump(self.scaler, f) # Save the scaler
+
+            logger.info(f"LSTM model and scaler saved successfully for {self.symbol}")
             return True
-        
+        except ImportError:
+             logger.error("TensorFlow/Keras not installed. Cannot save LSTM model.")
+             return False
         except Exception as e:
-            logger.error(f"Error loading LSTM model: {e}")
+            logger.error(f"Error saving LSTM model for {self.symbol}: {e}")
+            return False
+
+    # --- FIX: Modify load_model to include symbol and load scaler ---
+    def load_model(self):
+        """Load LSTM model and scaler from disk."""
+        try:
+            import tensorflow as tf
+            if not self.symbol:
+                logger.error(f"Symbol not provided for LSTM model during load")
+                return False
+
+            # --- FIX: Include symbol in filename ---
+            model_filename = f"{self.model_name}_{self.symbol}.h5" # Use .h5
+            model_path = os.path.join(self.model_dir, model_filename)
+            scaler_filename = f"{self.model_name}_{self.symbol}_scaler.pkl"
+            scaler_path = os.path.join(self.model_dir, scaler_filename)
+
+            logger.debug(f"Looking for LSTM model at: {os.path.abspath(model_path)}")
+            logger.debug(f"Looking for LSTM scaler at: {os.path.abspath(scaler_path)}")
+
+            if not os.path.exists(model_path) or not os.path.exists(scaler_path):
+                logger.warning(f"LSTM model or scaler file not found for {self.symbol}")
+                return False
+
+            logger.info(f"Loading LSTM model from {model_path}")
+            self.model = tf.keras.models.load_model(model_path)
+
+            logger.info(f"Loading LSTM scaler from {scaler_path}")
+            with open(scaler_path, 'rb') as f:
+                self.scaler = pickle.load(f) # Load the scaler
+
+            self.is_trained = True
+            logger.info(f"LSTM model and scaler loaded successfully for {self.symbol}")
+            return True
+        except ImportError:
+             logger.error("TensorFlow/Keras not installed. Cannot load LSTM model.")
+             return False
+        except Exception as e:
+            logger.error(f"Error loading LSTM model for {self.symbol}: {e}")
+            logger.error(traceback.format_exc())
             return False
 
 
@@ -842,52 +920,94 @@ def train_price_prediction_models(symbol, lookback_period="1y"):
         # Return None and error metrics
         return None, {"error": str(e)}, None, None
 
-def get_price_predictions(symbol, days=30):
-    """Get price predictions, using Prophet model with fallbacks."""
-    logger.info(f"Getting price predictions for {symbol} for {days} days.")
+def get_price_predictions(symbol, days=30, try_ensemble_fallback=True): # Added try_ensemble_fallback flag
+    """
+    Get price predictions, trying Prophet first, then optionally Ensemble as fallback.
+    """
+    logger.info(f"Getting price predictions for {symbol} for {days} days. Ensemble Fallback: {try_ensemble_fallback}")
     if not symbol: return create_simple_fallback("UNKNOWN", days)
+
+    prophet_predictions_df = pd.DataFrame()
+    ensemble_predictions_df = pd.DataFrame()
+    used_model_type = 'unknown'
 
     try:
         historical_data = data_provider.get_historical_price(symbol, period="1y")
         if historical_data.empty:
             logger.error(f"No historical data for {symbol} in get_price_predictions.")
-            return create_fallback_prediction(symbol, days)
+            return create_fallback_prediction(symbol, days) # Use standard fallback
 
-        # --- Use ProphetModel class instance ---
-        prophet_predictor = ProphetModel(symbol=symbol, prediction_days=days)
+        # --- 1. Try Prophet Model ---
+        try:
+            prophet_predictor = ProphetModel(symbol=symbol, prediction_days=days)
+            if prophet_predictor.load_model():
+                logger.info(f"Loaded existing Prophet model for {symbol}.")
+                prophet_predictions_df = prophet_predictor.predict(historical_data, days=days)
+                if not prophet_predictions_df.empty:
+                    used_model_type = 'prophet'
+                    logger.info(f"Prophet prediction successful for {symbol}.")
+                else:
+                    logger.warning(f"Prophet prediction returned empty DataFrame for {symbol}.")
+            else:
+                logger.warning(f"No pre-trained Prophet model found for {symbol}.")
+        except Exception as prophet_err:
+            logger.error(f"Error during Prophet prediction for {symbol}: {prophet_err}")
+            # Continue to ensemble fallback if enabled
+
+        # --- 2. Try Ensemble Model (if Prophet failed and fallback enabled) ---
+        if prophet_predictions_df.empty and try_ensemble_fallback:
+            logger.warning(f"Prophet failed for {symbol}. Attempting Ensemble fallback.")
+            try:
+                # Instantiate EnsembleModel - it will try to load constituent models
+                # Ensure constituent models (ARIMA, LSTM) are defined/imported correctly
+                # and have load_model methods that use the symbol.
+                ensemble_predictor = EnsembleModel(symbol=symbol, prediction_days=days)
+                # The predict method handles loading constituent models internally
+                ensemble_predictions_df = ensemble_predictor.predict(historical_data, days=days)
+
+                if not ensemble_predictions_df.empty:
+                    used_model_type = 'ensemble'
+                    logger.info(f"Ensemble prediction successful for {symbol}.")
+                else:
+                    logger.warning(f"Ensemble prediction also returned empty DataFrame for {symbol}.")
+            except Exception as ensemble_err:
+                 logger.error(f"Error during Ensemble prediction for {symbol}: {ensemble_err}")
+                 # Continue to standard fallback
+
+        # --- 3. Select Prediction DataFrame ---
         predictions_df = pd.DataFrame()
+        if not prophet_predictions_df.empty:
+            predictions_df = prophet_predictions_df
+        elif not ensemble_predictions_df.empty:
+             predictions_df = ensemble_predictions_df
+        # Else: predictions_df remains empty, will trigger fallback
 
-        if prophet_predictor.load_model():
-            logger.info(f"Loaded existing Prophet model for {symbol}.")
-            predictions_df = prophet_predictor.predict(historical_data, days=days)
-        else:
-            logger.warning(f"No pre-trained Prophet model found for {symbol}. Using fallback.")
-            # Optionally trigger training here if desired, but for prediction, use fallback
-            # self.train_models_for_symbol(symbol) # This would block or run async
-            return create_fallback_prediction(symbol, days)
-
-        # --- Process predictions ---
+        # --- 4. Process predictions or use fallback ---
         if not predictions_df.empty:
             result = {
-                'symbol': symbol, 'model': 'prophet',
+                'symbol': symbol,
+                'model': used_model_type, # Use the determined model type
                 'dates': predictions_df.index.strftime('%Y-%m-%d').tolist(),
-                'values': predictions_df['Close'].tolist()
+                'values': predictions_df['Close'].tolist() # Assumes 'Close' column exists
             }
+            # Add confidence intervals if available (Prophet provides them, Ensemble might not directly)
             if 'Upper' in predictions_df.columns and 'Lower' in predictions_df.columns:
                 result['confidence'] = {'upper': predictions_df['Upper'].tolist(), 'lower': predictions_df['Lower'].tolist()}
-            else: # Add simple confidence if missing
+            else: # Add simple confidence if missing (e.g., for Ensemble)
                 result['confidence'] = {'upper': [v*1.05 for v in result['values']], 'lower': [v*0.95 for v in result['values']]}
 
             cleaned_result = handle_nan_values(result)
+            # Return cleaned result or simple fallback if cleaning fails
             return cleaned_result if cleaned_result else create_simple_fallback(symbol, days)
         else:
-            logger.warning(f"Prophet prediction returned empty DataFrame for {symbol}. Using fallback.")
-            return create_fallback_prediction(symbol, days)
+            logger.warning(f"Both Prophet and Ensemble failed for {symbol}. Using standard fallback.")
+            return create_fallback_prediction(symbol, days) # Use standard fallback first
 
     except Exception as e:
-        logger.error(f"Error in get_price_predictions for {symbol}: {e}")
+        logger.error(f"Critical Error in get_price_predictions for {symbol}: {e}")
         logger.error(traceback.format_exc())
-        return create_simple_fallback(symbol, days) # Simplest fallback on error
+        return create_simple_fallback(symbol, days) # Simplest fallback on major error
+
 
 def check_prophet_installed():
     """Check if Prophet is installed."""
