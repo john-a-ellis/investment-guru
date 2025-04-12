@@ -19,6 +19,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Custom modules - consolidated imports from our improved architecture
 from modules.help_system import get_help_content_html, get_available_topics
+from components.help_display import create_help_display_component
 from modules.market_analyzer import MarketAnalyzer
 from modules.news_analyzer import NewsAnalyzer
 from modules.recommendation_engine import RecommendationEngine
@@ -61,6 +62,8 @@ from components.rebalancing_component import (
     create_rebalance_recommendations, create_rebalance_summary
 )
 from components.ml_prediction_component import create_ml_prediction_component, register_ml_prediction_callbacks
+    # Import the help component creation function
+    # Import the help component creation function
 
 
 myTitle = 'AIRS - AI Investment Recommendation System'
@@ -1512,84 +1515,70 @@ def save_target_settings_rebalance(n_clicks, slider_ids, slider_values): # Renam
     prevent_initial_call=True,
 )
 def toggle_help_offcanvas(n_clicks, is_open):
-    # Only toggle the state if the button was actually clicked (n_clicks is not None and > 0)
+    """
+    Toggle the visibility of the help offcanvas when the help button is clicked
+    """
     if n_clicks:
-        print(f"Help button clicked (n_clicks={n_clicks}). Toggling state from {is_open} to {not is_open}") # Add debug print
+        print(f"Help button clicked (n_clicks={n_clicks}). Toggling state from {is_open} to {not is_open}")
         return not is_open
-    # If the callback was triggered by something else, don't change the state.
-    # Returning the current state 'is_open' is safer than dash.no_update here.
-    print(f"toggle_help_offcanvas triggered but not by button click (n_clicks={n_clicks}). Returning current state: {is_open}") # Add debug print
     return is_open
 
-# Add the component to the layout
 @app.callback(
     Output("help-modal-container", "children"),
-    Input("open-help-button", "n_clicks") # Trigger on first load potentially
+    Input("open-help-button", "n_clicks"),
+    prevent_initial_call=False  # Run on initial load to ensure component is ready
 )
-# def load_help_component(_):
-#      # Only load it once or when needed
-#      # This ensures get_available_topics runs when the component is added
-#      from components.help_display import create_help_display_component
-#      return create_help_display_component()
+def load_help_component(n_clicks):
+    """
+    Load the help system component on button click or initial load
+    """
+
+    # Return the created component
+    return create_help_display_component()
 
 @app.callback(
-    Output("help-content-area", "children"),
-    Output("help-content-title", "children"),
-    Output({"type": "help-topic-link", "index": ALL}, "active"),
-    Input({"type": "help-topic-link", "index": ALL}, "n_clicks"),
-    # Add State for the button to check its ID if needed, though ctx.triggered_id is better
-    # State("open-help-button", "id"), # Optional, ctx.triggered_id is preferred
+    [Output("help-content-area", "children"),
+     Output("help-content-title", "children"),
+     Output({"type": "help-topic-link", "index": ALL}, "active")],
+    [Input({"type": "help-topic-link", "index": ALL}, "n_clicks"),
+     Input("open-help-button", "n_clicks")],  # Add this to handle initial state
     prevent_initial_call=True,
 )
-def display_help_topic(n_clicks_list):
-    # --- START DEBUGGING/FIX ---
-    triggered_id = ctx.triggered_id
-    print(f"--- display_help_topic triggered ---")
-    print(f"Value of n_clicks_list: {n_clicks_list}")
-    print(f"Type of n_clicks_list: {type(n_clicks_list)}")
-    print(f"ctx.triggered_id: {triggered_id}")
-
-    # --- FIX: Explicitly ignore triggers from the main help button ---
-    if triggered_id == "open-help-button":
-        print("Triggered by open-help-button, preventing update for content display.")
-        raise PreventUpdate
-    # --- END FIX ---
-
-    # Determine if a link was clicked or if it's the initial load state
-    # A link click trigger will be a dictionary like {'type': 'help-topic-link', 'index': 'some_topic'}
-    is_link_trigger = isinstance(triggered_id, dict) and triggered_id.get("type") == "help-topic-link"
-
-    # --- Original logic continues, slightly adjusted ---
-    # Load default topic ONLY if no specific link was the trigger
-    if not is_link_trigger:
-        print("No specific link trigger detected, loading default topic.") # Debug print
+def display_help_topic(topic_clicks, help_button_clicks):
+    """
+    Display the selected help topic content or default topic on initial load
+    """
+    ctx_triggered = ctx.triggered_id
+    
+    # If triggered by the help button or initial load, show default content
+    if ctx_triggered == "open-help-button" or ctx_triggered is None:
+        # Get available topics
         topics = get_available_topics()
         if topics:
-            first_topic_id = next(iter(topics))
-            html_content = get_help_content_html(first_topic_id)
-            title = topics.get(first_topic_id, "Help")
-            # Correctly generate active states based on all topics
-            active_states = [topic_id == first_topic_id for topic_id in topics.keys()]
+            # Show introduction by default
+            default_topic = "introduction" if "introduction" in topics else next(iter(topics))
+            html_content = get_help_content_html(default_topic)
+            title = topics.get(default_topic, "Help")
+            # Set the introduction or first topic as active
+            active_states = [topic_id == default_topic for topic_id in topics.keys()]
             return dcc.Markdown(html_content, dangerously_allow_html=True), title, active_states
         else:
-            return "No help topics available.", "Error", []
-
-    # This part executes ONLY when a link *was* clicked
-    print(f"Link trigger detected: {triggered_id}") # Debug print
-    topic_id = triggered_id["index"] # Get index from the dictionary ID
-    html_content = get_help_content_html(topic_id)
-    topics = get_available_topics() # Get topics again to generate active states correctly
-    title = topics.get(topic_id, "Help Content")
-
-    # Update active state for the clicked link based on ALL available links
-    all_topic_ids = list(topics.keys())
-    # Ensure n_clicks_list is treated as a list for determining active states
-    # (Although this part should only run if triggered by a link, where n_clicks_list *is* a list)
-    active_states = [tid == topic_id for tid in all_topic_ids]
-
-    # Use dcc.Markdown to render the HTML safely
-    return dcc.Markdown(html_content, dangerously_allow_html=True), title, active_states
-
+            return "No help topics available.", "Help", []
+    
+    # Otherwise, topic link was clicked
+    if isinstance(ctx_triggered, dict) and ctx_triggered.get("type") == "help-topic-link":
+        topic_id = ctx_triggered["index"]
+        html_content = get_help_content_html(topic_id)
+        topics = get_available_topics()
+        title = topics.get(topic_id, "Help Content")
+        
+        # Update active state for the clicked link
+        active_states = [tid == topic_id for tid in topics.keys()]
+        
+        return dcc.Markdown(html_content, dangerously_allow_html=True), title, active_states
+    
+    # Default return if none of the above conditions are met
+    raise PreventUpdate
 
 
 register_ml_prediction_callbacks(app)
