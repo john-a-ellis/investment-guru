@@ -13,6 +13,13 @@ import traceback
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from modules.data_provider import data_provider
+try:
+    from prophet import Prophet
+    PROPHET_AVAILABLE = True
+except ImportError:
+    PROPHET_AVAILABLE = False
+
+from statsmodels.tsa.arima.model import ARIMA as ARIMA_Statsmodels
 
 # Configure logging
 logging.basicConfig(
@@ -109,7 +116,26 @@ class PricePredictionModel:
 
     # --- Abstract methods (or provide default implementations) ---
     def train(self, historical_data):
-        raise NotImplementedError("Train method must be implemented by subclasses.")
+        """Train Prophet model."""
+        try:
+            # Check if Prophet is available
+            if not PROPHET_AVAILABLE:
+                raise ImportError("Prophet package not installed. Please install with: pip install prophet")
+                
+            data = historical_data.sort_index().copy()
+            if 'close' not in data.columns: raise ValueError("Data must contain 'close' column")
+
+            prophet_data = pd.DataFrame({'ds': data.index, 'y': data['close']})
+            # Instantiate Prophet model here
+            self.model = Prophet(daily_seasonality=True, yearly_seasonality=True, weekly_seasonality=True, changepoint_prior_scale=0.05)
+            self.model.fit(prophet_data)
+            self.is_trained = True
+            logger.info(f"Prophet model trained successfully for {self.symbol}")
+            return True
+        except Exception as e:
+            logger.error(f"Error training Prophet model for {self.symbol}: {e}")
+            logger.error(traceback.format_exc())
+            return False
 
     def predict(self, historical_data, days=None):
         raise NotImplementedError("Predict method must be implemented by subclasses.")
@@ -891,12 +917,19 @@ def get_price_predictions(symbol, days=30, try_ensemble_fallback=True):
 
 def check_prophet_installed():
     """Check if Prophet is installed."""
-    try:
-        import prophet
+    global PROPHET_AVAILABLE
+    if PROPHET_AVAILABLE:
         return True
-    except ImportError:
-        logger.error("Prophet is not installed. Required for model training. Run: pip install prophet")
-        return False
+    else:
+        try:
+            # Try one more time to import
+            from prophet import Prophet
+            PROPHET_AVAILABLE = True
+            return True
+        except ImportError:
+            logger.error("Prophet is not installed. Required for model training. Run: pip install prophet")
+            return False
+
 
 def create_simple_fallback(symbol, days=30):
     """Create a very simple fallback prediction."""

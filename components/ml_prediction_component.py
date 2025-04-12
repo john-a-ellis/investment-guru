@@ -93,8 +93,8 @@ def create_trained_models_table(models_df):
 
 def create_ml_prediction_component():
     """
-    Creates the merged ML Prediction component layout including all original tabs
-    and the new trained model overview.
+    Creates the ML Prediction component with a simplified layout that does not rely
+    on the problematic ml-train-model-type component.
     """
     return dbc.Card([
         dbc.CardHeader([
@@ -103,63 +103,88 @@ def create_ml_prediction_component():
         ]),
         dbc.CardBody([
             dbc.Tabs(id="ml-prediction-tabs", active_tab="price-prediction-tab", children=[
-                # ... (Tabs 1, 2, 3 remain the same) ...
-                 dbc.Tab(label="Price Prediction", tab_id="price-prediction-tab", children=[
-                    # ... (Content of Price Prediction tab) ...
-                 ]),
-                 dbc.Tab(label="Technical Analysis", tab_id="technical-analysis-tab", children=[
-                     # ... (Content of Technical Analysis tab) ...
-                 ]),
-                 dbc.Tab(label="Portfolio Insights", tab_id="portfolio-insights-tab", children=[
-                     # ... (Content of Portfolio Insights tab) ...
-                 ]),
+                # Tab 1: Price Prediction
+                dbc.Tab(label="Price Prediction", tab_id="price-prediction-tab", children=[
+                    dbc.Row([
+                        dbc.Col([
+                            dbc.Label("Select Asset"),
+                            dbc.InputGroup([
+                                dbc.Select(id="ml-asset-selector", placeholder="Select an asset to analyze"),
+                                dbc.Button("Analyze", id="ml-analyze-button", color="primary")
+                            ]),
+                        ], width=6),
+                        dbc.Col([
+                            dbc.Label("Prediction Horizon"),
+                            dbc.RadioItems(
+                                id="ml-horizon-selector",
+                                options=[{"label": "30 Days", "value": 30}, {"label": "60 Days", "value": 60}, {"label": "90 Days", "value": 90}],
+                                value=30, inline=True
+                            )
+                        ], width=6)
+                    ], className="mb-3"),
+                    dbc.Spinner([dcc.Graph(id="ml-prediction-chart")], color="primary", type="border", fullscreen=False),
+                    html.Div(id="ml-prediction-details", className="mt-3"),
+                    dcc.Store(id="ml-prediction-data")
+                ]),
 
-                # --- Modified Tab 4: Model Training ---
+                # Tab 2: Technical Analysis 
+                dbc.Tab(label="Technical Analysis", tab_id="technical-analysis-tab", children=[
+                    dbc.Row([dbc.Col([dbc.Spinner([html.Div(id="trend-analysis-content")], color="primary", type="border")], width=12)])
+                ]),
+
+                # Tab 3: Portfolio Insights
+                dbc.Tab(label="Portfolio Insights", tab_id="portfolio-insights-tab", children=[
+                    dbc.Row([dbc.Col([
+                        dbc.Button("Generate Portfolio Insights", id="ml-portfolio-insights-button", color="success", className="mb-3"),
+                        dbc.Spinner([html.Div(id="ml-portfolio-insights")], color="primary", type="border")
+                    ], width=12)])
+                ]),
+
+                # Tab 4: Model Training (Simplified)
                 dbc.Tab(label="Model Training", tab_id="model-training-tab", children=[
-                    # Trained Model Overview (remains the same)
+                    # Trained Model Overview
                     html.Div([
                         html.H5("Trained Model Overview"),
-                        dbc.Button("Refresh Model List", id="refresh-trained-models", color="secondary", size="sm", className="mb-3", n_clicks=0),
-                        html.Div(id="trained-models-table-container", children=[dbc.Spinner(html.Div(id="trained-models-table"))]),
+                        dbc.Button(
+                            "Refresh Model List", id="refresh-trained-models",
+                            color="secondary", size="sm", className="mb-3", n_clicks=0
+                        ),
+                        html.Div(id="trained-models-table-container", children=[
+                            dbc.Spinner(html.Div(id="trained-models-table"))
+                        ]),
                     ]),
                     html.Hr(),
-                    # Training Controls & Status (Modified)
+                    # Training Controls & Status (Simplified without model type selection)
                     html.Div([
                         html.H5("Train New Model / View Status"),
                         dbc.Row([
                             dbc.Col([
                                 dbc.Label("Select Asset to Train"),
-                                dbc.Select(id="ml-train-asset-selector", placeholder="Select an asset for model training"),
-                            ], width=5),
-                            # --- NEW: Model Type Selection ---
-                            dbc.Col([
-                                dbc.Label("Select Model Type"),
-                                dbc.Select(
-                                    id="ml-train-model-type", # New ID
-                                    options=[
-                                        {"label": "Prophet (Recommended Default)", "value": "prophet"},
-                                        {"label": "ARIMA", "value": "arima"},
-                                        {"label": "LSTM (Requires TensorFlow)", "value": "lstm"},
-                                        # {"label": "Ensemble", "value": "ensemble"}, # Ensemble training might be complex to trigger this way
-                                    ],
-                                    value="prophet", # Default to Prophet
-                                ),
-                            ], width=4),
-                            dbc.Col([
-                                dbc.Label("Action"),
-                                dbc.Button("Train Model", id="ml-train-button", color="warning", className="w-100") # Button takes remaining space
-                            ], width=3)
-                        ], className="mb-3"), # Added mb-3 for spacing
-                        html.Div(id="ml-training-status", className="mt-3"), # Immediate feedback
+                                dbc.InputGroup([
+                                    dbc.Select(id="ml-train-asset-selector", placeholder="Select an asset for model training"),
+                                    dbc.Button("Train Prophet Model", id="ml-train-button", color="warning")
+                                ]),
+                                html.Div([
+                                    html.Small("Note: Currently only training Prophet models. Other model types will be supported in a future update.", 
+                                             className="text-muted")
+                                ], className="mt-2")
+                            ], width=12)
+                        ]),
+                        html.Div(id="ml-training-status", className="mt-3"),
                         html.Hr(),
                         html.H5("Model Training Status (Live)"),
-                        dbc.Spinner(html.Div(id="ml-training-status-table")) # Table for all statuses
+                        dbc.Spinner(html.Div(id="ml-training-status-table"))
                     ])
                 ]),
             ]),
-            dcc.Interval(id="ml-update-interval", interval=60000, n_intervals=0)
+            dcc.Interval(
+                id="ml-update-interval",
+                interval=60000,  # Update every minute
+                n_intervals=0
+            )
         ])
     ])
+
 
 def create_prediction_chart(prediction_data, historical_data=None):
     """
@@ -617,23 +642,28 @@ def register_ml_prediction_callbacks(app):
 
     # Train model (original) - Outputs immediate feedback
     @app.callback(
-        Output("ml-training-status", "children"),
-        Input("ml-train-button", "n_clicks"),
-        [State("ml-train-asset-selector", "value"),
-         State("ml-train-model-type", "value")], # Add State for model type
-        prevent_initial_call=True
-    )
-    def train_model(n_clicks, symbol, model_type): # Add model_type parameter
-        if n_clicks is None or not symbol or not model_type: # Check model_type
+    Output("ml-training-status", "children"),
+    Input("ml-train-button", "n_clicks"),
+    State("ml-train-asset-selector", "value"),
+    prevent_initial_call=True
+)
+    def train_model(n_clicks, symbol):
+        """Train a model for the selected asset using the default Prophet model type"""
+        if n_clicks is None or not symbol:
             raise PreventUpdate
+        
         try:
+            # Use 'prophet' as the default model type
+            model_type = "prophet"
+            
             # Pass model_type to the integration function
             status = model_integration.train_models_for_symbol(
                 symbol,
-                model_type=model_type, # Pass selected type
+                model_type=model_type,  # Always use prophet for now
                 lookback_period="2y",
                 async_training=True
             )
+            
             if status == "pending":
                 return dbc.Alert(f"Training started for {symbol} (Model: {model_type.upper()}). Check status table below.", color="info")
             else:
@@ -641,7 +671,6 @@ def register_ml_prediction_callbacks(app):
         except Exception as e:
             logger.error(f"Error initiating training for {symbol} ({model_type}): {e}")
             return dbc.Alert(f"Error starting training: {str(e)}", color="danger")
-
 
     # Update training status table (original) - Periodically updates the table
     @app.callback(

@@ -658,7 +658,7 @@ def update_news_analysis(n):
             "sentiment": sentiment,
             "score": sentiment_score
         }
-    
+
     # Find relevant symbols and analyze sentiment for each article
     for article in news_articles:
         article["relevant_symbols"] = []
@@ -680,7 +680,7 @@ def update_news_analysis(n):
         
         # Analyze sentiment
         article["sentiment"] = analyze_news_sentiment(article_title + " " + article_description)
-    
+
     # Create news cards with sentiment indicators
     news_cards = []
     for article in news_articles:
@@ -752,12 +752,12 @@ def update_news_analysis(n):
                 ])
             ], className="mb-3", outline=True, color=sentiment_color)
         )
-    
+
     # Create summary of news sentiment
     positive_count = sum(1 for article in news_articles if article.get("sentiment", {}).get("sentiment") == "positive")
     negative_count = sum(1 for article in news_articles if article.get("sentiment", {}).get("sentiment") == "negative")
     neutral_count = sum(1 for article in news_articles if article.get("sentiment", {}).get("sentiment") == "neutral")
-    
+
     # Determine overall market sentiment
     if positive_count > negative_count:
         overall_sentiment = "Positive"
@@ -768,15 +768,15 @@ def update_news_analysis(n):
     else:
         overall_sentiment = "Neutral"
         overall_color = "secondary"
-    
+
     # Create sentiment summary component with separate progress bars (compatible with DBC 2.0.0)
     total_articles = positive_count + negative_count + neutral_count
-    
+
     # Calculate percentages for each sentiment category
     positive_pct = (positive_count / total_articles * 100) if total_articles > 0 else 0
     neutral_pct = (neutral_count / total_articles * 100) if total_articles > 0 else 0
     negative_pct = (negative_count / total_articles * 100) if total_articles > 0 else 0
-    
+
     sentiment_summary = dbc.Card([
         dbc.CardBody([
             html.H5("Market Sentiment Analysis", className="card-title"),
@@ -802,7 +802,7 @@ def update_news_analysis(n):
             ])
         ])
     ], className="mb-3")
-    
+
     # Add a loading indicator and timestamp
     news_component = [
         sentiment_summary,
@@ -811,7 +811,7 @@ def update_news_analysis(n):
             *news_cards
         ])
     ]
-    
+
     return news_component
 
 @app.callback(
