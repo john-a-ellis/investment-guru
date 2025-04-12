@@ -22,260 +22,214 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class PricePredictionModel:
-    """
-    Base class for price prediction models with fixed symbol handling.
-    """
-    def __init__(self, model_name="base", prediction_days=30, symbol=None):
-        self.model_name = model_name
-        self.prediction_days = prediction_days
-        self.model = None
-        self.scaler = MinMaxScaler(feature_range=(0, 1))
-        self.is_trained = False
-        self.model_dir = "models"
-        self.symbol = symbol  # Properly store the symbol
-        
-        # Print the symbol for debugging
-        print(f"Initializing {model_name} model with symbol: {symbol}")
-        
-        # Create model directory if it doesn't exist
-        os.makedirs(self.model_dir, exist_ok=True)
-        
-class PricePredictionModel:
     """Base class for price prediction models with fixed symbol handling."""
     def __init__(self, model_name="base", prediction_days=30, symbol=None):
         self.model_name = model_name
         self.prediction_days = prediction_days
         self.model = None
-        self.scaler = MinMaxScaler(feature_range=(0, 1))
+        self.scaler = MinMaxScaler(feature_range=(0, 1)) # Scaler for LSTM
         self.is_trained = False
         self.model_dir = "models"
         self.symbol = symbol # Store the symbol
         os.makedirs(self.model_dir, exist_ok=True)
-        logger.debug(f"Initializing {model_name} model with symbol: {symbol}") # Use logger
+        logger.debug(f"Initializing {model_name} model with symbol: {symbol}")
 
-    def load_model(self):
-        """Load model from disk with improved error handling."""
+    def get_model_filename(self):
+        """Generates the standard model filename."""
+        if not self.symbol:
+            return None
+        # Default to .pkl, override in subclasses if needed
+        return f"{self.model_name}_{self.symbol}.pkl"
+
+    def get_scaler_filename(self):
+        """Generates the standard scaler filename (used by LSTM)."""
+        if not self.symbol:
+            return None
+        return f"{self.model_name}_{self.symbol}_scaler.pkl"
+
+    def save_model(self):
+        """Save model to disk. Base implementation for pickle."""
+        if not self.is_trained:
+            logger.warning(f"{self.model_name} model for {self.symbol} not trained, cannot save")
+            return None # Return None for filename on failure
+        if not self.symbol:
+            logger.error(f"Symbol not provided for {self.model_name} model during save")
+            return None
+
+        model_filename = self.get_model_filename()
+        if not model_filename: return None
+        model_path = os.path.join(self.model_dir, model_filename)
+
         try:
-            if not hasattr(self, 'symbol') or not self.symbol:
-                logger.error(f"Symbol not provided for {self.model_name} model during load") # Use logger
-                return False
-
-            model_path = os.path.join(self.model_dir, f"{self.model_name}_{self.symbol}.pkl")
-            logger.debug(f"Looking for model at: {os.path.abspath(model_path)}") # Use logger
-
-            if os.path.exists(model_path):
-                logger.info(f"Found model file for {self.symbol}: {model_path}") # Use logger
-                with open(model_path, 'rb') as f:
-                    self.model = pickle.load(f)
-                self.is_trained = True
-                logger.info(f"Successfully loaded model for {self.symbol}") # Use logger
-                return True
-            else:
-                logger.warning(f"No {self.model_name} model file found for {self.symbol} at {model_path}") # Use logger
-                return False
+            logger.info(f"Saving {self.model_name} model for {self.symbol} to {model_path}")
+            with open(model_path, 'wb') as f:
+                pickle.dump(self.model, f)
+            logger.info(f"{self.model_name} model saved successfully for {self.symbol}")
+            return model_filename # Return filename on success
         except Exception as e:
-            logger.error(f"Error loading {self.model_name} model for {self.symbol}: {e}") # Use logger
-            logger.error(traceback.format_exc()) # Log traceback
-            return False
-        
-    def preprocess_data(self, historical_data):
-        """Preprocess data using the scaler."""
-        if 'close' not in historical_data.columns:
-            raise ValueError("Data must contain 'close' column")
-        close_prices = historical_data['close'].values.reshape(-1, 1)
-        scaled_data = self.scaler.fit_transform(close_prices)
-        return scaled_data
+            logger.error(f"Error saving {self.model_name} model for {self.symbol}: {e}")
+            return None
 
-class ARIMAModel(PricePredictionModel):
-    """
-    Price prediction model using ARIMA (AutoRegressive Integrated Moving Average).
-    """
-    def __init__(self, prediction_days=30, order=(5,1,0), symbol=None):
-        super().__init__(model_name="arima", prediction_days=prediction_days, symbol=symbol)
-        self.order = order
-
-    # --- Add or ensure load_model exists and uses self.symbol ---
     def load_model(self):
-        """Load ARIMA model from disk."""
+        """Load model from disk. Base implementation for pickle."""
+        if not self.symbol:
+            logger.error(f"Symbol not provided for {self.model_name} model during load")
+            return False
+
+        model_filename = self.get_model_filename()
+        if not model_filename: return False
+        model_path = os.path.join(self.model_dir, model_filename)
+        logger.debug(f"Looking for {self.model_name} model at: {os.path.abspath(model_path)}")
+
+        if not os.path.exists(model_path):
+            logger.warning(f"No {self.model_name} model file found for {self.symbol} at {model_path}")
+            return False
+
         try:
-            if not self.symbol:
-                logger.error(f"Symbol not provided for {self.model_name} model during load")
-                return False
-            # --- FIX: Ensure filename includes symbol ---
-            model_path = os.path.join(self.model_dir, f"{self.model_name}_{self.symbol}.pkl")
-            logger.debug(f"Looking for ARIMA model at: {os.path.abspath(model_path)}")
-
-            if os.path.exists(model_path):
-                logger.info(f"Found ARIMA model file for {self.symbol}: {model_path}")
-                with open(model_path, 'rb') as f:
-                    # ARIMA model might be saved directly or as part of a dict/tuple
-                    loaded_content = pickle.load(f)
-                    # Adjust based on how you save it in train()
-                    if isinstance(loaded_content, dict) and 'model' in loaded_content:
-                         self.model = loaded_content['model']
-                    else: # Assume direct model object save
-                         self.model = loaded_content
-
-                self.is_trained = True
-                logger.info(f"Successfully loaded ARIMA model for {self.symbol}")
-                return True
-            else:
-                logger.warning(f"No {self.model_name} model file found for {self.symbol} at {model_path}")
-                return False
+            logger.info(f"Found {self.model_name} model file for {self.symbol}: {model_path}")
+            with open(model_path, 'rb') as f:
+                self.model = pickle.load(f)
+            self.is_trained = True
+            logger.info(f"Successfully loaded {self.model_name} model for {self.symbol}")
+            return True
         except Exception as e:
             logger.error(f"Error loading {self.model_name} model for {self.symbol}: {e}")
             logger.error(traceback.format_exc())
             return False
 
-    # --- Add or ensure save_model exists and uses self.symbol ---
-    def save_model(self):
-        """Save ARIMA model to disk."""
-        if not self.is_trained:
-            logger.warning(f"ARIMA model for {self.symbol} not trained, cannot save")
-            return False
-        if not self.symbol:
-            logger.error(f"Symbol not provided for {self.model_name} model during save")
-            return False
+    def preprocess_data(self, historical_data):
+        """Preprocess data using the scaler (primarily for LSTM)."""
+        if 'close' not in historical_data.columns:
+            raise ValueError("Data must contain 'close' column")
+        close_prices = historical_data['close'].values.reshape(-1, 1)
+        # Fit AND transform here. Assumes this is called during training.
+        # Load_model should load the fitted scaler for prediction.
+        scaled_data = self.scaler.fit_transform(close_prices)
+        return scaled_data
 
-        try:
-            # --- FIX: Ensure filename includes symbol ---
-            model_path = os.path.join(self.model_dir, f"{self.model_name}_{self.symbol}.pkl")
-            logger.info(f"Saving ARIMA model for {self.symbol} to {model_path}")
-            with open(model_path, 'wb') as f:
-                # Save the fitted model object
-                pickle.dump(self.model, f)
-            logger.info(f"ARIMA model saved successfully for {self.symbol}")
-            return True
-        except Exception as e:
-            logger.error(f"Error saving ARIMA model for {self.symbol}: {e}")
-            return False
+    # --- Abstract methods (or provide default implementations) ---
+    def train(self, historical_data):
+        raise NotImplementedError("Train method must be implemented by subclasses.")
+
+    def predict(self, historical_data, days=None):
+        raise NotImplementedError("Predict method must be implemented by subclasses.")
+
+    def evaluate(self, test_data):
+        raise NotImplementedError("Evaluate method must be implemented by subclasses.")
+
+
+class ARIMAModel(PricePredictionModel):
+    """Price prediction model using ARIMA."""
+    def __init__(self, prediction_days=30, order=(5,1,0), symbol=None):
+        super().__init__(model_name="arima", prediction_days=prediction_days, symbol=symbol)
+        self.order = order
+        # Note: ARIMA doesn't use the scaler from the base class
+
+    # save_model and load_model use the base class implementation (pickle)
 
     def train(self, historical_data):
-        """
-        Train ARIMA model on historical data.
-        
-        Args:
-            historical_data (DataFrame): Historical price data with 'Close' column
-        
-        Returns:
-            bool: Success status
-        """
+        """Train ARIMA model."""
         try:
-            from statsmodels.tsa.arima.model import ARIMA
-            
-            # Preprocess data
             data = historical_data.sort_index()
-            
-            # Extract close prices
-            if 'close' in data.columns:
-                close_prices = data['close']
-            else:
-                raise ValueError("Data must contain 'close' column")
-            
-            # Train ARIMA model
-            self.model = ARIMA(close_prices, order=self.order)
+            if 'close' not in data.columns: raise ValueError("Data must contain 'close' column")
+            close_prices = data['close']
+
+            # Use the renamed import
+            self.model = ARIMA_Statsmodels(close_prices, order=self.order)
             self.model = self.model.fit()
-            
+
             self.is_trained = True
-            logger.info(f"ARIMA model trained successfully with order {self.order}")
+            logger.info(f"ARIMA model trained successfully for {self.symbol} with order {self.order}")
             return True
-        
         except Exception as e:
-            logger.error(f"Error training ARIMA model: {e}")
+            logger.error(f"Error training ARIMA model for {self.symbol}: {e}")
+            logger.error(traceback.format_exc())
             return False
-    
+
     def predict(self, historical_data, days=None):
-        """
-        Make predictions using ARIMA model.
-        
-        Args:
-            historical_data (DataFrame): Historical price data
-            days (int): Number of days to predict
-        
-        Returns:
-            DataFrame: Predicted prices
-        """
+        """Make predictions using ARIMA model."""
         if not self.is_trained and not self.load_model():
-            logger.error("ARIMA model not trained and could not be loaded")
+            logger.error(f"ARIMA model for {self.symbol} not trained/loaded")
             return pd.DataFrame()
-        
         try:
-            # Use provided days or default
             pred_days = days if days is not None else self.prediction_days
-            
-            # Get the last date in the historical data
             last_date = historical_data.index[-1]
-            
-            # Generate future dates
             future_dates = pd.date_range(start=last_date + timedelta(days=1), periods=pred_days)
-            
-            # Make predictions
-            forecast = self.model.forecast(steps=pred_days)
-            
-            # Create a DataFrame with predictions
-            predictions = pd.DataFrame(forecast, index=future_dates, columns=['close'])
-            
+            forecast_result = self.model.get_forecast(steps=pred_days)
+            forecast_values = forecast_result.predicted_mean
+            conf_int = forecast_result.conf_int(alpha=0.05) # 95% confidence interval
+
+            predictions = pd.DataFrame({
+                'close': forecast_values,
+                'lower': conf_int.iloc[:, 0],
+                'upper': conf_int.iloc[:, 1]
+            }, index=future_dates)
+
+            logger.info(f"ARIMA prediction successful for {self.symbol}")
             return predictions
-        
         except Exception as e:
-            logger.error(f"Error making predictions with ARIMA model: {e}")
+            logger.error(f"Error making predictions with ARIMA model for {self.symbol}: {e}")
+            logger.error(traceback.format_exc())
             return pd.DataFrame()
-    
+
     def evaluate(self, test_data):
-        """
-        Evaluate ARIMA model performance.
-        
-        Args:
-            test_data (DataFrame): Test data with actual prices
-        
-        Returns:
-            dict: Evaluation metrics
-        """
+        """Evaluate ARIMA model performance."""
         if not self.is_trained and not self.load_model():
-            logger.error("ARIMA model not trained and could not be loaded")
+            logger.error(f"ARIMA model for {self.symbol} not trained/loaded")
             return {}
-        
         try:
-            # Make predictions for the test period
-            predictions = self.model.predict(
-                start=test_data.index[0],
-                end=test_data.index[-1]
-            )
-            
-            # Calculate evaluation metrics
-            mae = mean_absolute_error(test_data['close'], predictions)
-            mse = mean_squared_error(test_data['close'], predictions)
+            if test_data.empty: return {'error': 'Test data is empty'}
+            start_idx = test_data.index[0]
+            end_idx = test_data.index[-1]
+
+            # Ensure predictions cover the test data range
+            predictions = self.model.predict(start=start_idx, end=end_idx)
+
+            # Align actual and predicted values
+            actual = test_data['close']
+            common_index = actual.index.intersection(predictions.index)
+            if len(common_index) < 2:
+                 return {'error': f'Insufficient overlap between test data and predictions ({len(common_index)} points)'}
+
+            actual_aligned = actual.loc[common_index]
+            predictions_aligned = predictions.loc[common_index]
+
+            mae = mean_absolute_error(actual_aligned, predictions_aligned)
+            mse = mean_squared_error(actual_aligned, predictions_aligned)
             rmse = np.sqrt(mse)
-            
-            # Calculate MAPE (Mean Absolute Percentage Error)
-            mape = np.mean(np.abs((test_data['close'] - predictions) / test_data['close'])) * 100
-            
-            return {
-                'mae': mae,
-                'mse': mse,
-                'rmse': rmse,
-                'mape': mape
-            }
-        
+            non_zero_actual = actual_aligned[actual_aligned != 0]
+            mape = np.mean(np.abs((non_zero_actual - predictions_aligned.loc[non_zero_actual.index]) / non_zero_actual)) * 100 if not non_zero_actual.empty else 0.0
+
+            return {'mae': float(mae), 'mse': float(mse), 'rmse': float(rmse), 'mape': float(mape)}
         except Exception as e:
-            logger.error(f"Error evaluating ARIMA model: {e}")
-            return {}
+            logger.error(f"Error evaluating ARIMA model for {self.symbol}: {e}")
+            logger.error(traceback.format_exc())
+            return {'error': str(e)}
 
 
 class ProphetModel(PricePredictionModel):
     """Price prediction model using Facebook Prophet."""
     def __init__(self, prediction_days=30, symbol=None):
-        # --- Ensure super().__init__ is called correctly ---
         super().__init__(model_name="prophet", prediction_days=prediction_days, symbol=symbol)
+        # Prophet doesn't use the base scaler
+
+    # --- Add save_model and load_model using base class pickle implementation ---
+    def save_model(self):
+        """Save Prophet model using base pickle method."""
+        return super().save_model()
+
+    def load_model(self):
+        """Load Prophet model using base pickle method."""
+        return super().load_model()
 
     def train(self, historical_data):
-        """Train Prophet model on historical data."""
+        """Train Prophet model."""
         try:
-            from prophet import Prophet
             data = historical_data.sort_index().copy()
             if 'close' not in data.columns: raise ValueError("Data must contain 'close' column")
 
             prophet_data = pd.DataFrame({'ds': data.index, 'y': data['close']})
+            # Instantiate Prophet model here
             self.model = Prophet(daily_seasonality=True, yearly_seasonality=True, weekly_seasonality=True, changepoint_prior_scale=0.05)
             self.model.fit(prophet_data)
             self.is_trained = True
@@ -289,7 +243,7 @@ class ProphetModel(PricePredictionModel):
     def predict(self, historical_data, days=None):
         """Make predictions using Prophet model."""
         if not self.is_trained and not self.load_model():
-            logger.error(f"Prophet model for {self.symbol} not trained and could not be loaded")
+            logger.error(f"Prophet model for {self.symbol} not trained/loaded")
             return pd.DataFrame()
         try:
             pred_days = days if days is not None else self.prediction_days
@@ -306,9 +260,9 @@ class ProphetModel(PricePredictionModel):
                 return pd.DataFrame()
 
             result = pd.DataFrame({
-                'Close': future_predictions['yhat'],
-                'Upper': future_predictions['yhat_upper'],
-                'Lower': future_predictions['yhat_lower']
+                'close': future_predictions['yhat'],
+                'upper': future_predictions['yhat_upper'],
+                'lower': future_predictions['yhat_lower']
             }, index=pd.DatetimeIndex(future_predictions['ds']))
 
             logger.info(f"Prophet prediction successful for {self.symbol}: {len(result)} rows")
@@ -321,104 +275,72 @@ class ProphetModel(PricePredictionModel):
     def evaluate(self, test_data):
         """Evaluate Prophet model performance."""
         if not self.is_trained and not self.load_model():
-            logger.error(f"Prophet model for {self.symbol} not trained and could not be loaded")
+            logger.error(f"Prophet model for {self.symbol} not trained/loaded")
             return {}
         try:
-            # --- Call the standalone calculate_prophet_metrics function ---
-            return calculate_prophet_metrics(self.model, test_data)
+            return calculate_prophet_metrics(self.model, test_data) # Use the standalone helper
         except Exception as e:
             logger.error(f"Error evaluating Prophet model for {self.symbol}: {e}")
             logger.error(traceback.format_exc())
-            return {}
+            return {'error': str(e)}
 
 
 class LSTMModel(PricePredictionModel):
-    """
-    Price prediction model using LSTM (Long Short-Term Memory) neural networks.
-    """
+    """Price prediction model using LSTM neural networks."""
     def __init__(self, prediction_days=30, lookback=60, units=50, epochs=50, batch_size=32, symbol=None):
-        # --- FIX: Ensure super init includes symbol ---
         super().__init__(model_name="lstm", prediction_days=prediction_days, symbol=symbol)
         self.lookback = lookback
         self.units = units
         self.epochs = epochs
         self.batch_size = batch_size
-        # --- FIX: Store scaler with the instance ---
-        self.scaler = MinMaxScaler(feature_range=(0, 1))
-    
+        # Scaler is inherited from base class
+
+    def get_model_filename(self):
+        """Override to use .h5 extension for Keras models."""
+        if not self.symbol: return None
+        return f"{self.model_name}_{self.symbol}.h5" # Use .h5
+
     def _create_sequences(self, data):
-        """
-        Create sequences for LSTM training.
-        
-        Args:
-            data (array): Scaled price data
-        
-        Returns:
-            tuple: (X, y) sequences for training
-        """
+        """Create sequences for LSTM training."""
         X, y = [], []
         for i in range(self.lookback, len(data)):
             X.append(data[i-self.lookback:i, 0])
             y.append(data[i, 0])
-        
         return np.array(X), np.array(y)
-    
-    def preprocess_data(self, historical_data):
-        """Preprocess data using the instance's scaler."""
-        if 'close' not in historical_data.columns:
-            raise ValueError("Data must contain 'close' column")
-        close_prices = historical_data['close'].values.reshape(-1, 1)
-        # Use fit_transform during training, transform during prediction/evaluation
-        # For simplicity here, we'll fit_transform, but ideally, fit only on training data.
-        scaled_data = self.scaler.fit_transform(close_prices)
-        return scaled_data
+
+    # preprocess_data uses the base class implementation
 
     def train(self, historical_data):
-        """
-        Train LSTM model on historical data.
-        """
+        """Train LSTM model."""
         try:
-            # Import TensorFlow inside this method
-            import tensorflow as tf
-            from tensorflow.keras.models import Sequential
-            from tensorflow.keras.layers import LSTM, Dense, Dropout
-
             if not self.symbol:
                  logger.error("Cannot train LSTM model without a symbol.")
                  return False
-
             logger.info(f"Starting LSTM training for {self.symbol}...")
 
-            # Preprocess data using self.scaler
-            scaled_data = self.preprocess_data(historical_data) # This now fits the scaler
+            # Preprocess data (fits the scaler)
+            scaled_data = self.preprocess_data(historical_data)
 
-            # Create sequences
             X, y = self._create_sequences(scaled_data)
+            if X.size == 0 or y.size == 0:
+                raise ValueError(f"Not enough data after sequencing for lookback {self.lookback}")
 
-            # Reshape for LSTM [samples, time steps, features]
             X = np.reshape(X, (X.shape[0], X.shape[1], 1))
 
-            # Build LSTM model
-            self.model = Sequential()
-            self.model.add(LSTM(units=self.units, return_sequences=True, input_shape=(X.shape[1], 1)))
-            self.model.add(Dropout(0.2))
-            self.model.add(LSTM(units=self.units))
-            self.model.add(Dropout(0.2))
-            self.model.add(Dense(units=1))
+            self.model = Sequential([
+                LSTM(units=self.units, return_sequences=True, input_shape=(X.shape[1], 1)),
+                Dropout(0.2),
+                LSTM(units=self.units),
+                Dropout(0.2),
+                Dense(units=1)
+            ])
             self.model.compile(optimizer='adam', loss='mean_squared_error')
 
-            # Train model
             logger.info(f"Fitting LSTM model for {self.symbol}...")
             self.model.fit(X, y, epochs=self.epochs, batch_size=self.batch_size, verbose=0)
-
             self.is_trained = True
             logger.info(f"LSTM model trained successfully for {self.symbol}")
-
-            # --- Save the trained model and scaler ---
-            self.save_model() # Call save method
-
-            return True
-
+            return True # Return success status
         except ImportError:
              logger.error("TensorFlow/Keras not installed. Cannot train LSTM model.")
              return False
@@ -428,52 +350,39 @@ class LSTMModel(PricePredictionModel):
             return False
 
     def predict(self, historical_data, days=None):
-        """
-        Make predictions using LSTM model.
-        """
-        if not self.is_trained and not self.load_model(): # load_model should load model AND scaler
-            logger.error(f"LSTM model for {self.symbol} not trained and could not be loaded")
+        """Make predictions using LSTM model."""
+        if not self.is_trained and not self.load_model():
+            logger.error(f"LSTM model for {self.symbol} not trained/loaded")
             return pd.DataFrame()
-
         try:
-            # Use TensorFlow inside the method
-            import tensorflow as tf
-
             pred_days = days if days is not None else self.prediction_days
 
-            # --- FIX: Use only transform with the loaded scaler ---
-            # We need the full history to scale correctly relative to training data
-            # This assumes the scaler was fit during training/loading
+            # --- Use the SCALER LOADED by load_model ---
             full_history_close = historical_data['close'].values.reshape(-1, 1)
-            # Avoid re-fitting the scaler here, just transform
-            # scaled_full_history = self.scaler.transform(full_history_close) # Ideal, but requires scaler fitted previously
-            # --- Temporary workaround: fit_transform on the history provided ---
-            # This isn't perfect as scaling might differ slightly from training
-            scaled_full_history = self.scaler.fit_transform(full_history_close)
-            # --- End workaround ---
+            # --- Use transform ONLY, assuming scaler is fitted ---
+            scaled_full_history = self.scaler.transform(full_history_close)
 
-
-            # Get the last sequence from the scaled full history
             last_sequence = scaled_full_history[-self.lookback:].reshape(1, self.lookback, 1)
-
             predictions_scaled = []
             current_sequence = last_sequence.copy()
 
             for _ in range(pred_days):
                 next_pred_scaled = self.model.predict(current_sequence, verbose=0)[0][0]
                 predictions_scaled.append(next_pred_scaled)
-                # Update sequence
                 current_sequence = np.append(current_sequence[:, 1:, :], [[[next_pred_scaled]]], axis=1)
 
-            # Inverse transform predictions using the *same* scaler instance
+            # Inverse transform using the loaded scaler
             predictions = self.scaler.inverse_transform(np.array(predictions_scaled).reshape(-1, 1))
 
             last_date = historical_data.index[-1]
             future_dates = pd.date_range(start=last_date + timedelta(days=1), periods=pred_days)
-            result = pd.DataFrame(predictions, index=future_dates, columns=['Close'])
+            result = pd.DataFrame(predictions, index=future_dates, columns=['close'])
+            # Add simple confidence bounds for LSTM
+            std_dev_factor = 0.05 # Example: 5% std dev factor
+            result['upper'] = result['close'] * (1 + std_dev_factor)
+            result['lower'] = result['close'] * (1 - std_dev_factor)
             logger.info(f"LSTM prediction successful for {self.symbol}")
             return result
-
         except ImportError:
              logger.error("TensorFlow/Keras not installed. Cannot predict with LSTM model.")
              return pd.DataFrame()
@@ -481,74 +390,61 @@ class LSTMModel(PricePredictionModel):
             logger.error(f"Error making predictions with LSTM model for {self.symbol}: {e}")
             logger.error(traceback.format_exc())
             return pd.DataFrame()
-    
+
     def evaluate(self, test_data):
-        """
-        Evaluate LSTM model performance.
-        
-        Args:
-            test_data (DataFrame): Test data with actual prices
-        
-        Returns:
-            dict: Evaluation metrics
-        """
+        """Evaluate LSTM model performance."""
         if not self.is_trained and not self.load_model():
-            logger.error("LSTM model not trained and could not be loaded")
+            logger.error(f"LSTM model for {self.symbol} not trained/loaded")
             return {}
-        
         try:
-            # Split test data into sequences
-            scaled_data = self.preprocess_data(test_data)
-            
-            # Create sequences
-            X_test, y_test = self._create_sequences(scaled_data)
-            
-            # Reshape for LSTM [samples, time steps, features]
+            if test_data.empty: return {'error': 'Test data is empty'}
+
+            # --- Use transform ONLY with the loaded scaler ---
+            scaled_data = self.scaler.transform(test_data['close'].values.reshape(-1, 1))
+
+            X_test, y_test_scaled = self._create_sequences(scaled_data)
+            if X_test.size == 0 or y_test_scaled.size == 0:
+                 return {'error': f'Insufficient test data after sequencing for lookback {self.lookback}'}
+
             X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1], 1))
-            
-            # Make predictions
-            predictions = self.model.predict(X_test)
-            
-            # Inverse transform
-            predictions = self.scaler.inverse_transform(predictions)
-            y_test = self.scaler.inverse_transform(y_test.reshape(-1, 1))
-            
-            # Calculate evaluation metrics
+            predictions_scaled = self.model.predict(X_test, verbose=0)
+
+            # Inverse transform both predictions and actual values
+            predictions = self.scaler.inverse_transform(predictions_scaled)
+            y_test = self.scaler.inverse_transform(y_test_scaled.reshape(-1, 1))
+
             mae = mean_absolute_error(y_test, predictions)
             mse = mean_squared_error(y_test, predictions)
             rmse = np.sqrt(mse)
-            
-            # Calculate MAPE (Mean Absolute Percentage Error)
-            mape = np.mean(np.abs((y_test - predictions) / y_test)) * 100
-            
-            return {
-                'mae': mae,
-                'mse': mse,
-                'rmse': rmse,
-                'mape': mape
-            }
-        
+            non_zero_y = y_test[y_test != 0]
+            mape = np.mean(np.abs((non_zero_y - predictions[y_test != 0]) / non_zero_y)) * 100 if non_zero_y.size > 0 else 0.0
+
+            return {'mae': float(mae), 'mse': float(mse), 'rmse': float(rmse), 'mape': float(mape)}
+        except ImportError:
+             logger.error("TensorFlow/Keras not installed.")
+             return {'error': 'TensorFlow/Keras not installed'}
         except Exception as e:
-            logger.error(f"Error evaluating LSTM model: {e}")
-            return {}
-    
+            logger.error(f"Error evaluating LSTM model for {self.symbol}: {e}")
+            logger.error(traceback.format_exc())
+            return {'error': str(e)}
+
     def save_model(self):
-        """Save LSTM model and scaler to disk."""
+        """Save LSTM model (.h5) and scaler (.pkl)."""
         if not self.is_trained:
             logger.warning(f"LSTM model for {self.symbol} not trained, cannot save")
-            return False
+            return None
         if not self.symbol:
             logger.error(f"Symbol not provided for LSTM model during save")
-            return False
+            return None
+
+        model_filename = self.get_model_filename() # Gets .h5 filename
+        scaler_filename = self.get_scaler_filename() # Gets .pkl filename
+        if not model_filename or not scaler_filename: return None
+
+        model_path = os.path.join(self.model_dir, model_filename)
+        scaler_path = os.path.join(self.model_dir, scaler_filename)
 
         try:
-            import tensorflow as tf
-            # --- FIX: Include symbol in filename ---
-            model_filename = f"{self.model_name}_{self.symbol}.h5" # Use .h5 for Keras models
-            model_path = os.path.join(self.model_dir, model_filename)
-            scaler_filename = f"{self.model_name}_{self.symbol}_scaler.pkl"
-            scaler_path = os.path.join(self.model_dir, scaler_filename)
-
             logger.info(f"Saving LSTM model to {model_path}")
             self.model.save(model_path) # Save Keras model
 
@@ -557,36 +453,35 @@ class LSTMModel(PricePredictionModel):
                 pickle.dump(self.scaler, f) # Save the scaler
 
             logger.info(f"LSTM model and scaler saved successfully for {self.symbol}")
-            return True
+            return model_filename # Return the primary model filename
         except ImportError:
              logger.error("TensorFlow/Keras not installed. Cannot save LSTM model.")
-             return False
+             return None
         except Exception as e:
             logger.error(f"Error saving LSTM model for {self.symbol}: {e}")
+            return None
+
+    def load_model(self):
+        """Load LSTM model (.h5) and scaler (.pkl)."""
+        if not self.symbol:
+            logger.error(f"Symbol not provided for LSTM model during load")
             return False
 
-    # --- FIX: Modify load_model to include symbol and load scaler ---
-    def load_model(self):
-        """Load LSTM model and scaler from disk."""
+        model_filename = self.get_model_filename() # Gets .h5 filename
+        scaler_filename = self.get_scaler_filename() # Gets .pkl filename
+        if not model_filename or not scaler_filename: return False
+
+        model_path = os.path.join(self.model_dir, model_filename)
+        scaler_path = os.path.join(self.model_dir, scaler_filename)
+
+        logger.debug(f"Looking for LSTM model at: {os.path.abspath(model_path)}")
+        logger.debug(f"Looking for LSTM scaler at: {os.path.abspath(scaler_path)}")
+
+        if not os.path.exists(model_path) or not os.path.exists(scaler_path):
+            logger.warning(f"LSTM model ({model_filename}) or scaler ({scaler_filename}) file not found for {self.symbol}")
+            return False
+
         try:
-            import tensorflow as tf
-            if not self.symbol:
-                logger.error(f"Symbol not provided for LSTM model during load")
-                return False
-
-            # --- FIX: Include symbol in filename ---
-            model_filename = f"{self.model_name}_{self.symbol}.h5" # Use .h5
-            model_path = os.path.join(self.model_dir, model_filename)
-            scaler_filename = f"{self.model_name}_{self.symbol}_scaler.pkl"
-            scaler_path = os.path.join(self.model_dir, scaler_filename)
-
-            logger.debug(f"Looking for LSTM model at: {os.path.abspath(model_path)}")
-            logger.debug(f"Looking for LSTM scaler at: {os.path.abspath(scaler_path)}")
-
-            if not os.path.exists(model_path) or not os.path.exists(scaler_path):
-                logger.warning(f"LSTM model or scaler file not found for {self.symbol}")
-                return False
-
             logger.info(f"Loading LSTM model from {model_path}")
             self.model = tf.keras.models.load_model(model_path)
 
@@ -607,179 +502,178 @@ class LSTMModel(PricePredictionModel):
 
 
 class EnsembleModel(PricePredictionModel):
-    """
-    Ensemble model that combines predictions from multiple models.
-    """
-    def __init__(self, prediction_days=30, models=None, weights=None, symbol=None):
+    """Ensemble model combining predictions."""
+    def __init__(self, prediction_days=30, models_to_include=None, weights=None, symbol=None):
         super().__init__(model_name="ensemble", prediction_days=prediction_days, symbol=symbol)
-        
-        # Initialize models if provided, otherwise use default (ARIMA, Prophet, LSTM)
-        if models is None:
-            self.models = [
-                ARIMAModel(prediction_days=prediction_days, symbol=symbol),
-                ProphetModel(prediction_days=prediction_days, symbol=symbol),
-                LSTMModel(prediction_days=prediction_days, symbol=symbol)
-            ]
-        else:
-            # Make sure each model gets the symbol
-            for model in models:
-                if hasattr(model, 'symbol'):
-                    model.symbol = symbol
-            self.models = models
-        
-        # Initialize weights if provided, otherwise use equal weights
-        if weights is None:
-            self.weights = [1/len(self.models)] * len(self.models)
-        else:
-            # Normalize weights
-            self.weights = [w / sum(weights) for w in weights]
 
-    
-    def train(self, historical_data):
-        """
-        Train all models in the ensemble.
-        
-        Args:
-            historical_data (DataFrame): Historical price data
-        
-        Returns:
-            bool: Success status
-        """
-        success = True
-        
-        # Train each model
-        for model in self.models:
-            if not model.train(historical_data):
-                logger.warning(f"Failed to train {model.model_name} model")
-                success = False
-        
-        self.is_trained = success
-        
-        return success
-    
-    def predict(self, historical_data, days=None):
-        """
-        Make predictions using weighted combination of all models.
-        
-        Args:
-            historical_data (DataFrame): Historical price data
-            days (int): Number of days to predict
-        
-        Returns:
-            DataFrame: Predicted prices
-        """
-        # Use provided days or default
-        pred_days = days if days is not None else self.prediction_days
-        
-        # Get predictions from each model
-        all_predictions = []
-        valid_models = []
-        
-        for i, model in enumerate(self.models):
-            # Only use models of the correct type
-            # This prevents errors from trying to use the wrong model type
-            model_class_name = model.__class__.__name__
-            expected_model_name = model.model_name.capitalize() + "Model"
-            
-            if model_class_name == expected_model_name:
-                if model.is_trained or model.load_model():
-                    try:
-                        pred = model.predict(historical_data, days=pred_days)
-                        if not pred.empty:
-                            all_predictions.append(pred)
-                            valid_models.append(model)
-                            logger.info(f"Got predictions from {model.model_name} model")
-                        else:
-                            logger.warning(f"No predictions from {model.model_name} model")
-                    except Exception as e:
-                        logger.error(f"Error getting predictions from {model.model_name} model: {e}")
-                else:
-                    logger.warning(f"{model.model_name} model not trained or could not be loaded")
+        if models_to_include is None:
+            models_to_include = ['arima', 'prophet', 'lstm'] # Default models
+
+        self.models = []
+        for model_type in models_to_include:
+            if model_type == 'arima':
+                self.models.append(ARIMAModel(prediction_days=prediction_days, symbol=symbol))
+            elif model_type == 'prophet':
+                self.models.append(ProphetModel(prediction_days=prediction_days, symbol=symbol))
+            elif model_type == 'lstm':
+                self.models.append(LSTMModel(prediction_days=prediction_days, symbol=symbol))
             else:
-                logger.warning(f"Model type mismatch: {model_class_name} vs expected {expected_model_name}")
-        
+                logger.warning(f"Unknown model type '{model_type}' requested for ensemble.")
+
+        if not self.models:
+            raise ValueError("EnsembleModel requires at least one valid model type.")
+
+        if weights is None or len(weights) != len(self.models):
+            self.weights = [1/len(self.models)] * len(self.models) # Equal weights
+        else:
+            self.weights = [w / sum(weights) for w in weights] # Normalize
+
+    def train(self, historical_data):
+        """Train all models in the ensemble."""
+        success_count = 0
+        for model in self.models:
+            logger.info(f"Training {model.model_name} for ensemble ({self.symbol})...")
+            if model.train(historical_data):
+                success_count += 1
+            else:
+                logger.warning(f"Failed to train {model.model_name} for ensemble ({self.symbol})")
+        self.is_trained = success_count > 0 # Consider trained if at least one sub-model trained
+        return self.is_trained
+
+    def predict(self, historical_data, days=None):
+        """Make predictions using weighted combination."""
+        pred_days = days if days is not None else self.prediction_days
+        all_predictions = []
+        valid_model_indices = []
+
+        for i, model in enumerate(self.models):
+            # Attempt to load if not trained, then predict
+            if model.is_trained or model.load_model():
+                try:
+                    pred = model.predict(historical_data, days=pred_days)
+                    if not pred.empty:
+                        all_predictions.append(pred)
+                        valid_model_indices.append(i)
+                        logger.info(f"Ensemble: Got predictions from {model.model_name} ({self.symbol})")
+                    else:
+                        logger.warning(f"Ensemble: No predictions from {model.model_name} ({self.symbol})")
+                except Exception as e:
+                    logger.error(f"Ensemble: Error getting predictions from {model.model_name} ({self.symbol}): {e}")
+            else:
+                logger.warning(f"Ensemble: {model.model_name} model not trained/loaded ({self.symbol})")
+
         if not all_predictions:
-            logger.error("No predictions available from any model")
+            logger.error(f"Ensemble: No predictions available from any sub-model for {self.symbol}")
             return pd.DataFrame()
-        
-        # Align predictions to the same dates
+
+        # Align predictions (find common index, usually future dates)
         common_index = all_predictions[0].index
         for pred in all_predictions[1:]:
             common_index = common_index.intersection(pred.index)
-        
-        # Get weighted average of predictions
-        weighted_sum = pd.Series(0, index=common_index)
-        
-        # Adjust weights based on valid models
-        if valid_models:
-            adjusted_weights = [self.weights[self.models.index(model)] for model in valid_models]
-            # Normalize weights
-            weight_sum = sum(adjusted_weights)
-            if weight_sum > 0:
-                adjusted_weights = [w / weight_sum for w in adjusted_weights]
-            else:
-                # Equal weights if sum is zero
-                adjusted_weights = [1.0/len(valid_models)] * len(valid_models)
-            
-            # Apply weights to predictions
-            for i, pred in enumerate(all_predictions):
-                if pred.index.equals(common_index):
-                    weighted_sum += pred['Close'] * adjusted_weights[i]
-                else:
-                    # Reindex prediction to common index
-                    reindexed_pred = pred.reindex(common_index)
-                    weighted_sum += reindexed_pred['Close'] * adjusted_weights[i]
-        else:
-            # If no valid models, return empty DataFrame
+
+        if common_index.empty:
+            logger.error(f"Ensemble: No common prediction dates found for {self.symbol}")
             return pd.DataFrame()
-        
-        # Create final prediction DataFrame
-        result = pd.DataFrame({'Close': weighted_sum})
-        
+
+        # Get weighted average
+        weighted_sum = pd.Series(0.0, index=common_index) # Initialize with float
+        total_weight = 0.0
+
+        for i, pred_idx in enumerate(valid_model_indices):
+            weight = self.weights[pred_idx]
+            pred_df = all_predictions[i]
+            # Reindex prediction to common index and fill missing values if any (shouldn't happen ideally)
+            reindexed_pred = pred_df.reindex(common_index).ffill().bfill()
+            weighted_sum += reindexed_pred['close'] * weight
+            total_weight += weight
+
+        # Normalize the weighted sum if total_weight is not 1 (due to model failures)
+        if total_weight > 0 and abs(total_weight - 1.0) > 1e-6:
+            weighted_sum /= total_weight
+
+        # Create final prediction DataFrame (add simple confidence bounds)
+        result = pd.DataFrame({'close': weighted_sum})
+        std_dev_factor = 0.07 # Slightly wider bounds for ensemble
+        result['upper'] = result['close'] * (1 + std_dev_factor)
+        result['lower'] = result['close'] * (1 - std_dev_factor)
+
         return result
-    
+
     def evaluate(self, test_data):
-        """
-        Evaluate ensemble model performance.
-        
-        Args:
-            test_data (DataFrame): Test data with actual prices
-        
-        Returns:
-            dict: Evaluation metrics for each model and the ensemble
-        """
-        # Evaluate each model
+        """Evaluate ensemble model performance."""
+        # Evaluate each sub-model
         model_metrics = {}
         for model in self.models:
-            if model.is_trained or model.load_model():
-                metrics = model.evaluate(test_data)
-                if metrics:
-                    model_metrics[model.model_name] = metrics
-        
-        # Evaluate ensemble (make predictions on test data and compare)
-        ensemble_pred = self.predict(test_data[:-self.prediction_days], days=self.prediction_days)
-        
-        if not ensemble_pred.empty:
-            # Align predictions with actual test data
-            common_index = ensemble_pred.index.intersection(test_data.index)
-            if len(common_index) > 0:
-                ensemble_pred = ensemble_pred.loc[common_index]
-                actual = test_data.loc[common_index, 'Close']
-                
-                # Calculate metrics
-                mae = mean_absolute_error(actual, ensemble_pred['Close'])
-                mse = mean_squared_error(actual, ensemble_pred['Close'])
-                rmse = np.sqrt(mse)
-                mape = np.mean(np.abs((actual - ensemble_pred['Close']) / actual)) * 100
-                
-                model_metrics['ensemble'] = {
-                    'mae': mae,
-                    'mse': mse,
-                    'rmse': rmse,
-                    'mape': mape
-                }
-        
+            try:
+                 metrics = model.evaluate(test_data)
+                 if metrics and 'error' not in metrics:
+                     model_metrics[model.model_name] = metrics
+                 elif metrics: # Keep error message if evaluation failed
+                      model_metrics[model.model_name] = metrics
+            except Exception as eval_err:
+                 logger.error(f"Error evaluating sub-model {model.model_name}: {eval_err}")
+                 model_metrics[model.model_name] = {'error': str(eval_err)}
+
+
+        # Evaluate the ensemble prediction itself
+        try:
+            # Predict for the test period. Need historical data *before* test_data.
+            # This is tricky. For simplicity, we'll predict based on data up to the start of test_data.
+            # A more robust evaluation would use rolling forecasts.
+            if test_data.empty: raise ValueError("Test data is empty")
+            start_test_date = test_data.index[0]
+            # Find historical data ending just before the test period starts
+            # Assuming historical data used for prediction includes up to start_test_date - 1 day
+            # This part needs careful handling in a real backtesting scenario.
+            # Let's assume `historical_data` passed to `predict` ends before `test_data` starts.
+            # For this function, we'll just predict the length of the test data.
+            num_test_days = len(test_data)
+            # We need the data *before* test_data to make the prediction
+            # This requires access to the full dataset, which isn't directly available here.
+            # --- Simplified Evaluation: Predict based on test_data itself (introduces lookahead bias) ---
+            # THIS IS NOT IDEAL FOR REAL EVALUATION but allows calculation
+            logger.warning("Evaluating ensemble using test data itself for prediction base - introduces lookahead bias.")
+            ensemble_pred = self.predict(test_data, days=num_test_days) # Predict length of test data
+
+            if not ensemble_pred.empty:
+                # Align predictions with actual test data
+                common_index = ensemble_pred.index.intersection(test_data.index)
+                if len(common_index) > 1:
+                    ensemble_pred_aligned = ensemble_pred.loc[common_index]
+                    actual_aligned = test_data.loc[common_index, 'close']
+
+                    mae = mean_absolute_error(actual_aligned, ensemble_pred_aligned['close'])
+                    mse = mean_squared_error(actual_aligned, ensemble_pred_aligned['close'])
+                    rmse = np.sqrt(mse)
+                    non_zero_actual = actual_aligned[actual_aligned != 0]
+                    mape = np.mean(np.abs((non_zero_actual - ensemble_pred_aligned['close'].loc[non_zero_actual.index]) / non_zero_actual)) * 100 if not non_zero_actual.empty else 0.0
+
+                    model_metrics['ensemble'] = {'mae': float(mae), 'mse': float(mse), 'rmse': float(rmse), 'mape': float(mape)}
+                else:
+                     model_metrics['ensemble'] = {'error': 'Insufficient overlap for ensemble evaluation'}
+            else:
+                 model_metrics['ensemble'] = {'error': 'Ensemble prediction failed during evaluation'}
+
+        except Exception as e:
+            logger.error(f"Error evaluating ensemble model for {self.symbol}: {e}")
+            model_metrics['ensemble'] = {'error': str(e)}
+
         return model_metrics
+
+    # Ensemble doesn't save a single model file, relies on sub-models
+    def save_model(self):
+        logger.warning("EnsembleModel does not save a single file; relies on saving sub-models.")
+        return None # No single file to return
+
+    def load_model(self):
+        logger.warning("EnsembleModel does not load a single file; relies on loading sub-models.")
+        # Check if sub-models can be loaded
+        loaded_count = 0
+        for model in self.models:
+            if model.load_model():
+                loaded_count += 1
+        self.is_trained = loaded_count > 0 # Consider 'trained' if any sub-model loads
+        return self.is_trained
 
 
 def calculate_prophet_metrics(model, test_data):
@@ -828,40 +722,36 @@ def calculate_prophet_metrics(model, test_data):
         return {'mae': 0.0, 'mse': 0.0, 'rmse': 0.0, 'mape': 0.0, 'error': str(e)}
 
 # Make sure this is AFTER the function definition, not before
-def train_price_prediction_models(symbol, lookback_period="1y"):
+def train_price_prediction_models(symbol, model_type_to_train='prophet', lookback_period="2y"):
     """
-    Train price prediction models (currently Prophet) for a specific symbol.
-    Saves the model file and returns necessary info for metadata saving.
+    Train a specified price prediction model (Prophet, ARIMA, LSTM) for a symbol.
+    Saves the model file(s) and returns necessary info for metadata saving.
 
     Args:
-        symbol (str): Stock symbol to train models for
-        lookback_period (str): Historical period to use for training (e.g., "1y", "2y")
+        symbol (str): Stock symbol to train models for.
+        model_type_to_train (str): The type of model to train ('prophet', 'arima', 'lstm').
+        lookback_period (str): Historical period for training data (e.g., "1y", "2y").
 
     Returns:
         tuple: (model_object, metrics_dict, model_type_str, model_filename_str)
-               Returns (None, {'error': msg}, None, None) on failure.
+               Returns (None, {'error': msg}, model_type_str, None) on failure.
+               model_object might be None even on success if saved internally.
     """
     if not symbol:
         error_msg = "Symbol parameter cannot be None or empty"
         logger.error(error_msg)
-        return None, {"error": error_msg}, None, None # Return consistent tuple
+        return None, {"error": error_msg}, model_type_to_train, None
+
+    logger.info(f"Starting model training for symbol: {symbol}, Model Type: {model_type_to_train}")
 
     try:
-        # Check if Prophet is installed
-        if not check_prophet_installed():
-            raise ImportError("Prophet package is required for model training")
-
-        logger.info(f"Starting model training for symbol: {symbol}")
-
-        # Get historical data using DataProvider (standardized)
+        # Get historical data
         historical_data = data_provider.get_historical_price(symbol, period=lookback_period)
         if historical_data.empty:
             raise ValueError(f"No historical data available for {symbol} via DataProvider")
-
-        # Ensure required columns ('close') and enough data
         if 'close' not in historical_data.columns:
             raise ValueError("Missing required column: 'close'")
-        if len(historical_data) < 60: # Need sufficient data for train/test split
+        if len(historical_data) < 60:
             raise ValueError(f"Not enough historical data for {symbol} (got {len(historical_data)} rows, need at least 60)")
 
         # Split data (80/20)
@@ -870,57 +760,56 @@ def train_price_prediction_models(symbol, lookback_period="1y"):
         test_data = historical_data.iloc[split_idx:]
         logger.info(f"Training data: {len(train_data)} days, Testing data: {len(test_data)} days")
 
-        # --- Train Prophet Model ---
-        try:
-            # Instantiate the ProphetModel class
-            prophet_trainer = ProphetModel(symbol=symbol) # Pass symbol here
+        # --- Instantiate the selected model ---
+        model_trainer = None
+        if model_type_to_train == 'prophet':
+            if not check_prophet_installed(): raise ImportError("Prophet package required")
+            model_trainer = ProphetModel(symbol=symbol)
+        elif model_type_to_train == 'arima':
+            model_trainer = ARIMAModel(symbol=symbol)
+        elif model_type_to_train == 'lstm':
+            # Check for TensorFlow/Keras installation early
+            try: import tensorflow as tf
+            except ImportError: raise ImportError("TensorFlow/Keras required for LSTM")
+            model_trainer = LSTMModel(symbol=symbol) # Use default LSTM params
+        else:
+            raise ValueError(f"Unsupported model type: {model_type_to_train}")
 
-            # Train the model using its train method
-            train_success = prophet_trainer.train(train_data)
+        # --- Train the model ---
+        logger.info(f"Training {model_type_to_train} model for {symbol}...")
+        train_success = model_trainer.train(train_data)
+        if not train_success:
+            raise RuntimeError(f"{model_type_to_train} model training failed.")
 
-            if not train_success:
-                raise RuntimeError("Prophet model training failed.")
+        # --- Evaluate the model ---
+        logger.info(f"Evaluating {model_type_to_train} model for {symbol}...")
+        metrics = model_trainer.evaluate(test_data)
+        if not metrics or 'error' in metrics:
+             logger.warning(f"Metrics calculation failed or returned error for {symbol}. Metrics: {metrics}")
+             if isinstance(metrics, dict) and 'error' in metrics: pass # Keep error metrics
+             else: metrics = {'error': 'Metrics calculation failed'}
 
-            # Evaluate the trained model
-            metrics = prophet_trainer.evaluate(test_data)
-            if not metrics or 'error' in metrics:
-                 logger.warning(f"Metrics calculation failed or returned error for {symbol}. Metrics: {metrics}")
-                 # Decide if this is critical - maybe proceed but log error in metrics?
-                 if isinstance(metrics, dict) and 'error' in metrics:
-                     pass # Keep error metrics
-                 else:
-                     metrics = {'error': 'Metrics calculation failed'}
+        # --- Save the model (model class handles format) ---
+        logger.info(f"Saving {model_type_to_train} model for {symbol}...")
+        model_filename = model_trainer.save_model() # This should return the filename
+        if not model_filename:
+             # Even if saving fails, log it but maybe still return metrics?
+             logger.error(f"Failed to save {model_type_to_train} model for {symbol}.")
+             # Decide if this is critical. Let's return metrics but no filename.
+             return model_trainer.model, metrics, model_type_to_train, None
 
-            # --- Save the Prophet model ---
-            model_type = 'prophet' # Define model type
-            model_filename = f"{model_type}_{symbol}.pkl"
-            model_dir = "models" # Ensure this matches ModelIntegration
-            os.makedirs(model_dir, exist_ok=True)
-            model_path = os.path.join(model_dir, model_filename)
+        logger.info(f"Successfully trained and saved {model_type_to_train} model for {symbol} as {model_filename}")
 
-            logger.info(f"Saving Prophet model to path: {os.path.abspath(model_path)}")
-            with open(model_path, 'wb') as f:
-                # --- Save the TRAINED model object from the class instance ---
-                pickle.dump(prophet_trainer.model, f)
-            logger.info(f"Successfully trained and saved Prophet model for {symbol} as {model_filename}")
-
-            # --- Return the necessary info ---
-            # Return the trained model object itself, metrics, type, and filename
-            return prophet_trainer.model, metrics, model_type, model_filename
-
-        except Exception as prophet_error:
-            logger.error(f"Error during Prophet model training/saving for {symbol}: {prophet_error}")
-            logger.error(traceback.format_exc())
-            # Return None and error metrics
-            return None, {'error': str(prophet_error)}, 'prophet', None # Keep type if known
+        # --- Return the necessary info ---
+        # Return model object (might be None), metrics, type, and filename
+        return model_trainer.model, metrics, model_type_to_train, model_filename
 
     except Exception as e:
-        logger.error(f"Error in train_price_prediction_models for {symbol}: {e}")
+        logger.error(f"Error in train_price_prediction_models for {symbol} ({model_type_to_train}): {e}")
         logger.error(traceback.format_exc())
-        # Return None and error metrics
-        return None, {"error": str(e)}, None, None
+        return None, {"error": str(e)}, model_type_to_train, None
 
-def get_price_predictions(symbol, days=30, try_ensemble_fallback=True): # Added try_ensemble_fallback flag
+def get_price_predictions(symbol, days=30, try_ensemble_fallback=True):
     """
     Get price predictions, trying Prophet first, then optionally Ensemble as fallback.
     """
@@ -935,7 +824,7 @@ def get_price_predictions(symbol, days=30, try_ensemble_fallback=True): # Added 
         historical_data = data_provider.get_historical_price(symbol, period="1y")
         if historical_data.empty:
             logger.error(f"No historical data for {symbol} in get_price_predictions.")
-            return create_fallback_prediction(symbol, days) # Use standard fallback
+            return create_fallback_prediction(symbol, days)
 
         # --- 1. Try Prophet Model ---
         try:
@@ -952,19 +841,14 @@ def get_price_predictions(symbol, days=30, try_ensemble_fallback=True): # Added 
                 logger.warning(f"No pre-trained Prophet model found for {symbol}.")
         except Exception as prophet_err:
             logger.error(f"Error during Prophet prediction for {symbol}: {prophet_err}")
-            # Continue to ensemble fallback if enabled
 
         # --- 2. Try Ensemble Model (if Prophet failed and fallback enabled) ---
         if prophet_predictions_df.empty and try_ensemble_fallback:
             logger.warning(f"Prophet failed for {symbol}. Attempting Ensemble fallback.")
             try:
-                # Instantiate EnsembleModel - it will try to load constituent models
-                # Ensure constituent models (ARIMA, LSTM) are defined/imported correctly
-                # and have load_model methods that use the symbol.
                 ensemble_predictor = EnsembleModel(symbol=symbol, prediction_days=days)
-                # The predict method handles loading constituent models internally
+                # predict handles loading sub-models
                 ensemble_predictions_df = ensemble_predictor.predict(historical_data, days=days)
-
                 if not ensemble_predictions_df.empty:
                     used_model_type = 'ensemble'
                     logger.info(f"Ensemble prediction successful for {symbol}.")
@@ -972,7 +856,6 @@ def get_price_predictions(symbol, days=30, try_ensemble_fallback=True): # Added 
                     logger.warning(f"Ensemble prediction also returned empty DataFrame for {symbol}.")
             except Exception as ensemble_err:
                  logger.error(f"Error during Ensemble prediction for {symbol}: {ensemble_err}")
-                 # Continue to standard fallback
 
         # --- 3. Select Prediction DataFrame ---
         predictions_df = pd.DataFrame()
@@ -980,33 +863,30 @@ def get_price_predictions(symbol, days=30, try_ensemble_fallback=True): # Added 
             predictions_df = prophet_predictions_df
         elif not ensemble_predictions_df.empty:
              predictions_df = ensemble_predictions_df
-        # Else: predictions_df remains empty, will trigger fallback
 
         # --- 4. Process predictions or use fallback ---
         if not predictions_df.empty:
             result = {
                 'symbol': symbol,
-                'model': used_model_type, # Use the determined model type
+                'model': used_model_type,
                 'dates': predictions_df.index.strftime('%Y-%m-%d').tolist(),
-                'values': predictions_df['Close'].tolist() # Assumes 'Close' column exists
+                'values': predictions_df['close'].tolist()
             }
-            # Add confidence intervals if available (Prophet provides them, Ensemble might not directly)
-            if 'Upper' in predictions_df.columns and 'Lower' in predictions_df.columns:
-                result['confidence'] = {'upper': predictions_df['Upper'].tolist(), 'lower': predictions_df['Lower'].tolist()}
-            else: # Add simple confidence if missing (e.g., for Ensemble)
+            if 'upper' in predictions_df.columns and 'lower' in predictions_df.columns:
+                result['confidence'] = {'upper': predictions_df['upper'].tolist(), 'lower': predictions_df['lower'].tolist()}
+            else: # Add simple confidence if missing
                 result['confidence'] = {'upper': [v*1.05 for v in result['values']], 'lower': [v*0.95 for v in result['values']]}
 
             cleaned_result = handle_nan_values(result)
-            # Return cleaned result or simple fallback if cleaning fails
             return cleaned_result if cleaned_result else create_simple_fallback(symbol, days)
         else:
-            logger.warning(f"Both Prophet and Ensemble failed for {symbol}. Using standard fallback.")
-            return create_fallback_prediction(symbol, days) # Use standard fallback first
+            logger.warning(f"All prediction models failed for {symbol}. Using standard fallback.")
+            return create_fallback_prediction(symbol, days)
 
     except Exception as e:
         logger.error(f"Critical Error in get_price_predictions for {symbol}: {e}")
         logger.error(traceback.format_exc())
-        return create_simple_fallback(symbol, days) # Simplest fallback on major error
+        return create_simple_fallback(symbol, days)
 
 
 def check_prophet_installed():

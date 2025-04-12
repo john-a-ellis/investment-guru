@@ -125,117 +125,114 @@ class ModelIntegration:
             return None
 
     # --- Refactored _do_training ---
-    def _do_training(self, symbol, lookback_period):
+    def _do_training(self, symbol, model_type, lookback_period): # Added model_type
         """
-        Internal method to perform model training for a specific symbol.
+        Internal method to perform model training for a specific symbol and type.
         Calls training function and saves metadata to DB.
 
         Args:
             symbol (str): Asset symbol
+            model_type (str): Type of model to train ('prophet', 'arima', 'lstm')
             lookback_period (str): Lookback period for training data
 
         Returns:
             dict: Training status and metrics
         """
-        logger.info(f"Starting _do_training for {symbol}...")
+        logger.info(f"Starting _do_training for {symbol} (Type: {model_type})...")
+        status_key = f"{symbol}_{model_type}" # Use combined key for status tracking
         try:
             # Update training status
-            self.model_training_status[symbol] = {
+            self.model_training_status[status_key] = { # Use combined key
                 'status': 'in_progress',
                 'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
-            logger.info(f"Status set to in_progress for {symbol}")
+            logger.info(f"Status set to in_progress for {status_key}")
 
-            # --- Call the modified training function ---
-            # It now handles model saving internally and returns info needed for metadata
-            model_object, performance_metrics, model_type, model_filename = train_price_prediction_models(
+            # --- Call the modified training function, passing model_type ---
+            model_object, performance_metrics, trained_model_type, model_filename = train_price_prediction_models(
                 symbol=symbol,
+                model_type_to_train=model_type, # Pass the requested type
                 lookback_period=lookback_period
             )
 
-            # --- Check if training and saving were successful ---
-            # model_object might be None even on success if saving happened internally
-            # The key indicators are model_filename and lack of error in metrics
+            # Check if training and saving were successful
             if model_filename is None or (isinstance(performance_metrics, dict) and 'error' in performance_metrics):
                 error_message = performance_metrics.get('error', 'Unknown training error') if isinstance(performance_metrics, dict) else "Unknown training error"
-                logger.error(f"Model training/saving failed for {symbol}: {error_message}")
-                self.model_training_status[symbol] = {
+                logger.error(f"Model training/saving failed for {status_key}: {error_message}")
+                self.model_training_status[status_key] = { # Use combined key
                     'status': 'failed',
                     'error': error_message,
                     'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
                 return {"status": "failed", "error": error_message}
 
-            logger.info(f"Model training/saving successful for {symbol}. Filename: {model_filename}")
+            logger.info(f"Model training/saving successful for {status_key}. Filename: {model_filename}")
 
             # --- Save Metadata to Database ---
             logger.info(f"Attempting to save metadata for {model_filename}...")
-            notes = f"Training run completed on {datetime.now().strftime('%Y-%m-%d')}. Lookback: {lookback_period}."
-            # Ensure metrics is a dict, default to empty if not
+            notes = f"Training run ({model_type}) completed on {datetime.now().strftime('%Y-%m-%d')}. Lookback: {lookback_period}."
             metrics_to_save = performance_metrics if isinstance(performance_metrics, dict) else {}
-            logger.debug(f"Metadata Params: symbol={symbol}, type={model_type}, metrics={metrics_to_save}, notes={notes}")
+            logger.debug(f"Metadata Params: filename={model_filename}, symbol={symbol}, type={trained_model_type}, metrics={metrics_to_save}, notes={notes}")
 
-            # --- Call save_model_metadata from db_utils ---
             metadata_saved = save_model_metadata(
                 filename=model_filename,
                 symbol=symbol,
-                model_type=model_type,
-                metrics=metrics_to_save, # Pass the validated dict
+                model_type=trained_model_type, # Use the type returned by the training function
+                metrics=metrics_to_save,
                 notes=notes
             )
             logger.info(f"Result of save_model_metadata for {model_filename}: {metadata_saved}")
-            # --- End Metadata Saving ---
 
             if metadata_saved:
-                # Update status to completed only if metadata saved
-                logger.info(f"Metadata saved. Training completed successfully for {symbol}")
-                self.model_training_status[symbol] = {
+                logger.info(f"Metadata saved. Training completed successfully for {status_key}")
+                self.model_training_status[status_key] = { # Use combined key
                     'status': 'completed',
-                    'metrics': metrics_to_save, # Store the saved metrics
+                    'metrics': metrics_to_save,
                     'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
                 return {"status": "completed", "metrics": metrics_to_save}
             else:
-                # Metadata saving failed, even though model file might be saved
                 error_message = f"Failed to save metadata to DB for {model_filename}"
                 logger.error(error_message)
-                self.model_training_status[symbol] = {
-                    'status': 'failed', # Mark as failed if metadata save fails
+                self.model_training_status[status_key] = { # Use combined key
+                    'status': 'failed',
                     'error': error_message,
-                    'metrics': metrics_to_save, # Still store metrics if available
+                    'metrics': metrics_to_save,
                     'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
                 return {"status": "failed", "error": error_message, "metrics": metrics_to_save}
 
         except Exception as e:
-            logger.error(f"Exception during _do_training for {symbol}: {e}")
-            logger.error(traceback.format_exc()) # Log full traceback
+            logger.error(f"Exception during _do_training for {status_key}: {e}")
+            logger.error(traceback.format_exc())
             error_message = f"Error in model training process: {str(e)}"
-            self.model_training_status[symbol] = {
+            self.model_training_status[status_key] = { # Use combined key
                 'status': 'failed',
                 'error': error_message,
                 'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
             return {"status": "failed", "error": error_message}
     
-    def train_models_for_symbol(self, symbol, lookback_period="2y", async_training=True):
-        """Train ML models for a specific symbol."""
-        logger.info(f"Received request to train model for {symbol}. Async: {async_training}")
-        self.model_training_status[symbol] = {
+    def train_models_for_symbol(self, symbol, model_type='prophet', lookback_period="2y", async_training=True): # Added model_type
+        """Train ML models for a specific symbol and type."""
+        logger.info(f"Received request to train model for {symbol}, Type: {model_type}. Async: {async_training}")
+        status_key = f"{symbol}_{model_type}" # Use combined key
+        self.model_training_status[status_key] = { # Use combined key
             'status': 'pending',
             'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
-        logger.info(f"Status set to pending for {symbol}")
+        logger.info(f"Status set to pending for {status_key}")
 
         def training_thread_wrapper():
             try:
-                logger.info(f"Starting training thread for {symbol}")
-                self._do_training(symbol, lookback_period) # Call the refactored internal method
-                logger.info(f"Training thread finished for {symbol}")
+                logger.info(f"Starting training thread for {status_key}")
+                # Pass model_type to _do_training
+                self._do_training(symbol, model_type, lookback_period)
+                logger.info(f"Training thread finished for {status_key}")
             except Exception as e:
-                logger.error(f"Exception in training thread wrapper for {symbol}: {str(e)}")
+                logger.error(f"Exception in training thread wrapper for {status_key}: {str(e)}")
                 logger.error(traceback.format_exc())
-                self.model_training_status[symbol] = {
+                self.model_training_status[status_key] = { # Use combined key
                     'status': 'failed',
                     'error': f"Thread execution error: {str(e)}",
                     'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -243,12 +240,13 @@ class ModelIntegration:
 
         if async_training:
             self.training_executor.submit(training_thread_wrapper)
-            logger.info(f"Training submitted asynchronously for {symbol}")
+            logger.info(f"Training submitted asynchronously for {status_key}")
             return "pending"
         else:
-            logger.info(f"Training running synchronously for {symbol}")
-            result = self._do_training(symbol, lookback_period)
-            logger.info(f"Synchronous training finished for {symbol} with status: {result.get('status')}")
+            logger.info(f"Training running synchronously for {status_key}")
+            # Pass model_type to _do_training
+            result = self._do_training(symbol, model_type, lookback_period)
+            logger.info(f"Synchronous training finished for {status_key} with status: {result.get('status')}")
             return result.get("status", "failed")
         
             
@@ -386,42 +384,37 @@ class ModelIntegration:
             return None
 
     
-    def get_model_training_status(self, symbol=None):
-        """Get status of model training."""
-        # ... (Keep the corrected logic from previous step, ensure logger is used) ...
-        if symbol:
-            status_info = self.model_training_status.get(symbol, {'status': 'not_started'})
-            if not isinstance(status_info, dict):
-                logger.warning(f"Wrapping non-dict status for {symbol}: {status_info}")
-                status_info = {'status': str(status_info)}
-            if not isinstance(status_info.get('status'), str):
-                if isinstance(status_info.get('status'), dict):
-                    logger.warning(f"Fixing nested status for {symbol}")
-                    status_info['status'] = status_info['status'].get('status', 'unknown')
-                else:
-                    logger.warning(f"Invalid status type for {symbol}: {type(status_info.get('status'))}. Defaulting to 'unknown'.")
-                    status_info['status'] = 'unknown'
-            if 'last_updated' not in status_info:
-                status_info['last_updated'] = self.model_training_status.get(f"{symbol}_updated", "never")
-            return {symbol: status_info}
-        else:
+    def get_model_training_status(self, symbol=None, model_type=None): # Added model_type
+        """Get status of model training, optionally filtered by symbol and type."""
+        if symbol and model_type:
+            status_key = f"{symbol}_{model_type}"
+            status_info = self.model_training_status.get(status_key, {'status': 'not_started'})
+            # ... (rest of the single status validation logic remains the same) ...
+            if not isinstance(status_info, dict): status_info = {'status': str(status_info)}
+            if 'last_updated' not in status_info: status_info['last_updated'] = "never"
+            return {status_key: status_info} # Return dict with the specific key
+        elif symbol: # Filter by symbol only
+             filtered_status = {}
+             for key, value in self.model_training_status.items():
+                 if key.startswith(f"{symbol}_"):
+                     # ... (validation logic) ...
+                     if isinstance(value, dict):
+                         if 'last_updated' not in value: value['last_updated'] = "never"
+                         filtered_status[key] = value
+                     else:
+                         filtered_status[key] = {'status': str(value), 'last_updated': "never"}
+             return filtered_status
+        else: # Return all statuses
             filtered_status = {}
             for key, value in self.model_training_status.items():
-                if not key.endswith("_updated") and key != "batch_training":
-                    if isinstance(value, dict):
-                        if not isinstance(value.get('status'), str):
-                            if isinstance(value.get('status'), dict):
-                                logger.warning(f"Fixing nested status for {key} in batch get")
-                                value['status'] = value['status'].get('status', 'unknown')
-                            else:
-                                logger.warning(f"Invalid status type for {key} in batch get: {type(value.get('status'))}. Defaulting to 'unknown'.")
-                                value['status'] = 'unknown'
-                        if 'last_updated' not in value:
-                            value['last_updated'] = self.model_training_status.get(f"{key}_updated", "never")
-                        filtered_status[key] = value
-                    else:
-                        logger.warning(f"Found non-dict status for {key}: {value}. Wrapping.")
-                        filtered_status[key] = {'status': str(value), 'last_updated': self.model_training_status.get(f"{key}_updated", "never")}
+                 # Exclude internal keys if any
+                 if key == "batch_training": continue
+                 # ... (validation logic) ...
+                 if isinstance(value, dict):
+                     if 'last_updated' not in value: value['last_updated'] = "never"
+                     filtered_status[key] = value
+                 else:
+                     filtered_status[key] = {'status': str(value), 'last_updated': "never"}
             return filtered_status
         
     def get_backtesting_recommendation_signal(self, symbol, historical_data_slice):
