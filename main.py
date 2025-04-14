@@ -13,6 +13,7 @@ import json
 import yfinance as yf
 import pandas as pd
 from dash.dependencies import MATCH
+import multiprocessing
 
 # Add the parent directory to sys.path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -1584,4 +1585,5 @@ def display_help_topic(topic_clicks, help_button_clicks):
 register_ml_prediction_callbacks(app)
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support() # For PyInstaller compatibility
     app.run(debug=True)

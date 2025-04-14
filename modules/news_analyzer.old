@@ -1,0 +1,414 @@
+# modules/news_analyzer.py
+import re
+import nltk
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+from nltk.tokenize import word_tokenize
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+from transformers import AutoTokenizer, AutoModelForSequenceClassification 
+import torch
+
+class NewsAnalyzer:
+    """
+    Analyzes financial news and social media sentiment to identify market-moving events.
+    """
+    
+    def __init__(self):
+        # Download required NLTK resources
+        try:
+            nltk.data.find('tokenizers/punkt')
+        except LookupError:
+            nltk.download('punkt')
+            
+        try:
+            nltk.data.find('corpora/stopwords')
+        except LookupError:
+            nltk.download('stopwords')
+            
+        try:
+            nltk.data.find('corpora/wordnet')
+        except LookupError:
+            nltk.download('wordnet')
+            
+        # try:
+        #     nltk.data.find('sentiment/vader_lexicon')
+        # except LookupError:
+        #     nltk.download('vader_lexicon')
+        
+        # Initialize FinBERT model and tokenizer # Add
+        self.finbert_tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
+        self.finbert_model = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert")
+
+        # Initialize sentiment analyzer
+        # self.sia = SentimentIntensityAnalyzer()
+        self.stop_words = set(stopwords.words('english'))
+        self.lemmatizer = WordNetLemmatizer()
+        
+        # Initialize company and sector keywords
+        self.company_keywords = {
+            "AAPL": ["apple", "iphone", "ipad", "macbook", "tim cook"],
+            "MSFT": ["microsoft", "azure", "windows", "office", "satya nadella"],
+            "AMZN": ["amazon", "aws", "bezos", "prime", "jassy"],
+            "GOOG": ["google", "alphabet", "pichai", "android", "youtube"],
+            "META": ["facebook", "meta", "instagram", "zuckerberg", "whatsapp"]
+        }
+        
+        self.sector_keywords = {
+            "Technology": ["tech", "software", "hardware", "semiconductor", "cloud"],
+            "Healthcare": ["health", "pharma", "biotech", "medical", "drug"],
+            "Finance": ["bank", "finance", "investment", "loan", "mortgage", "interest rate"],
+            "Energy": ["oil", "gas", "energy", "renewable", "solar", "wind"],
+            "Consumer": ["retail", "consumer", "e-commerce", "shopping", "goods"]
+        }
+        
+    def preprocess_text(self, text):
+        """
+        Preprocess text by removing special characters, tokenizing, removing stop words, and lemmatizing.
+        
+        Args:
+            text (str): Text to preprocess
+            
+        Returns:
+            list: List of processed tokens
+        """
+        # Convert to lowercase and remove special characters
+        text = text.lower()
+        text = re.sub(r'[^\w\s]', '', text)
+        
+        # Tokenize
+        tokens = word_tokenize(text)
+        
+        # Remove stop words and lemmatize
+        tokens = [self.lemmatizer.lemmatize(token) for token in tokens if token not in self.stop_words]
+        
+        return tokens
+    
+    # def analyze_sentiment(self, text):
+    #     """
+    #     Analyze sentiment of text.
+        
+    #     Args:
+    #         text (str): Text to analyze
+            
+    #     Returns:
+    #         dict: Sentiment scores
+    #     """
+    #     sentiment = self.sia.polarity_scores(text)
+        
+    #     # Categorize sentiment
+    #     if sentiment['compound'] >= 0.05:
+    #         sentiment['category'] = 'positive'
+    #     elif sentiment['compound'] <= -0.05:
+    #         sentiment['category'] = 'negative'
+    #     else:
+    #         sentiment['category'] = 'neutral'
+            
+    #     return sentiment
+    
+    # def identify_entities(self, text):
+    #     """
+    #     Identify companies and sectors mentioned in text.
+        
+    #     Args:
+    #         text (str): Text to analyze
+            
+    #     Returns:
+    #         dict: Identified entities
+    #     """
+    #     text_lower = text.lower()
+    #     entities = {
+    #         'companies': [],
+    #         'sectors': []
+    #     }
+        
+    #     # Identify companies
+    #     for company, keywords in self.company_keywords.items():
+    #         for keyword in keywords:
+    #             if keyword in text_lower:
+    #                 if company not in entities['companies']:
+    #                     entities['companies'].append(company)
+    #                 break
+        
+    #     # Identify sectors
+    #     for sector, keywords in self.sector_keywords.items():
+    #         for keyword in keywords:
+    #             if keyword in text_lower:
+    #                 if sector not in entities['sectors']:
+    #                     entities['sectors'].append(sector)
+    #                 break
+                    
+    #     return entities
+    def analyze_sentiment(self, text):
+        """
+        Analyze sentiment of text using FinBERT.
+
+        Args:
+            text (str): Text to analyze
+
+        Returns:
+            dict: Sentiment scores {'category': str, 'score': float, 'raw_scores': dict}
+        """
+        if not text or not isinstance(text, str):
+            return {'category': 'neutral', 'score': 0.0, 'raw_scores': {'positive': 0.0, 'negative': 0.0, 'neutral': 0.0}}
+
+        # Tokenize text for FinBERT
+        inputs = self.finbert_tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=512)
+        # Optional: Move inputs to the same device as the model
+        # inputs = {k: v.to(self.device) for k, v in inputs.items()}
+
+        # Get model predictions
+        with torch.no_grad(): # Disable gradient calculation for inference
+            outputs = self.finbert_model(**inputs)
+            logits = outputs.logits
+
+        # Convert logits to probabilities (softmax)
+        probabilities = torch.softmax(logits, dim=-1).squeeze() # Use squeeze() to remove batch dim if batch size is 1
+
+        # Assuming the model labels are [positive, negative, neutral] for ProsusAI/finbert
+        # Verify the label order with model.config.id2label if unsure
+        # labels = self.finbert_model.config.id2label
+        # print(f"Model labels: {labels}") # Uncomment to check label order
+
+        # Get scores for each category
+        # Adjust indices based on actual model output label order
+        score_positive = probabilities[0].item() # Index 0 might be positive
+        score_negative = probabilities[1].item() # Index 1 might be negative
+        score_neutral = probabilities[2].item()  # Index 2 might be neutral
+
+        # Determine category based on highest probability
+        max_prob = max(score_positive, score_negative, score_neutral)
+        if max_prob == score_positive:
+            category = 'positive'
+            final_score = score_positive # Or use a compound-like score if needed
+        elif max_prob == score_negative:
+            category = 'negative'
+            final_score = -score_negative # Make negative scores negative
+        else:
+            category = 'neutral'
+            final_score = score_neutral # Or 0.0
+
+        # Return results in a compatible format
+        return {
+            'category': category,
+            'score': final_score, # Provide a single score if needed, or adjust based on requirements
+            'raw_scores': { # Keep raw probabilities for potential downstream use
+                'positive': score_positive,
+                'negative': score_negative,
+                'neutral': score_neutral
+            }
+        }
+
+    
+    def analyze_news_article(self, article):
+        """
+        Analyze a single news article.
+        
+        Args:
+            article (dict): News article data
+            
+        Returns:
+            dict: Analysis results
+        """
+        if 'title' not in article or 'description' not in article:
+            return None
+            
+        # Combine title and description for analysis
+        text = article['title'] + ". " + (article['description'] or "")
+        
+        # Preprocess text
+        processed_tokens = self.preprocess_text(text)
+        
+        # Analyze sentiment
+        sentiment = self.analyze_sentiment(text)
+        
+        # Identify entities
+        entities = self.identify_entities(text)
+        
+        # Determine market impact
+        impact = 'neutral'
+        if sentiment['category'] == 'positive' and entities['companies'] or entities['sectors']:
+            impact = 'positive'
+        elif sentiment['category'] == 'negative' and entities['companies'] or entities['sectors']:
+            impact = 'negative'
+            
+        # Calculate relevance score
+        relevance = 0.5  # Default
+        if entities['companies'] and entities['sectors']:
+            relevance = 0.8
+        elif entities['companies'] or entities['sectors']:
+            relevance = 0.6
+
+            # Add analysis results
+        analysis = {
+            'title': article['title'],
+            'description': article['description'],
+            'date': article.get('publishedAt', ''),
+            'source': article.get('source', {}).get('name', ''),
+            'url': article.get('url', ''),
+            'sentiment': sentiment,
+            'entities': entities,
+            'impact': impact,
+            'relevance': relevance
+        }
+        
+        return analysis
+    
+    def analyze_recent_news(self, news_articles=None):
+        """
+        Analyze recent financial news articles.
+        
+        Args:
+            news_articles (list): List of news articles to analyze
+            
+        Returns:
+            list: Analyzed news with impact assessment
+        """
+        from modules.data_collector import DataCollector
+        
+        if news_articles is None:
+            # Get recent news using the DataCollector
+            data_collector = DataCollector()
+            news_articles = data_collector.get_latest_news()
+        
+        analyzed_news = []
+        for article in news_articles:
+            analysis = self.analyze_news_article(article)
+            if analysis:
+                analyzed_news.append(analysis)
+        
+        # Sort by relevance
+        analyzed_news.sort(key=lambda x: x['relevance'], reverse=True)
+        
+        return analyzed_news
+    
+    def identify_market_events(self, analyzed_news):
+        """
+        Identify significant market events from analyzed news.
+        
+        Args:
+            analyzed_news (list): List of analyzed news articles
+            
+        Returns:
+            list: Significant market events
+        """
+        events = []
+        
+        # Group news by entities
+        company_news = {}
+        sector_news = {}
+        
+        for news in analyzed_news:
+            # Group by companies
+            for company in news['entities']['companies']:
+                if company not in company_news:
+                    company_news[company] = []
+                company_news[company].append(news)
+            
+            # Group by sectors
+            for sector in news['entities']['sectors']:
+                if sector not in sector_news:
+                    sector_news[sector] = []
+                sector_news[sector].append(news)
+        
+        # Identify company-specific events
+        for company, news_list in company_news.items():
+            # Check if there are multiple high-relevance news items
+            if len([n for n in news_list if n['relevance'] > 0.7]) >= 2:
+                # Check sentiment consistency
+                sentiments = [n['sentiment']['category'] for n in news_list]
+                if sentiments.count('positive') > len(sentiments) * 0.7:
+                    events.append({
+                        'type': 'company',
+                        'entity': company,
+                        'event': 'positive_trend',
+                        'confidence': 0.8,
+                        'news': news_list
+                    })
+                elif sentiments.count('negative') > len(sentiments) * 0.7:
+                    events.append({
+                        'type': 'company',
+                        'entity': company,
+                        'event': 'negative_trend',
+                        'confidence': 0.8,
+                        'news': news_list
+                    })
+        
+        # Identify sector-specific events
+        for sector, news_list in sector_news.items():
+            # Check if there are multiple high-relevance news items
+            if len([n for n in news_list if n['relevance'] > 0.7]) >= 3:
+                # Check sentiment consistency
+                sentiments = [n['sentiment']['category'] for n in news_list]
+                if sentiments.count('positive') > len(sentiments) * 0.6:
+                    events.append({
+                        'type': 'sector',
+                        'entity': sector,
+                        'event': 'positive_trend',
+                        'confidence': 0.7,
+                        'news': news_list
+                    })
+                elif sentiments.count('negative') > len(sentiments) * 0.6:
+                    events.append({
+                        'type': 'sector',
+                        'entity': sector,
+                        'event': 'negative_trend',
+                        'confidence': 0.7,
+                        'news': news_list
+                    })
+        
+        return events
+    
+# def analyze_news_sentiment(article_text):
+#     """
+#     Perform basic sentiment analysis on news article text.
+    
+#     Args:
+#         article_text (str): Combined title and description text
+        
+#     Returns:
+#         dict: Sentiment analysis result with sentiment and score
+#     """
+#     # Simple keyword-based sentiment analysis
+#     positive_words = [
+#         'gain', 'gains', 'rise', 'rises', 'rising', 'up', 'upward', 'growth', 'grew', 'growing',
+#         'positive', 'profit', 'profitable', 'success', 'successful', 'bullish', 'strong', 'stronger',
+#         'rally', 'rallies', 'recover', 'recovery', 'climb', 'climbs', 'climbing', 'surge', 'surges',
+#         'high', 'higher', 'record', 'exceed', 'exceeds', 'beat', 'beats', 'outperform', 'increase',
+#         'increases', 'boost', 'boosts', 'upgrade', 'upgrades', 'buy', 'opportunity', 'opportunities'
+#     ]
+    
+#     negative_words = [
+#         'loss', 'losses', 'fall', 'falls', 'falling', 'down', 'downward', 'decline', 'declines',
+#         'negative', 'deficit', 'weak', 'weaker', 'bearish', 'poor', 'plunge', 'plunges', 'drop',
+#         'drops', 'shrink', 'shrinks', 'shrinking', 'slump', 'slumps', 'slide', 'slides', 'tumble',
+#         'tumbles', 'low', 'lower', 'miss', 'misses', 'fail', 'fails', 'disappoint', 'disappoints',
+#         'underperform', 'decrease', 'decreases', 'cut', 'cuts', 'downgrade', 'downgrades', 'sell',
+#         'warning', 'warnings', 'risk', 'risks', 'concern', 'concerns', 'worried', 'worry', 'worries'
+#     ]
+    
+#     # Convert text to lowercase and split into words
+#     words = article_text.lower().split()
+    
+#     # Count positive and negative words
+#     positive_count = sum(1 for word in words if word in positive_words)
+#     negative_count = sum(1 for word in words if word in negative_words)
+    
+#     # Calculate sentiment score (-1 to 1)
+#     total_count = positive_count + negative_count
+#     if total_count > 0:
+#         sentiment_score = (positive_count - negative_count) / total_count
+#     else:
+#         sentiment_score = 0
+    
+#     # Determine sentiment category
+#     if sentiment_score > 0.2:
+#         sentiment = "positive"
+#     elif sentiment_score < -0.2:
+#         sentiment = "negative"
+#     else:
+#         sentiment = "neutral"
+    
+#     return {
+#         "sentiment": sentiment,
+#         "score": sentiment_score
+#     }
