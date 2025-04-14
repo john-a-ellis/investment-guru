@@ -117,22 +117,37 @@ def register_ml_prediction_callbacks(app):
     model_integration = ModelIntegration()
 
     @app.callback(
-        Output("delete-model-confirm", "displayed"),
-        Output("delete-model-confirm", "message"), # Store filename in message
-        Output("model-delete-feedback", "children"),
-        Output("trained-models-table", "children", allow_duplicate=True), # Refresh table
-        Input({"type": "delete-model-button", "filename": dash.ALL}, "n_clicks"),
-        Input("delete-model-confirm", "submit_n_clicks"),
-        State({"type": "delete-model-button", "filename": dash.ALL}, "id"),
-        State("delete-model-confirm", "message"), # Get filename from message
-        prevent_initial_call=True
-    )
+    Output("delete-model-confirm", "displayed"),
+    Output("delete-model-confirm", "message"),
+    Output("model-delete-feedback", "children"),
+    Output("trained-models-table", "children", allow_duplicate=True),
+    Input({"type": "delete-model-button", "filename": dash.ALL}, "n_clicks"),
+    Input("delete-model-confirm", "submit_n_clicks"),
+    State({"type": "delete-model-button", "filename": dash.ALL}, "id"),
+    State("delete-model-confirm", "message"),
+    prevent_initial_call=True
+)
     def handle_delete_model(delete_clicks, confirm_clicks, button_ids, confirm_message):
+        # Get the component that triggered the callback
         triggered_id = ctx.triggered_id
+        
+        # Initialize default outputs
         feedback = None
         confirm_displayed = False
-        new_confirm_message = dash.no_update # Keep message unless delete button clicked
-        table_output = dash.no_update # Don't update table unless confirmed
+        new_confirm_message = dash.no_update  # Keep message unless delete button clicked
+        table_output = dash.no_update  # Don't update table unless confirmed
+        
+        # Skip processing if neither delete button nor confirm dialog triggered the callback
+        if triggered_id is None:
+            raise PreventUpdate
+            
+        # Check if triggered_id is a dict (pattern-matching callback)
+        is_delete_button = isinstance(triggered_id, dict) and triggered_id.get("type") == "delete-model-button"
+        is_confirm_dialog = triggered_id == "delete-model-confirm"
+        
+        # If neither a delete button nor the confirm dialog triggered this, do nothing
+        if not (is_delete_button or is_confirm_dialog):
+            raise PreventUpdate
 
         # --- Import the delete function ---
         from modules.db_utils import delete_model_metadata
@@ -141,7 +156,7 @@ def register_ml_prediction_callbacks(app):
         model_dir = "models"
 
         # Check if a delete button was clicked
-        if isinstance(triggered_id, dict) and triggered_id.get("type") == "delete-model-button":
+        if is_delete_button:
             filename_to_delete = triggered_id.get("filename")
             if filename_to_delete:
                 # Display confirmation dialog
@@ -151,7 +166,7 @@ def register_ml_prediction_callbacks(app):
                 logger.info(f"Delete requested for {filename_to_delete}. Displaying confirmation.")
 
         # Check if the confirmation dialog was submitted
-        elif triggered_id == "delete-model-confirm" and confirm_clicks and confirm_clicks > 0:
+        elif is_confirm_dialog and confirm_clicks and confirm_clicks > 0:
             # Extract filename from the message
             # Example message: "Are you sure you want to delete model 'arima_CGL.TO.pkl' and its record?"
             try:
@@ -165,19 +180,19 @@ def register_ml_prediction_callbacks(app):
             if filename_to_delete:
                 db_deleted = False
                 file_deleted = False
-                scaler_deleted = True # Assume true unless LSTM scaler fails
+                scaler_deleted = True  # Assume true unless LSTM scaler fails
 
                 # 1. Delete from Database
                 try:
                     db_deleted = delete_model_metadata(filename_to_delete)
                     if not db_deleted:
-                         logger.error(f"DB deletion failed for {filename_to_delete} (check db_utils logs).")
+                        logger.error(f"DB deletion failed for {filename_to_delete} (check db_utils logs).")
                 except Exception as db_err:
                     logger.error(f"Exception during DB deletion for {filename_to_delete}: {db_err}")
                     feedback = dbc.Alert(f"Error deleting database record for {filename_to_delete}: {db_err}", color="danger")
 
                 # 2. Delete Model File(s)
-                if db_deleted: # Only delete files if DB record was removed
+                if db_deleted:  # Only delete files if DB record was removed
                     model_path = os.path.join(model_dir, filename_to_delete)
                     scaler_path = None
                     if filename_to_delete.startswith("lstm_") and filename_to_delete.endswith(".h5"):
@@ -191,7 +206,7 @@ def register_ml_prediction_callbacks(app):
                             file_deleted = True
                         else:
                             logger.warning(f"Model file not found, assuming already deleted: {model_path}")
-                            file_deleted = True # Consider it success if file is gone
+                            file_deleted = True  # Consider it success if file is gone
 
                         if scaler_path:
                             if os.path.exists(scaler_path):
@@ -206,7 +221,7 @@ def register_ml_prediction_callbacks(app):
                         logger.error(f"Error deleting file(s) for {filename_to_delete}: {file_err}")
                         feedback = dbc.Alert(f"Error deleting file(s) for {filename_to_delete}: {file_err}", color="danger")
                         file_deleted = False
-                        scaler_deleted = False # Mark as failed if error occurs
+                        scaler_deleted = False  # Mark as failed if error occurs
 
                 # 3. Provide Feedback and Refresh Table
                 if db_deleted and file_deleted and scaler_deleted:
@@ -216,17 +231,13 @@ def register_ml_prediction_callbacks(app):
                         models_df = get_trained_models_data()
                         table_output = create_trained_models_table(models_df)
                     except Exception as refresh_err:
-                         logger.error(f"Error refreshing model table after deletion: {refresh_err}")
-                         table_output = dbc.Alert("Error refreshing table.", color="warning")
-                elif not db_deleted and feedback is None: # If DB delete failed silently
-                     feedback = dbc.Alert(f"Failed to delete database record for {filename_to_delete}. File deletion skipped.", color="danger")
-                elif not file_deleted and feedback is None: # If file delete failed
-                     feedback = dbc.Alert(f"Database record deleted, but failed to delete model file for {filename_to_delete}.", color="warning")
+                        logger.error(f"Error refreshing model table after deletion: {refresh_err}")
+                        table_output = dbc.Alert("Error refreshing table.", color="warning")
+                elif not db_deleted and feedback is None:  # If DB delete failed silently
+                    feedback = dbc.Alert(f"Failed to delete database record for {filename_to_delete}. File deletion skipped.", color="danger")
+                elif not file_deleted and feedback is None:  # If file delete failed
+                    feedback = dbc.Alert(f"Database record deleted, but failed to delete model file for {filename_to_delete}.", color="warning")
                 # Keep existing feedback if already set by specific errors
-
-        # Prevent update if no relevant trigger
-        if not confirm_displayed and triggered_id != "delete-model-confirm":
-            raise PreventUpdate
 
         return confirm_displayed, new_confirm_message, feedback, table_output
 
