@@ -346,5 +346,39 @@ def save_model_metadata(filename, symbol, model_type, metrics, notes=None):
         logger.error(traceback.format_exc()) # Log full traceback
         return False
 
+def delete_model_metadata(filename):
+    """
+    Deletes a specific trained model record from the database.
 
+    Args:
+        filename (str): The unique filename of the model to delete.
+
+    Returns:
+        bool: True if deletion was successful or record didn't exist, False otherwise.
+    """
+    if not filename:
+        logger.error("Attempted to delete model metadata with empty filename.")
+        return False
+
+    logger.info(f"Attempting to delete model metadata for: {filename}")
+    delete_query = "DELETE FROM trained_models WHERE model_filename = %s;"
+    params = (filename,)
+
+    try:
+        # Execute query with commit=True
+        # execute_query returns True on successful commit, False/None on error
+        success = execute_query(delete_query, params, commit=True)
+
+        if success:
+            logger.info(f"Successfully deleted metadata record for {filename} (or it didn't exist).")
+            return True
+        else:
+            # execute_query logs the specific error
+            logger.error(f"Failed to delete metadata record for {filename} (execute_query returned False/None).")
+            return False
+    except Exception as e:
+        # Catch errors if execute_query itself raises an exception
+        logger.error(f"Exception during execute_query call for deleting {filename} metadata: {e}")
+        logger.error(traceback.format_exc())
+        return False
 # --- END OF db_utils.py modifications ---

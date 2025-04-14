@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 import time
 import logging
 import traceback
-import json
+import json, sys, os
 from dash.exceptions import PreventUpdate
 
 # Import custom modules for ML predictions and analysis
@@ -25,8 +25,7 @@ from modules.portfolio_utils import load_tracked_assets, load_portfolio, record_
 from modules.data_provider import data_provider
 
 # Import the function to get trained model data
-import sys
-import os
+
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 try:
     from modules.db_utils import get_trained_models_data
@@ -43,7 +42,6 @@ logger = logging.getLogger(__name__)
 
 # --- HELPER FUNCTION TO CREATE THE TRAINED MODELS TABLE ---
 def create_trained_models_table(models_df):
-    """Creates a dbc.Table from the trained models DataFrame."""
     if not isinstance(models_df, pd.DataFrame) or models_df.empty:
         return dbc.Alert("No trained model data found in the database.", color="info")
 
@@ -53,15 +51,16 @@ def create_trained_models_table(models_df):
         html.Thead(html.Tr([
             html.Th("Filename"), html.Th("Symbol"), html.Th("Type"),
             html.Th("Training Date"), html.Th("Key Metrics"),
-            html.Th("Notes", style={'maxWidth': '200px'})
+            html.Th("Notes", style={'maxWidth': '200px'}),
+            html.Th("Actions", style={'width': '80px'}) # <-- ADDED Actions column
         ]))
     ]
 
-    # --- MOVED CODE BLOCK STARTS HERE ---
     rows = []
     for index, row in models_df.iterrows():
         metrics_dict = row.get('metrics', {})
         metrics_display_items = []
+        # ... (metrics formatting logic remains the same) ...
         if isinstance(metrics_dict, dict):
             for key in metrics_to_display:
                 if key in metrics_dict:
@@ -84,10 +83,27 @@ def create_trained_models_table(models_df):
         metrics_cell = html.Td(html.Ul(metrics_display_items, style={'paddingLeft': '15px', 'marginBottom': '0', 'listStyleType': 'none'}))
         notes = row.get('notes', '')
         truncated_notes = (notes[:100] + '...') if notes and len(notes) > 100 else notes
+        filename = row.get('model_filename', '') # Get filename for button ID
+
+        # --- ADDED Delete Button ---
+        delete_button = dbc.Button(
+            # html.I(className="bi bi-trash-fill"), # Use Bootstrap icon
+            id={"type": "delete-model-button", "filename": filename},
+            color="danger",
+            size="sm",
+            n_clicks=0,
+            disabled=not filename # Disable if filename is missing
+        ) if filename else None
+        # --- END Delete Button ---
+
         rows.append(html.Tr([
-            html.Td(row.get('model_filename', 'N/A')), html.Td(row.get('symbol', 'N/A')),
-            html.Td(row.get('model_type', 'N/A')), html.Td(row.get('training_date', 'N/A')),
-            metrics_cell, html.Td(truncated_notes, title=notes if truncated_notes != notes else '')
+            html.Td(filename if filename else 'N/A'),
+            html.Td(row.get('symbol', 'N/A')),
+            html.Td(row.get('model_type', 'N/A')),
+            html.Td(row.get('training_date', 'N/A')),
+            metrics_cell,
+            html.Td(truncated_notes, title=notes if truncated_notes != notes else ''),
+            html.Td(delete_button) # <-- ADDED Button cell
         ]))
     body = [html.Tbody(rows)]
     return dbc.Table(header + body, bordered=True, striped=True, hover=True, responsive=True, size="sm")
@@ -99,6 +115,120 @@ def register_ml_prediction_callbacks(app):
     """
     # Initialize model integration
     model_integration = ModelIntegration()
+
+    @app.callback(
+        Output("delete-model-confirm", "displayed"),
+        Output("delete-model-confirm", "message"), # Store filename in message
+        Output("model-delete-feedback", "children"),
+        Output("trained-models-table", "children", allow_duplicate=True), # Refresh table
+        Input({"type": "delete-model-button", "filename": dash.ALL}, "n_clicks"),
+        Input("delete-model-confirm", "submit_n_clicks"),
+        State({"type": "delete-model-button", "filename": dash.ALL}, "id"),
+        State("delete-model-confirm", "message"), # Get filename from message
+        prevent_initial_call=True
+    )
+    def handle_delete_model(delete_clicks, confirm_clicks, button_ids, confirm_message):
+        triggered_id = ctx.triggered_id
+        feedback = None
+        confirm_displayed = False
+        new_confirm_message = dash.no_update # Keep message unless delete button clicked
+        table_output = dash.no_update # Don't update table unless confirmed
+
+        # --- Import the delete function ---
+        from modules.db_utils import delete_model_metadata
+
+        # --- Define model directory ---
+        model_dir = "models"
+
+        # Check if a delete button was clicked
+        if isinstance(triggered_id, dict) and triggered_id.get("type") == "delete-model-button":
+            filename_to_delete = triggered_id.get("filename")
+            if filename_to_delete:
+                # Display confirmation dialog
+                confirm_displayed = True
+                # Store the filename in the message property (simple state management)
+                new_confirm_message = f"Are you sure you want to delete model '{filename_to_delete}' and its record?"
+                logger.info(f"Delete requested for {filename_to_delete}. Displaying confirmation.")
+
+        # Check if the confirmation dialog was submitted
+        elif triggered_id == "delete-model-confirm" and confirm_clicks and confirm_clicks > 0:
+            # Extract filename from the message
+            # Example message: "Are you sure you want to delete model 'arima_CGL.TO.pkl' and its record?"
+            try:
+                filename_to_delete = confirm_message.split("'")[1]
+                logger.info(f"Confirmation received to delete {filename_to_delete}")
+            except (IndexError, TypeError):
+                filename_to_delete = None
+                feedback = dbc.Alert("Error: Could not determine which model to delete from confirmation.", color="danger")
+                logger.error("Could not parse filename from confirmation message.")
+
+            if filename_to_delete:
+                db_deleted = False
+                file_deleted = False
+                scaler_deleted = True # Assume true unless LSTM scaler fails
+
+                # 1. Delete from Database
+                try:
+                    db_deleted = delete_model_metadata(filename_to_delete)
+                    if not db_deleted:
+                         logger.error(f"DB deletion failed for {filename_to_delete} (check db_utils logs).")
+                except Exception as db_err:
+                    logger.error(f"Exception during DB deletion for {filename_to_delete}: {db_err}")
+                    feedback = dbc.Alert(f"Error deleting database record for {filename_to_delete}: {db_err}", color="danger")
+
+                # 2. Delete Model File(s)
+                if db_deleted: # Only delete files if DB record was removed
+                    model_path = os.path.join(model_dir, filename_to_delete)
+                    scaler_path = None
+                    if filename_to_delete.startswith("lstm_") and filename_to_delete.endswith(".h5"):
+                        scaler_filename = filename_to_delete.replace(".h5", "_scaler.pkl")
+                        scaler_path = os.path.join(model_dir, scaler_filename)
+
+                    try:
+                        if os.path.exists(model_path):
+                            os.remove(model_path)
+                            logger.info(f"Deleted model file: {model_path}")
+                            file_deleted = True
+                        else:
+                            logger.warning(f"Model file not found, assuming already deleted: {model_path}")
+                            file_deleted = True # Consider it success if file is gone
+
+                        if scaler_path:
+                            if os.path.exists(scaler_path):
+                                os.remove(scaler_path)
+                                logger.info(f"Deleted scaler file: {scaler_path}")
+                                scaler_deleted = True
+                            else:
+                                logger.warning(f"Scaler file not found, assuming already deleted: {scaler_path}")
+                                scaler_deleted = True
+
+                    except OSError as file_err:
+                        logger.error(f"Error deleting file(s) for {filename_to_delete}: {file_err}")
+                        feedback = dbc.Alert(f"Error deleting file(s) for {filename_to_delete}: {file_err}", color="danger")
+                        file_deleted = False
+                        scaler_deleted = False # Mark as failed if error occurs
+
+                # 3. Provide Feedback and Refresh Table
+                if db_deleted and file_deleted and scaler_deleted:
+                    feedback = dbc.Alert(f"Successfully deleted model {filename_to_delete}.", color="success")
+                    # Refresh the table data
+                    try:
+                        models_df = get_trained_models_data()
+                        table_output = create_trained_models_table(models_df)
+                    except Exception as refresh_err:
+                         logger.error(f"Error refreshing model table after deletion: {refresh_err}")
+                         table_output = dbc.Alert("Error refreshing table.", color="warning")
+                elif not db_deleted and feedback is None: # If DB delete failed silently
+                     feedback = dbc.Alert(f"Failed to delete database record for {filename_to_delete}. File deletion skipped.", color="danger")
+                elif not file_deleted and feedback is None: # If file delete failed
+                     feedback = dbc.Alert(f"Database record deleted, but failed to delete model file for {filename_to_delete}.", color="warning")
+                # Keep existing feedback if already set by specific errors
+
+        # Prevent update if no relevant trigger
+        if not confirm_displayed and triggered_id != "delete-model-confirm":
+            raise PreventUpdate
+
+        return confirm_displayed, new_confirm_message, feedback, table_output
 
     # --- (Keep update_asset_options as is) ---
     @app.callback(
@@ -630,25 +760,30 @@ def create_ml_prediction_component():
             html.P("Machine learning predictions, technical analysis, and model overview", className="card-subtitle")
         ]),
         dbc.CardBody([
+            # --- ADDED Confirmation Dialog and Feedback Div ---
+            dcc.ConfirmDialog(
+                id='delete-model-confirm',
+                message='Are you sure you want to delete this model file and its record?',
+            ),
+            html.Div(id="model-delete-feedback"),
+            # --- END Additions ---
             dbc.Tabs(id="ml-prediction-tabs", active_tab="price-prediction-tab", children=[
+                # ... (Tabs 1, 2, 3 remain the same) ...
                 # Tab 1: Price Prediction
                 dbc.Tab(label="Price Prediction", tab_id="price-prediction-tab", children=[
                     dbc.Row([
                         dbc.Col([
                             dbc.Label("Select Asset"),
-                            dbc.InputGroup([
-                                dbc.Select(id="ml-asset-selector", placeholder="Select an asset to analyze"),
-                                dbc.Button("Analyze", id="ml-analyze-button", color="primary")
-                            ]),
-                        ], width=3),
+                            dbc.Select(id="ml-asset-selector", placeholder="Select an asset to analyze"),
+                        ], width=4), # Adjusted width
                         dbc.Col([
-                        dbc.Label("Use Specific Model (Optional)"),
-                        dbc.Select(
-                            id="ml-specific-model-selector", # <-- ID Definition
-                            placeholder="Auto-Select Model (Default)",
-                            value="auto"
-                        ),
-                        ], width=3),
+                            dbc.Label("Use Specific Model (Optional)"),
+                            dbc.Select(
+                                id="ml-specific-model-selector",
+                                placeholder="Auto-Select Model (Default)",
+                                value="auto" # Default value
+                            ),
+                        ], width=3), # Adjusted width
                         dbc.Col([
                             dbc.Label("Prediction Horizon"),
                             dbc.RadioItems(
@@ -656,18 +791,19 @@ def create_ml_prediction_component():
                                 options=[{"label": "30 Days", "value": 30}, {"label": "60 Days", "value": 60}, {"label": "90 Days", "value": 90}],
                                 value=30, inline=True
                             )
-                        ], width=3)
-                    ], className="mb-3"),
+                        ], width=3), # Adjusted width
+                        dbc.Col([
+                             dbc.Button("Analyze", id="ml-analyze-button", color="primary", className="w-100", style={"marginTop": "32px"}) # Align button
+                        ], width=2) # Adjusted width
+                    ], className="mb-3 align-items-end"), # Align items vertically
                     dbc.Spinner([dcc.Graph(id="ml-prediction-chart")], color="primary", type="border", fullscreen=False),
                     html.Div(id="ml-prediction-details", className="mt-3"),
                     dcc.Store(id="ml-prediction-data")
                 ]),
-
                 # Tab 2: Technical Analysis
                 dbc.Tab(label="Technical Analysis", tab_id="technical-analysis-tab", children=[
                     dbc.Row([dbc.Col([dbc.Spinner([html.Div(id="trend-analysis-content")], color="primary", type="border")], width=12)])
                 ]),
-
                 # Tab 3: Portfolio Insights
                 dbc.Tab(label="Portfolio Insights", tab_id="portfolio-insights-tab", children=[
                     dbc.Row([dbc.Col([
@@ -675,8 +811,7 @@ def create_ml_prediction_component():
                         dbc.Spinner([html.Div(id="ml-portfolio-insights")], color="primary", type="border")
                     ], width=12)])
                 ]),
-
-                # Tab 4: Model Training (Enhanced with model type selection)
+                # Tab 4: Model Training
                 dbc.Tab(label="Model Training", tab_id="model-training-tab", children=[
                     # Trained Model Overview
                     html.Div([
@@ -686,12 +821,13 @@ def create_ml_prediction_component():
                             color="secondary", size="sm", className="mb-3", n_clicks=0
                         ),
                         html.Div(id="trained-models-table-container", children=[
-                            dbc.Spinner(html.Div(id="trained-models-table"))
+                            dbc.Spinner(html.Div(id="trained-models-table")) # Table is rendered here
                         ]),
                     ]),
                     html.Hr(),
-                    # Training Controls & Status with model type selection
+                    # Training Controls & Status
                     html.Div([
+                        # ... (Training controls remain the same) ...
                         html.H5("Train New Model / View Status"),
                         dbc.Row([
                             dbc.Col([

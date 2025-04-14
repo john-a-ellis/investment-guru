@@ -200,19 +200,44 @@ class ARIMAModel(PricePredictionModel):
             return pd.DataFrame()
         try:
             pred_days = days if days is not None else self.prediction_days
-            last_date = historical_data.index[-1]
-            future_dates = pd.date_range(start=last_date + timedelta(days=1), periods=pred_days)
+
+            # --- Get the last date from the model's training data ---
+            # The fitted model object often stores info about the original data
+            if not hasattr(self.model, 'data') or not hasattr(self.model.data, 'endog') or not isinstance(self.model.data.endog.index, pd.DatetimeIndex):
+                 # Fallback: Use the end date of the input historical_data if model index is unavailable
+                 logger.warning(f"Could not get last training date from ARIMA model object for {self.symbol}. Falling back to historical_data end date.")
+                 if historical_data.empty or not isinstance(historical_data.index, pd.DatetimeIndex):
+                      raise ValueError("Cannot determine prediction start date: Model index unavailable and historical_data index invalid.")
+                 last_training_date = historical_data.index[-1]
+            else:
+                 last_training_date = self.model.data.endog.index[-1]
+                 logger.debug(f"Last training date from model object: {last_training_date}")
+
+
+            # --- Generate future dates starting AFTER the last training date ---
+            # Assuming daily frequency ('D'). Use 'B' for business days if more appropriate and data is business days only.
+            try:
+                future_dates = pd.date_range(start=last_training_date + timedelta(days=1), periods=pred_days, freq='D')
+                logger.debug(f"Generated future dates from {future_dates[0]} to {future_dates[-1]}")
+            except Exception as date_err:
+                 raise ValueError(f"Error generating future date range: {date_err}")
+
 
             # Use get_forecast for future predictions
             forecast_result = self.model.get_forecast(steps=pred_days)
             forecast_values = forecast_result.predicted_mean
-            conf_int = forecast_result.conf_int(alpha=0.05) # 95% confidence interval
+            conf_int = forecast_result.conf_int(alpha=0.05)
+
+            # --- Create DataFrame using the GENERATED future_dates index ---
+            # Ensure the lengths match before creating the DataFrame
+            if len(forecast_values) != pred_days or len(conf_int) != pred_days:
+                 raise ValueError(f"Forecast length mismatch: Expected {pred_days}, got {len(forecast_values)} values and {len(conf_int)} conf_int rows.")
 
             predictions = pd.DataFrame({
-                'close': forecast_values.values, # Use .values to avoid index issues
+                'close': forecast_values.values, # Use .values to ignore forecast_values' index
                 'lower': conf_int.iloc[:, 0].values,
                 'upper': conf_int.iloc[:, 1].values
-            }, index=future_dates) # Assign the correct future dates index
+            }, index=future_dates) # <-- Use the generated future_dates
 
             logger.info(f"ARIMA prediction successful for {self.symbol}")
             return predictions
@@ -220,6 +245,7 @@ class ARIMAModel(PricePredictionModel):
             logger.error(f"Error making predictions with ARIMA model for {self.symbol}: {e}")
             logger.error(traceback.format_exc())
             return pd.DataFrame()
+
 
     def evaluate(self, test_data):
         """Evaluate ARIMA model performance using get_forecast."""
@@ -1186,7 +1212,6 @@ def predict_with_specific_model(symbol, filename, days=30):
 
         if len(parts) >= 2:
             model_type = parts[0].lower()
-            # Handle potential multiple underscores in symbol (e.g., BRK_B)
             symbol_from_filename = '_'.join(parts[1:]).replace(file_ext, '')
         else:
             raise ValueError(f"Invalid model filename format: {filename}")
@@ -1212,17 +1237,12 @@ def predict_with_specific_model(symbol, filename, days=30):
             raise ValueError(f"Unsupported model type '{model_type}' derived from filename.")
 
         # --- 4. Load the specific model ---
-        # The load_model method in the classes uses self.symbol and self.model_name
-        # to construct the filename. Since we instantiated with the correct symbol,
-        # it should find the correct file(s).
         if not predictor.load_model():
-            # load_model logs specific errors
             raise RuntimeError(f"Failed to load model file(s) for {filename}")
 
         logger.info(f"Successfully loaded model {filename}")
 
         # --- 5. Get historical data ---
-        # Use a reasonable period for prediction context (e.g., 1 year)
         historical_data = data_provider.get_historical_price(symbol, period="1y")
         if historical_data.empty:
             raise ValueError(f"No historical data available for {symbol} to make prediction.")
@@ -1230,14 +1250,33 @@ def predict_with_specific_model(symbol, filename, days=30):
         # --- 6. Make prediction ---
         predictions_df = predictor.predict(historical_data, days=days)
 
-        if predictions_df is None or predictions_df.empty:
-            raise RuntimeError(f"Prediction using {filename} returned empty result.")
+        if predictions_df is None:
+            # The error was already logged inside ARIMAModel.predict
+            error_msg = f"Internal error during prediction with {filename}. Check logs for details."
+            logger.error(error_msg) # Log it here too for context
+            return {'error': error_msg} # Return error dict
+        elif predictions_df.empty:
+             # Handle case where predict legitimately returns empty (less likely now)
+             # Log this specific case
+             logger.error(f"Prediction using {filename} returned an empty DataFrame (but not None).")
+             return {'error': f"Prediction using {filename} returned empty result."}
 
         # --- 7. Format output ---
+        # --- FIX: Check index type before formatting dates ---
+        if isinstance(predictions_df.index, pd.DatetimeIndex):
+            dates_list = predictions_df.index.strftime('%Y-%m-%d').tolist()
+        else:
+            logger.warning(f"Prediction index for {filename} is not DatetimeIndex (Type: {type(predictions_df.index)}). Cannot format dates.")
+            # Return an empty list for dates if the index is not datetime-like
+            dates_list = []
+            # Alternatively, you could raise an error here if dates are strictly required:
+            # raise TypeError(f"Prediction index type is {type(predictions_df.index)}, expected DatetimeIndex.")
+        # --- END FIX ---
+
         result = {
             'symbol': symbol,
-            'model': model_type, # Use the type derived from filename
-            'dates': predictions_df.index.strftime('%Y-%m-%d').tolist(),
+            'model': model_type,
+            'dates': dates_list, # Use the potentially modified dates_list
             'values': predictions_df['close'].tolist()
         }
         # Add confidence intervals if available
@@ -1246,8 +1285,8 @@ def predict_with_specific_model(symbol, filename, days=30):
                 'upper': predictions_df['upper'].tolist(),
                 'lower': predictions_df['lower'].tolist()
             }
-        else: # Add simple confidence if missing (like LSTM)
-            std_dev_factor = 0.05 # Example factor
+        else: # Add simple confidence if missing
+            std_dev_factor = 0.05
             result['confidence'] = {
                 'upper': [v * (1 + std_dev_factor) for v in result['values']],
                 'lower': [v * (1 - std_dev_factor) for v in result['values']]
@@ -1256,10 +1295,18 @@ def predict_with_specific_model(symbol, filename, days=30):
         cleaned_result = handle_nan_values(result)
         if not cleaned_result:
              raise ValueError("Prediction resulted in all NaN values after cleaning.")
+        # --- Ensure dates list is not empty if values exist (important for plotting) ---
+        if cleaned_result and cleaned_result.get('values') and not cleaned_result.get('dates'):
+             logger.error(f"Prediction for {filename} has values but no valid dates due to index type issue.")
+             # Return an error or a modified result indicating the issue
+             return {'error': f"Prediction index type was {type(predictions_df.index)}, cannot display dates."}
+        # --- End Check ---
+
 
         logger.info(f"Prediction successful using specific model {filename}")
         return cleaned_result
 
+    # ... (keep existing except blocks) ...
     except ImportError as e:
         error_msg = f"Required library not installed for model type '{model_type}': {e}"
         logger.error(error_msg)
@@ -1268,9 +1315,18 @@ def predict_with_specific_model(symbol, filename, days=30):
          error_msg = f"Model file or scaler not found: {e}"
          logger.error(error_msg)
          return {'error': error_msg}
-    except Exception as e:
-        error_msg = f"Error predicting with specific model {filename}: {e}"
-        logger.error(error_msg)
-        logger.error(traceback.format_exc())
+    except Exception as e: # Catch other potential errors in this function
+        # --- Modify the final except block ---
+        # Check if the error is the specific RuntimeError we might raise above
+        if isinstance(e, RuntimeError) and "returned empty result" in str(e):
+             # We already logged the more specific reason if predictions_df was None
+             # If it was just empty, use the RuntimeError message
+             error_msg = str(e)
+        else:
+            # General error during the specific model prediction process
+            error_msg = f"Error predicting with specific model {filename}: {e}"
+            logger.error(error_msg)
+            logger.error(traceback.format_exc())
         return {'error': error_msg}
+        # --- End Modification ---
 
