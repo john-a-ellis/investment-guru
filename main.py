@@ -349,7 +349,7 @@ def remove_asset(n_clicks_list):
     # If no valid button was identified, prevent update
     if not clicked_index:
         raise PreventUpdate
-    
+
     print(f"Removing asset with symbol: {clicked_index}")
     
     # Load current assets

@@ -87,12 +87,12 @@ def create_trained_models_table(models_df):
 
         # --- ADDED Delete Button ---
         delete_button = dbc.Button(
-            # html.I(className="bi bi-trash-fill"), # Use Bootstrap icon
+            "Delete",  # Add a text label instead of just an icon
             id={"type": "delete-model-button", "filename": filename},
             color="danger",
             size="sm",
             n_clicks=0,
-            disabled=not filename # Disable if filename is missing
+            disabled=not filename  # Disable if filename is missing
         ) if filename else None
         # --- END Delete Button ---
 
@@ -117,129 +117,128 @@ def register_ml_prediction_callbacks(app):
     model_integration = ModelIntegration()
 
     @app.callback(
-    Output("delete-model-confirm", "displayed"),
-    Output("delete-model-confirm", "message"),
-    Output("model-delete-feedback", "children"),
-    Output("trained-models-table", "children", allow_duplicate=True),
-    Input({"type": "delete-model-button", "filename": dash.ALL}, "n_clicks"),
-    Input("delete-model-confirm", "submit_n_clicks"),
-    State({"type": "delete-model-button", "filename": dash.ALL}, "id"),
-    State("delete-model-confirm", "message"),
-    prevent_initial_call=True
-)
+        Output("delete-model-confirm", "displayed"),
+        Output("delete-model-confirm", "message"),
+        Output("model-delete-feedback", "children"),
+        Output("trained-models-table", "children", allow_duplicate=True),
+        Input({"type": "delete-model-button", "filename": dash.ALL}, "n_clicks"),
+        Input("delete-model-confirm", "submit_n_clicks"),
+        State({"type": "delete-model-button", "filename": dash.ALL}, "id"),
+        State("delete-model-confirm", "message"),
+        prevent_initial_call=True
+    )
     def handle_delete_model(delete_clicks, confirm_clicks, button_ids, confirm_message):
-        # Get the component that triggered the callback
-        triggered_id = ctx.triggered_id
+        """Handle model deletion with improved trigger checking"""
+        # Use the callback context to determine what triggered the callback
+        triggered = dash.callback_context.triggered
+        
+        # If nothing triggered the callback, prevent update
+        if not triggered:
+            raise PreventUpdate
+        
+        # Get the trigger information
+        trigger_id = triggered[0]['prop_id']
         
         # Initialize default outputs
         feedback = None
         confirm_displayed = False
-        new_confirm_message = dash.no_update  # Keep message unless delete button clicked
-        table_output = dash.no_update  # Don't update table unless confirmed
+        new_confirm_message = dash.no_update
+        table_output = dash.no_update
         
-        # Skip processing if neither delete button nor confirm dialog triggered the callback
-        if triggered_id is None:
-            raise PreventUpdate
-            
-        # Check if triggered_id is a dict (pattern-matching callback)
-        is_delete_button = isinstance(triggered_id, dict) and triggered_id.get("type") == "delete-model-button"
-        is_confirm_dialog = triggered_id == "delete-model-confirm"
+        # First check: Is this a delete button click?
+        if "{" in trigger_id and "delete-model-button" in trigger_id:
+            # Check if any delete button was actually clicked (not just initialized)
+            if not any(click for click in delete_clicks if click):
+                raise PreventUpdate
+                
+            # Find which delete button was clicked
+            try:
+                # Parse the JSON ID to get the button information
+                import json
+                # Extract the part before the dot to get the component ID
+                component_id = trigger_id.split(".")[0]
+                # Replace single quotes with double quotes for proper JSON parsing
+                component_id = component_id.replace("'", '"')
+                button_info = json.loads(component_id)
+                filename_to_delete = button_info.get("filename")
+                
+                if filename_to_delete:
+                    # Display confirmation dialog
+                    confirm_displayed = True
+                    new_confirm_message = f"Are you sure you want to delete model '{filename_to_delete}' and its record?"
+                    logger.info(f"Delete requested for {filename_to_delete}. Displaying confirmation.")
+                    return confirm_displayed, new_confirm_message, feedback, table_output
+            except Exception as e:
+                logger.error(f"Error parsing delete button ID: {e}")
+                return False, dash.no_update, dbc.Alert(f"Error: {e}", color="danger"), dash.no_update
         
-        # If neither a delete button nor the confirm dialog triggered this, do nothing
-        if not (is_delete_button or is_confirm_dialog):
-            raise PreventUpdate
-
-        # --- Import the delete function ---
-        from modules.db_utils import delete_model_metadata
-
-        # --- Define model directory ---
-        model_dir = "models"
-
-        # Check if a delete button was clicked
-        if is_delete_button:
-            filename_to_delete = triggered_id.get("filename")
-            if filename_to_delete:
-                # Display confirmation dialog
-                confirm_displayed = True
-                # Store the filename in the message property (simple state management)
-                new_confirm_message = f"Are you sure you want to delete model '{filename_to_delete}' and its record?"
-                logger.info(f"Delete requested for {filename_to_delete}. Displaying confirmation.")
-
-        # Check if the confirmation dialog was submitted
-        elif is_confirm_dialog and confirm_clicks and confirm_clicks > 0:
-            # Extract filename from the message
-            # Example message: "Are you sure you want to delete model 'arima_CGL.TO.pkl' and its record?"
+        # Second check: Is this a confirmation dialog submission?
+        elif "delete-model-confirm.submit_n_clicks" in trigger_id:
+            if not confirm_clicks:
+                raise PreventUpdate
+                
+            # Process the confirmation
             try:
                 filename_to_delete = confirm_message.split("'")[1]
                 logger.info(f"Confirmation received to delete {filename_to_delete}")
-            except (IndexError, TypeError):
-                filename_to_delete = None
-                feedback = dbc.Alert("Error: Could not determine which model to delete from confirmation.", color="danger")
-                logger.error("Could not parse filename from confirmation message.")
-
-            if filename_to_delete:
-                db_deleted = False
+                
+                # --- Import the delete function ---
+                from modules.db_utils import delete_model_metadata
+                model_dir = "models"
+                
+                # Delete from database
+                db_deleted = delete_model_metadata(filename_to_delete)
+                if not db_deleted:
+                    return False, dash.no_update, dbc.Alert(f"Failed to delete database record for {filename_to_delete}", color="danger"), dash.no_update
+                
+                # Delete model file(s)
+                model_path = os.path.join(model_dir, filename_to_delete)
                 file_deleted = False
-                scaler_deleted = True  # Assume true unless LSTM scaler fails
-
-                # 1. Delete from Database
-                try:
-                    db_deleted = delete_model_metadata(filename_to_delete)
-                    if not db_deleted:
-                        logger.error(f"DB deletion failed for {filename_to_delete} (check db_utils logs).")
-                except Exception as db_err:
-                    logger.error(f"Exception during DB deletion for {filename_to_delete}: {db_err}")
-                    feedback = dbc.Alert(f"Error deleting database record for {filename_to_delete}: {db_err}", color="danger")
-
-                # 2. Delete Model File(s)
-                if db_deleted:  # Only delete files if DB record was removed
-                    model_path = os.path.join(model_dir, filename_to_delete)
-                    scaler_path = None
-                    if filename_to_delete.startswith("lstm_") and filename_to_delete.endswith(".h5"):
-                        scaler_filename = filename_to_delete.replace(".h5", "_scaler.pkl")
-                        scaler_path = os.path.join(model_dir, scaler_filename)
-
-                    try:
-                        if os.path.exists(model_path):
-                            os.remove(model_path)
-                            logger.info(f"Deleted model file: {model_path}")
-                            file_deleted = True
-                        else:
-                            logger.warning(f"Model file not found, assuming already deleted: {model_path}")
-                            file_deleted = True  # Consider it success if file is gone
-
-                        if scaler_path:
-                            if os.path.exists(scaler_path):
-                                os.remove(scaler_path)
-                                logger.info(f"Deleted scaler file: {scaler_path}")
-                                scaler_deleted = True
-                            else:
-                                logger.warning(f"Scaler file not found, assuming already deleted: {scaler_path}")
-                                scaler_deleted = True
-
-                    except OSError as file_err:
-                        logger.error(f"Error deleting file(s) for {filename_to_delete}: {file_err}")
-                        feedback = dbc.Alert(f"Error deleting file(s) for {filename_to_delete}: {file_err}", color="danger")
-                        file_deleted = False
-                        scaler_deleted = False  # Mark as failed if error occurs
-
-                # 3. Provide Feedback and Refresh Table
-                if db_deleted and file_deleted and scaler_deleted:
-                    feedback = dbc.Alert(f"Successfully deleted model {filename_to_delete}.", color="success")
-                    # Refresh the table data
+                scaler_deleted = True
+                
+                # Handle LSTM scaler file if needed
+                scaler_path = None
+                if filename_to_delete.startswith("lstm_") and filename_to_delete.endswith(".h5"):
+                    scaler_filename = filename_to_delete.replace(".h5", "_scaler.pkl")
+                    scaler_path = os.path.join(model_dir, scaler_filename)
+                
+                # Delete the main model file
+                if os.path.exists(model_path):
+                    os.remove(model_path)
+                    file_deleted = True
+                    logger.info(f"Deleted model file: {model_path}")
+                else:
+                    logger.warning(f"Model file not found: {model_path}")
+                    file_deleted = True  # Consider success if already gone
+                
+                # Delete the scaler file if it exists
+                if scaler_path and os.path.exists(scaler_path):
+                    os.remove(scaler_path)
+                    logger.info(f"Deleted scaler file: {scaler_path}")
+                elif scaler_path:
+                    logger.warning(f"Scaler file not found: {scaler_path}")
+                
+                # Update table after successful deletion
+                if file_deleted:
                     try:
                         models_df = get_trained_models_data()
                         table_output = create_trained_models_table(models_df)
+                        feedback = dbc.Alert(f"Successfully deleted model {filename_to_delete}.", color="success")
                     except Exception as refresh_err:
-                        logger.error(f"Error refreshing model table after deletion: {refresh_err}")
-                        table_output = dbc.Alert("Error refreshing table.", color="warning")
-                elif not db_deleted and feedback is None:  # If DB delete failed silently
-                    feedback = dbc.Alert(f"Failed to delete database record for {filename_to_delete}. File deletion skipped.", color="danger")
-                elif not file_deleted and feedback is None:  # If file delete failed
-                    feedback = dbc.Alert(f"Database record deleted, but failed to delete model file for {filename_to_delete}.", color="warning")
-                # Keep existing feedback if already set by specific errors
-
-        return confirm_displayed, new_confirm_message, feedback, table_output
+                        logger.error(f"Error refreshing model table: {refresh_err}")
+                        feedback = dbc.Alert(f"Model deleted, but error refreshing table: {refresh_err}", color="warning")
+                        table_output = dash.no_update
+                else:
+                    feedback = dbc.Alert(f"Error deleting model file for {filename_to_delete}", color="danger")
+                
+                return False, dash.no_update, feedback, table_output
+                
+            except Exception as e:
+                logger.error(f"Error processing model deletion: {e}")
+                return False, dash.no_update, dbc.Alert(f"Error: {e}", color="danger"), dash.no_update
+        
+        # If we get here, something else triggered the callback that we don't care about
+        raise PreventUpdate
 
     # --- (Keep update_asset_options as is) ---
     @app.callback(
@@ -258,13 +257,19 @@ def register_ml_prediction_callbacks(app):
     @app.callback(
         Output("ml-specific-model-selector", "options"),
         [Input("refresh-trained-models", "n_clicks"),
-         Input("ml-update-interval", "n_intervals")], # Trigger on refresh or interval
+        Input("ml-update-interval", "n_intervals")], # Trigger on refresh or interval
         prevent_initial_call=False # Populate on load
     )
     def update_specific_model_options(refresh_clicks, n_intervals):
         try:
+            # Start with standard and fallback options
+            options = [
+                {"label": "Auto-Select Model (Default)", "value": "auto"},
+                {"label": "Use Fallback Projection (Simple)", "value": "fallback_projection"}
+            ]
+            
+            # Add trained models from the database
             models_df = get_trained_models_data()
-            options = [{"label": "Auto-Select Model (Default)", "value": "auto"}] # Default option
             if not models_df.empty:
                 # Sort by training date descending
                 models_df_sorted = models_df.sort_values(by='training_date', ascending=False)
@@ -279,21 +284,27 @@ def register_ml_prediction_callbacks(app):
             return options
         except Exception as e:
             logger.error(f"Error populating specific model selector: {e}")
-            return [{"label": "Error loading models", "value": "auto", "disabled": True}]
+            return [
+                {"label": "Auto-Select Model (Default)", "value": "auto"},
+                {"label": "Use Fallback Projection (Simple)", "value": "fallback_projection"},
+                {"label": "Error loading models", "value": "error", "disabled": True}
+            ]
         
     # Generate price prediction
+    # Update the prediction callback to handle the fallback projection option
     @app.callback(
         [Output("ml-prediction-chart", "figure"),
-         Output("ml-prediction-details", "children"),
-         Output("ml-prediction-data", "data")],
+        Output("ml-prediction-details", "children"),
+        Output("ml-prediction-data", "data")],
         Input("ml-analyze-button", "n_clicks"),
         [State("ml-asset-selector", "value"),
-         State("ml-horizon-selector", "value"),
-         State("ml-specific-model-selector", "value")], # <-- ADDED State
+        State("ml-horizon-selector", "value"),
+        State("ml-specific-model-selector", "value")],
         prevent_initial_call=True
     )
-    def update_prediction(n_clicks, symbol, days, specific_model_filename): # <-- ADDED specific_model_filename
-        if n_clicks is None or not symbol: raise PreventUpdate
+    def update_prediction(n_clicks, symbol, days, specific_model):
+        if n_clicks is None or not symbol:
+            raise PreventUpdate
 
         try:
             # Get historical data (needed for chart context regardless of prediction method)
@@ -303,35 +314,45 @@ def register_ml_prediction_callbacks(app):
                 return fig, html.Div(f"No historical data available for {symbol}."), None
 
             prediction_data = None
-            # --- Check if a specific model was selected ---
-            if specific_model_filename and specific_model_filename != "auto":
-                logger.info(f"Attempting prediction for {symbol} using specific model: {specific_model_filename}")
-                # --- Import the new function ---
+            
+            # Check which prediction method to use
+            if specific_model == "fallback_projection":
+                # Use the fallback projection directly
+                logger.info(f"Using fallback projection for {symbol} as specifically requested")
+                from modules.price_prediction import create_fallback_prediction
+                prediction_data = create_fallback_prediction(symbol=symbol, days=days)
+                
+            elif specific_model and specific_model != "auto" and not specific_model.startswith("error"):
+                # Use a specific trained model
+                logger.info(f"Attempting prediction for {symbol} using specific model: {specific_model}")
                 from modules.price_prediction import predict_with_specific_model
                 prediction_data = predict_with_specific_model(
                     symbol=symbol,
-                    filename=specific_model_filename,
+                    filename=specific_model,
                     days=days
                 )
                 if prediction_data and 'error' in prediction_data:
-                     # Show error if specific model prediction failed
-                     fig = go.Figure().update_layout(title=f"Error using model {specific_model_filename}", template="plotly_white")
-                     return fig, dbc.Alert(f"Error using specific model: {prediction_data['error']}", color="danger"), None
+                    # Show error if specific model prediction failed
+                    fig = go.Figure().update_layout(title=f"Error using model {specific_model}", template="plotly_white")
+                    return fig, dbc.Alert(f"Error using specific model: {prediction_data['error']}", color="danger"), None
             else:
-                # --- Use default prediction logic ---
+                # Use default prediction logic
                 logger.info(f"Attempting prediction for {symbol} using default logic (get_price_predictions)")
+                from modules.price_prediction import get_price_predictions
                 prediction_data = get_price_predictions(symbol=symbol, days=days)
 
-            # --- Process prediction results (same logic as before) ---
+            # Process prediction results
             if prediction_data and prediction_data.get('values'):
                 chart = create_prediction_chart(prediction_data, historical_data_df)
                 details = create_prediction_details(prediction_data, historical_data_df)
                 return chart, details, prediction_data
             else:
-                # Handle case where default prediction also failed
+                # Handle case where prediction failed
                 error_msg = f"Could not generate predictions for {symbol}."
-                if specific_model_filename and specific_model_filename != "auto":
-                    error_msg += f" Specific model '{specific_model_filename}' might be incompatible or missing."
+                if specific_model and specific_model != "auto" and specific_model != "fallback_projection":
+                    error_msg += f" Specific model '{specific_model}' might be incompatible or missing."
+                elif specific_model == "fallback_projection":
+                    error_msg += " Fallback projection also failed. Insufficient data may be available."
                 else:
                     error_msg += " Try training a model first."
                 fig = go.Figure().update_layout(title=f"Error: {error_msg}", template="plotly_white")
@@ -342,8 +363,6 @@ def register_ml_prediction_callbacks(app):
             traceback.print_exc()
             fig = go.Figure().update_layout(title=f"Error: {str(e)}", template="plotly_white")
             return fig, dbc.Alert(f"Error generating prediction: {str(e)}", color="danger"), None
-
-
 
     # Generate trend analysis
     @app.callback(
@@ -477,23 +496,31 @@ def register_ml_prediction_callbacks(app):
     @app.callback(
         Output("trained-models-table", "children"),
         [Input("refresh-trained-models", "n_clicks"),
-         Input("ml-prediction-tabs", "active_tab")],
+        Input("ml-prediction-tabs", "active_tab")],
         prevent_initial_call=False
     )
     def update_trained_models_display(refresh_clicks, active_tab):
-        triggered_id = ctx.triggered_id if ctx.triggered else None
-        if active_tab == 'model-training-tab' or triggered_id == 'refresh-trained-models':
-            logger.info(f"Updating trained models table. Trigger: {triggered_id}, Active Tab: {active_tab}")
-            try:
-                models_df = get_trained_models_data()  # Get the data here
-                return create_trained_models_table(models_df)  # Pass it to the function
-            except Exception as e:
-                 logger.error(f"Error updating trained models display: {e}")
-                 logger.error(traceback.print_exc())
-                 return dbc.Alert(f"Error loading model data: {e}", color="danger")
-        else:
-            logger.debug(f"Preventing update for trained models table. Trigger: {triggered_id}, Active Tab: {active_tab}")
-            raise PreventUpdate
+        triggered = dash.callback_context.triggered
+        
+        # Only process for explicit refresh clicks or when the tab becomes active
+        if triggered:
+            trigger_id = triggered[0]['prop_id'].split('.')[0]
+            
+            # Only update when refresh button is clicked or first time the training tab is selected
+            if trigger_id == "refresh-trained-models" or (
+                trigger_id == "ml-prediction-tabs" and active_tab == 'model-training-tab'
+            ):
+                logger.info(f"Updating trained models table. Trigger: {trigger_id}, Active Tab: {active_tab}")
+                try:
+                    models_df = get_trained_models_data()
+                    return create_trained_models_table(models_df)
+                except Exception as e:
+                    logger.error(f"Error updating trained models display: {e}")
+                    logger.error(traceback.format_exc())
+                    return dbc.Alert(f"Error loading model data: {e}", color="danger")
+        
+        # For any other trigger, prevent update
+        raise PreventUpdate
 
 
 # --- Chart and Detail Creation Functions (Keep these as they are) ---
