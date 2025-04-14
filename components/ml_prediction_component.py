@@ -56,6 +56,42 @@ def create_trained_models_table(models_df):
             html.Th("Notes", style={'maxWidth': '200px'})
         ]))
     ]
+
+    # --- MOVED CODE BLOCK STARTS HERE ---
+    rows = []
+    for index, row in models_df.iterrows():
+        metrics_dict = row.get('metrics', {})
+        metrics_display_items = []
+        if isinstance(metrics_dict, dict):
+            for key in metrics_to_display:
+                if key in metrics_dict:
+                    value = metrics_dict[key]
+                    if isinstance(value, (float, int)):
+                         metrics_display_items.append(html.Li(f"{key.replace('_',' ').title()}: {value:.4f}"))
+                    else:
+                         metrics_display_items.append(html.Li(f"{key.replace('_',' ').title()}: {value}"))
+            if not metrics_display_items and metrics_dict and 'error' not in metrics_dict:
+                 metrics_display_items.append(html.Li(f"Other metrics available ({len(metrics_dict)} total)"))
+            elif not metrics_dict or 'error' in metrics_dict:
+                 metrics_display_items.append(html.Li("N/A"))
+            elif len(metrics_dict) > len(metrics_display_items):
+                 metrics_display_items.append(html.Li(f"... ({len(metrics_dict) - len(metrics_display_items)} more)"))
+        elif metrics_dict:
+             metrics_display_items.append(html.Li(f"Error: {metrics_dict}"))
+        else:
+             metrics_display_items.append(html.Li("N/A"))
+
+        metrics_cell = html.Td(html.Ul(metrics_display_items, style={'paddingLeft': '15px', 'marginBottom': '0', 'listStyleType': 'none'}))
+        notes = row.get('notes', '')
+        truncated_notes = (notes[:100] + '...') if notes and len(notes) > 100 else notes
+        rows.append(html.Tr([
+            html.Td(row.get('model_filename', 'N/A')), html.Td(row.get('symbol', 'N/A')),
+            html.Td(row.get('model_type', 'N/A')), html.Td(row.get('training_date', 'N/A')),
+            metrics_cell, html.Td(truncated_notes, title=notes if truncated_notes != notes else '')
+        ]))
+    body = [html.Tbody(rows)]
+    return dbc.Table(header + body, bordered=True, striped=True, hover=True, responsive=True, size="sm")
+
 # Register all callbacks for the ML prediction component
 def register_ml_prediction_callbacks(app):
     """
@@ -64,12 +100,13 @@ def register_ml_prediction_callbacks(app):
     # Initialize model integration
     model_integration = ModelIntegration()
 
-    # Populate asset selectors
+    # --- (Keep update_asset_options as is) ---
     @app.callback(
         [Output("ml-asset-selector", "options"), Output("ml-train-asset-selector", "options")],
         Input("ml-update-interval", "n_intervals")
     )
     def update_asset_options(n_intervals):
+        # ... (implementation unchanged) ...
         tracked_assets = load_tracked_assets()
         portfolio = load_portfolio()
         portfolio_symbols = {details.get("symbol", "") for _, details in portfolio.items() if details.get("symbol")}
@@ -77,35 +114,94 @@ def register_ml_prediction_callbacks(app):
         options = [{"label": f"{symbol} - {tracked_assets.get(symbol, {}).get('name', symbol)}", "value": symbol} for symbol in all_symbols if symbol]
         return options, options
 
+    @app.callback(
+        Output("ml-specific-model-selector", "options"),
+        [Input("refresh-trained-models", "n_clicks"),
+         Input("ml-update-interval", "n_intervals")], # Trigger on refresh or interval
+        prevent_initial_call=False # Populate on load
+    )
+    def update_specific_model_options(refresh_clicks, n_intervals):
+        try:
+            models_df = get_trained_models_data()
+            options = [{"label": "Auto-Select Model (Default)", "value": "auto"}] # Default option
+            if not models_df.empty:
+                # Sort by training date descending
+                models_df_sorted = models_df.sort_values(by='training_date', ascending=False)
+                for index, row in models_df_sorted.iterrows():
+                    filename = row.get('model_filename')
+                    symbol = row.get('symbol', 'N/A')
+                    model_type = row.get('model_type', 'N/A')
+                    date = row.get('training_date', 'N/A')
+                    if filename:
+                        label = f"{filename} ({symbol} - {model_type.upper()} - {date})"
+                        options.append({"label": label, "value": filename})
+            return options
+        except Exception as e:
+            logger.error(f"Error populating specific model selector: {e}")
+            return [{"label": "Error loading models", "value": "auto", "disabled": True}]
+        
     # Generate price prediction
     @app.callback(
-        [Output("ml-prediction-chart", "figure"), Output("ml-prediction-details", "children"), Output("ml-prediction-data", "data")],
+        [Output("ml-prediction-chart", "figure"),
+         Output("ml-prediction-details", "children"),
+         Output("ml-prediction-data", "data")],
         Input("ml-analyze-button", "n_clicks"),
-        [State("ml-asset-selector", "value"), State("ml-horizon-selector", "value")],
+        [State("ml-asset-selector", "value"),
+         State("ml-horizon-selector", "value"),
+         State("ml-specific-model-selector", "value")], # <-- ADDED State
         prevent_initial_call=True
     )
-    def update_prediction(n_clicks, symbol, days):
+    def update_prediction(n_clicks, symbol, days, specific_model_filename): # <-- ADDED specific_model_filename
         if n_clicks is None or not symbol: raise PreventUpdate
+
         try:
+            # Get historical data (needed for chart context regardless of prediction method)
             historical_data_df = data_provider.get_historical_price(symbol, period="1y")
             if historical_data_df.empty:
                 fig = go.Figure().update_layout(title=f"Error: No historical data available for {symbol}", template="plotly_white")
                 return fig, html.Div(f"No historical data available for {symbol}."), None
 
-            prediction_data = get_price_predictions(symbol=symbol, days=days) # Uses the refactored function
+            prediction_data = None
+            # --- Check if a specific model was selected ---
+            if specific_model_filename and specific_model_filename != "auto":
+                logger.info(f"Attempting prediction for {symbol} using specific model: {specific_model_filename}")
+                # --- Import the new function ---
+                from modules.price_prediction import predict_with_specific_model
+                prediction_data = predict_with_specific_model(
+                    symbol=symbol,
+                    filename=specific_model_filename,
+                    days=days
+                )
+                if prediction_data and 'error' in prediction_data:
+                     # Show error if specific model prediction failed
+                     fig = go.Figure().update_layout(title=f"Error using model {specific_model_filename}", template="plotly_white")
+                     return fig, dbc.Alert(f"Error using specific model: {prediction_data['error']}", color="danger"), None
+            else:
+                # --- Use default prediction logic ---
+                logger.info(f"Attempting prediction for {symbol} using default logic (get_price_predictions)")
+                prediction_data = get_price_predictions(symbol=symbol, days=days)
 
+            # --- Process prediction results (same logic as before) ---
             if prediction_data and prediction_data.get('values'):
                 chart = create_prediction_chart(prediction_data, historical_data_df)
                 details = create_prediction_details(prediction_data, historical_data_df)
                 return chart, details, prediction_data
             else:
-                fig = go.Figure().update_layout(title=f"Error: Could not generate predictions for {symbol}", template="plotly_white")
-                return fig, dbc.Alert(f"Could not generate predictions for {symbol}. Try training a model first.", color="warning"), None
+                # Handle case where default prediction also failed
+                error_msg = f"Could not generate predictions for {symbol}."
+                if specific_model_filename and specific_model_filename != "auto":
+                    error_msg += f" Specific model '{specific_model_filename}' might be incompatible or missing."
+                else:
+                    error_msg += " Try training a model first."
+                fig = go.Figure().update_layout(title=f"Error: {error_msg}", template="plotly_white")
+                return fig, dbc.Alert(error_msg, color="warning"), None
+
         except Exception as e:
             logger.error(f"Error in update_prediction for {symbol}: {e}")
             traceback.print_exc()
             fig = go.Figure().update_layout(title=f"Error: {str(e)}", template="plotly_white")
             return fig, dbc.Alert(f"Error generating prediction: {str(e)}", color="danger"), None
+
 
 
     # Generate trend analysis
@@ -146,7 +242,7 @@ def register_ml_prediction_callbacks(app):
     @app.callback(
         Output("ml-training-status", "children"),
         Input("ml-train-button", "n_clicks"),
-        [State("ml-train-asset-selector", "value"), 
+        [State("ml-train-asset-selector", "value"),
          State("ml-train-model-type", "value")],  # Added model type state
         prevent_initial_call=True
     )
@@ -154,11 +250,11 @@ def register_ml_prediction_callbacks(app):
         """Train a model for the selected asset using the selected model type"""
         if n_clicks is None or not symbol:
             raise PreventUpdate
-        
+
         try:
             # Use the selected model type (default to prophet if somehow none is selected)
             selected_model_type = model_type if model_type else "prophet"
-            
+
             # Pass model_type to the integration function
             status = model_integration.train_models_for_symbol(
                 symbol,
@@ -166,7 +262,7 @@ def register_ml_prediction_callbacks(app):
                 lookback_period="2y",
                 async_training=True
             )
-            
+
             if status == "pending":
                 return dbc.Alert(
                     [
@@ -176,7 +272,7 @@ def register_ml_prediction_callbacks(app):
                         html.Div([
                             dbc.Progress(animated=True, value=100, striped=True, className="mb-2")
                         ])
-                    ], 
+                    ],
                     color="info"
                 )
             else:
@@ -248,49 +344,18 @@ def register_ml_prediction_callbacks(app):
         if active_tab == 'model-training-tab' or triggered_id == 'refresh-trained-models':
             logger.info(f"Updating trained models table. Trigger: {triggered_id}, Active Tab: {active_tab}")
             try:
-                models_df = get_trained_models_data()
-                return create_trained_models_table(models_df)
+                models_df = get_trained_models_data()  # Get the data here
+                return create_trained_models_table(models_df)  # Pass it to the function
             except Exception as e:
                  logger.error(f"Error updating trained models display: {e}")
-                 logger.error(traceback.format_exc())
+                 logger.error(traceback.print_exc())
                  return dbc.Alert(f"Error loading model data: {e}", color="danger")
         else:
             logger.debug(f"Preventing update for trained models table. Trigger: {triggered_id}, Active Tab: {active_tab}")
             raise PreventUpdate
-    
-    rows = []
-    for index, row in models_df.iterrows():
-        metrics_dict = row.get('metrics', {})
-        metrics_display_items = []
-        if isinstance(metrics_dict, dict):
-            for key in metrics_to_display:
-                if key in metrics_dict:
-                    value = metrics_dict[key]
-                    if isinstance(value, (float, int)):
-                         metrics_display_items.append(html.Li(f"{key.replace('_',' ').title()}: {value:.4f}"))
-                    else:
-                         metrics_display_items.append(html.Li(f"{key.replace('_',' ').title()}: {value}"))
-            if not metrics_display_items and metrics_dict and 'error' not in metrics_dict:
-                 metrics_display_items.append(html.Li(f"Other metrics available ({len(metrics_dict)} total)"))
-            elif not metrics_dict or 'error' in metrics_dict:
-                 metrics_display_items.append(html.Li("N/A"))
-            elif len(metrics_dict) > len(metrics_display_items):
-                 metrics_display_items.append(html.Li(f"... ({len(metrics_dict) - len(metrics_display_items)} more)"))
-        elif metrics_dict:
-             metrics_display_items.append(html.Li(f"Error: {metrics_dict}"))
-        else:
-             metrics_display_items.append(html.Li("N/A"))
 
-        metrics_cell = html.Td(html.Ul(metrics_display_items, style={'paddingLeft': '15px', 'marginBottom': '0', 'listStyleType': 'none'}))
-        notes = row.get('notes', '')
-        truncated_notes = (notes[:100] + '...') if notes and len(notes) > 100 else notes
-        rows.append(html.Tr([
-            html.Td(row.get('model_filename', 'N/A')), html.Td(row.get('symbol', 'N/A')),
-            html.Td(row.get('model_type', 'N/A')), html.Td(row.get('training_date', 'N/A')),
-            metrics_cell, html.Td(truncated_notes, title=notes if truncated_notes != notes else '')
-        ]))
-    body = [html.Tbody(rows)]
-    return dbc.Table(header + body, bordered=True, striped=True, hover=True, responsive=True, size="sm")
+
+# --- Chart and Detail Creation Functions (Keep these as they are) ---
 
 def create_prediction_chart(prediction_data, historical_data=None):
     """
@@ -421,7 +486,7 @@ def create_prediction_details(prediction_data, historical_data=None):
 def create_trend_analysis_display(analysis_data):
     """Create trend analysis visualization for a specific asset."""
     if not analysis_data: return html.Div("No trend analysis data available.")
-    
+
     trend = analysis_data.get('trend', {})
     overall_trend = trend.get('overall_trend', 'unknown')
     trend_strength = trend.get('trend_strength', 0)
@@ -473,7 +538,7 @@ def create_trend_analysis_display(analysis_data):
 def create_portfolio_insights(recommendations):
     """Create portfolio insights based on ML recommendations."""
     if not recommendations: return html.Div("No portfolio insights available.")
-    
+
     buy_recs = recommendations.get('buy', [])
     sell_recs = recommendations.get('sell', [])
     portfolio_score = recommendations.get('portfolio_score', 0)
@@ -575,7 +640,15 @@ def create_ml_prediction_component():
                                 dbc.Select(id="ml-asset-selector", placeholder="Select an asset to analyze"),
                                 dbc.Button("Analyze", id="ml-analyze-button", color="primary")
                             ]),
-                        ], width=6),
+                        ], width=3),
+                        dbc.Col([
+                        dbc.Label("Use Specific Model (Optional)"),
+                        dbc.Select(
+                            id="ml-specific-model-selector", # <-- ID Definition
+                            placeholder="Auto-Select Model (Default)",
+                            value="auto"
+                        ),
+                        ], width=3),
                         dbc.Col([
                             dbc.Label("Prediction Horizon"),
                             dbc.RadioItems(
@@ -583,14 +656,14 @@ def create_ml_prediction_component():
                                 options=[{"label": "30 Days", "value": 30}, {"label": "60 Days", "value": 60}, {"label": "90 Days", "value": 90}],
                                 value=30, inline=True
                             )
-                        ], width=6)
+                        ], width=3)
                     ], className="mb-3"),
                     dbc.Spinner([dcc.Graph(id="ml-prediction-chart")], color="primary", type="border", fullscreen=False),
                     html.Div(id="ml-prediction-details", className="mt-3"),
                     dcc.Store(id="ml-prediction-data")
                 ]),
 
-                # Tab 2: Technical Analysis 
+                # Tab 2: Technical Analysis
                 dbc.Tab(label="Technical Analysis", tab_id="technical-analysis-tab", children=[
                     dbc.Row([dbc.Col([dbc.Spinner([html.Div(id="trend-analysis-content")], color="primary", type="border")], width=12)])
                 ]),

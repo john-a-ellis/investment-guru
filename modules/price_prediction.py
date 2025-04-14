@@ -18,6 +18,23 @@ try:
     PROPHET_AVAILABLE = True
 except ImportError:
     PROPHET_AVAILABLE = False
+    
+# --- BEGIN ADDED IMPORTS FOR LSTM ---
+try:
+    import tensorflow as tf
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import LSTM, Dense, Dropout
+    TENSORFLOW_AVAILABLE = True
+    # Optional: Log success only if needed for debugging
+    # logger.info("TensorFlow/Keras imported successfully.")
+except ImportError:
+    # Set Keras components to None if TensorFlow is not installed
+    Sequential, LSTM, Dense, Dropout = None, None, None, None
+    TENSORFLOW_AVAILABLE = False
+    # Log a warning once if TF is needed but not found
+    # logger.warning("TensorFlow/Keras not installed. LSTM functionality will be unavailable.")
+# --- END ADDED IMPORTS FOR LSTM ---
+
 
 from statsmodels.tsa.arima.model import ARIMA as ARIMA_Statsmodels
 
@@ -158,18 +175,22 @@ class ARIMAModel(PricePredictionModel):
         try:
             data = historical_data.sort_index()
             if 'close' not in data.columns: raise ValueError("Data must contain 'close' column")
-            close_prices = data['close']
+
+            # --- FIX: Drop NaNs before training ---
+            close_prices = data['close'].dropna()
+            if len(close_prices) < sum(self.order) + 5: # Check if enough data points remain
+                 raise ValueError(f"Not enough non-NaN data points ({len(close_prices)}) to train ARIMA with order {self.order}")
 
             # Use the renamed import
             self.model = ARIMA_Statsmodels(close_prices, order=self.order)
-            self.model = self.model.fit()
+            self.model = self.model.fit() # Fit the model
 
             self.is_trained = True
             logger.info(f"ARIMA model trained successfully for {self.symbol} with order {self.order}")
             return True
         except Exception as e:
             logger.error(f"Error training ARIMA model for {self.symbol}: {e}")
-            logger.error(traceback.format_exc())
+            logger.error(traceback.format_exc()) # Good: logs traceback
             return False
 
     def predict(self, historical_data, days=None):
@@ -181,15 +202,17 @@ class ARIMAModel(PricePredictionModel):
             pred_days = days if days is not None else self.prediction_days
             last_date = historical_data.index[-1]
             future_dates = pd.date_range(start=last_date + timedelta(days=1), periods=pred_days)
+
+            # Use get_forecast for future predictions
             forecast_result = self.model.get_forecast(steps=pred_days)
             forecast_values = forecast_result.predicted_mean
             conf_int = forecast_result.conf_int(alpha=0.05) # 95% confidence interval
 
             predictions = pd.DataFrame({
-                'close': forecast_values,
-                'lower': conf_int.iloc[:, 0],
-                'upper': conf_int.iloc[:, 1]
-            }, index=future_dates)
+                'close': forecast_values.values, # Use .values to avoid index issues
+                'lower': conf_int.iloc[:, 0].values,
+                'upper': conf_int.iloc[:, 1].values
+            }, index=future_dates) # Assign the correct future dates index
 
             logger.info(f"ARIMA prediction successful for {self.symbol}")
             return predictions
@@ -199,33 +222,45 @@ class ARIMAModel(PricePredictionModel):
             return pd.DataFrame()
 
     def evaluate(self, test_data):
-        """Evaluate ARIMA model performance."""
+        """Evaluate ARIMA model performance using get_forecast."""
         if not self.is_trained and not self.load_model():
             logger.error(f"ARIMA model for {self.symbol} not trained/loaded")
             return {}
         try:
-            if test_data.empty: return {'error': 'Test data is empty'}
-            start_idx = test_data.index[0]
-            end_idx = test_data.index[-1]
+            if test_data.empty or len(test_data) < 1:
+                 logger.warning(f"Test data is empty or too short for evaluation ({len(test_data)} points)")
+                 return {'error': 'Test data is empty or too short'}
 
-            # Ensure predictions cover the test data range
-            predictions = self.model.predict(start=start_idx, end=end_idx)
+            # --- FIX: Use get_forecast for evaluation ---
+            num_steps = len(test_data)
+            forecast_result = self.model.get_forecast(steps=num_steps)
+            forecast_values = forecast_result.predicted_mean
 
-            # Align actual and predicted values
+            # Create a pandas Series with the test data's index
+            # This assumes test_data index immediately follows training data index
+            predictions = pd.Series(forecast_values.values, index=test_data.index) # Use .values to avoid index mismatch warnings
+            # --- End FIX ---
+
+            # Actual values from test data
             actual = test_data['close']
+
+            # Ensure alignment (though index setting should handle it)
             common_index = actual.index.intersection(predictions.index)
-            if len(common_index) < 2:
-                 return {'error': f'Insufficient overlap between test data and predictions ({len(common_index)} points)'}
+            if len(common_index) < 1: # Need at least one point to compare
+                 logger.warning(f"No overlap between test data and forecast indices for {self.symbol}")
+                 return {'error': f'No overlap between test data and forecast indices'}
 
             actual_aligned = actual.loc[common_index]
             predictions_aligned = predictions.loc[common_index]
 
+            # Calculate metrics
             mae = mean_absolute_error(actual_aligned, predictions_aligned)
             mse = mean_squared_error(actual_aligned, predictions_aligned)
             rmse = np.sqrt(mse)
             non_zero_actual = actual_aligned[actual_aligned != 0]
             mape = np.mean(np.abs((non_zero_actual - predictions_aligned.loc[non_zero_actual.index]) / non_zero_actual)) * 100 if not non_zero_actual.empty else 0.0
 
+            logger.info(f"ARIMA evaluation successful for {self.symbol}. MAE: {mae:.4f}, RMSE: {rmse:.4f}")
             return {'mae': float(mae), 'mse': float(mse), 'rmse': float(rmse), 'mape': float(mape)}
         except Exception as e:
             logger.error(f"Error evaluating ARIMA model for {self.symbol}: {e}")
@@ -338,6 +373,11 @@ class LSTMModel(PricePredictionModel):
 
     def train(self, historical_data):
         """Train LSTM model."""
+        # --- Check if TensorFlow is available ---
+        if not TENSORFLOW_AVAILABLE:
+             logger.error("TensorFlow/Keras not installed. Cannot train LSTM model.")
+             return False
+        # --- End Check ---
         try:
             if not self.symbol:
                  logger.error("Cannot train LSTM model without a symbol.")
@@ -353,6 +393,7 @@ class LSTMModel(PricePredictionModel):
 
             X = np.reshape(X, (X.shape[0], X.shape[1], 1))
 
+            # --- Use the imported Keras components ---
             self.model = Sequential([
                 LSTM(units=self.units, return_sequences=True, input_shape=(X.shape[1], 1)),
                 Dropout(0.2),
@@ -360,6 +401,7 @@ class LSTMModel(PricePredictionModel):
                 Dropout(0.2),
                 Dense(units=1)
             ])
+            # --- End Use ---
             self.model.compile(optimizer='adam', loss='mean_squared_error')
 
             logger.info(f"Fitting LSTM model for {self.symbol}...")
@@ -367,16 +409,20 @@ class LSTMModel(PricePredictionModel):
             self.is_trained = True
             logger.info(f"LSTM model trained successfully for {self.symbol}")
             return True # Return success status
-        except ImportError:
-             logger.error("TensorFlow/Keras not installed. Cannot train LSTM model.")
-             return False
+        # Removed ImportError check here as it's handled by the flag
         except Exception as e:
             logger.error(f"Error training LSTM model for {self.symbol}: {e}")
-            logger.error(traceback.format_exc())
+            logger.error(traceback.format_exc()) # Keep traceback for other errors
             return False
 
     def predict(self, historical_data, days=None):
         """Make predictions using LSTM model."""
+        # --- Check if TensorFlow is available ---
+        if not TENSORFLOW_AVAILABLE:
+             logger.error("TensorFlow/Keras not installed. Cannot predict with LSTM model.")
+             return pd.DataFrame()
+        # --- End Check ---
+
         if not self.is_trained and not self.load_model():
             logger.error(f"LSTM model for {self.symbol} not trained/loaded")
             return pd.DataFrame()
@@ -409,9 +455,7 @@ class LSTMModel(PricePredictionModel):
             result['lower'] = result['close'] * (1 - std_dev_factor)
             logger.info(f"LSTM prediction successful for {self.symbol}")
             return result
-        except ImportError:
-             logger.error("TensorFlow/Keras not installed. Cannot predict with LSTM model.")
-             return pd.DataFrame()
+        # Removed ImportError check here
         except Exception as e:
             logger.error(f"Error making predictions with LSTM model for {self.symbol}: {e}")
             logger.error(traceback.format_exc())
@@ -419,6 +463,12 @@ class LSTMModel(PricePredictionModel):
 
     def evaluate(self, test_data):
         """Evaluate LSTM model performance."""
+        # --- Check if TensorFlow is available ---
+        if not TENSORFLOW_AVAILABLE:
+             logger.error("TensorFlow/Keras not installed. Cannot evaluate LSTM model.")
+             return {'error': 'TensorFlow/Keras not installed'}
+        # --- End Check ---
+
         if not self.is_trained and not self.load_model():
             logger.error(f"LSTM model for {self.symbol} not trained/loaded")
             return {}
@@ -446,9 +496,7 @@ class LSTMModel(PricePredictionModel):
             mape = np.mean(np.abs((non_zero_y - predictions[y_test != 0]) / non_zero_y)) * 100 if non_zero_y.size > 0 else 0.0
 
             return {'mae': float(mae), 'mse': float(mse), 'rmse': float(rmse), 'mape': float(mape)}
-        except ImportError:
-             logger.error("TensorFlow/Keras not installed.")
-             return {'error': 'TensorFlow/Keras not installed'}
+        # Removed ImportError check here
         except Exception as e:
             logger.error(f"Error evaluating LSTM model for {self.symbol}: {e}")
             logger.error(traceback.format_exc())
@@ -456,6 +504,12 @@ class LSTMModel(PricePredictionModel):
 
     def save_model(self):
         """Save LSTM model (.h5) and scaler (.pkl)."""
+        # --- Check if TensorFlow is available ---
+        if not TENSORFLOW_AVAILABLE:
+             logger.error("TensorFlow/Keras not installed. Cannot save LSTM model.")
+             return None
+        # --- End Check ---
+
         if not self.is_trained:
             logger.warning(f"LSTM model for {self.symbol} not trained, cannot save")
             return None
@@ -480,15 +534,19 @@ class LSTMModel(PricePredictionModel):
 
             logger.info(f"LSTM model and scaler saved successfully for {self.symbol}")
             return model_filename # Return the primary model filename
-        except ImportError:
-             logger.error("TensorFlow/Keras not installed. Cannot save LSTM model.")
-             return None
+        # Removed ImportError check here
         except Exception as e:
             logger.error(f"Error saving LSTM model for {self.symbol}: {e}")
             return None
 
     def load_model(self):
         """Load LSTM model (.h5) and scaler (.pkl)."""
+        # --- Check if TensorFlow is available ---
+        if not TENSORFLOW_AVAILABLE:
+             logger.error("TensorFlow/Keras not installed. Cannot load LSTM model.")
+             return False
+        # --- End Check ---
+
         if not self.symbol:
             logger.error(f"Symbol not provided for LSTM model during load")
             return False
@@ -509,7 +567,9 @@ class LSTMModel(PricePredictionModel):
 
         try:
             logger.info(f"Loading LSTM model from {model_path}")
+            # --- Use tf.keras to load model ---
             self.model = tf.keras.models.load_model(model_path)
+            # --- End Use ---
 
             logger.info(f"Loading LSTM scaler from {scaler_path}")
             with open(scaler_path, 'rb') as f:
@@ -518,9 +578,7 @@ class LSTMModel(PricePredictionModel):
             self.is_trained = True
             logger.info(f"LSTM model and scaler loaded successfully for {self.symbol}")
             return True
-        except ImportError:
-             logger.error("TensorFlow/Keras not installed. Cannot load LSTM model.")
-             return False
+        # Removed ImportError check here
         except Exception as e:
             logger.error(f"Error loading LSTM model for {self.symbol}: {e}")
             logger.error(traceback.format_exc())
@@ -1101,3 +1159,118 @@ def handle_nan_values(prediction_data):
             if 'lower' in cleaned_data['confidence'] and isinstance(cleaned_data['confidence']['lower'], list):
                  cleaned_data['confidence']['lower'] = [cleaned_data['confidence']['lower'][i] for i in valid_indices if i < len(cleaned_data['confidence']['lower'])]
     return cleaned_data
+
+def predict_with_specific_model(symbol, filename, days=30):
+    """
+    Loads a specific trained model file and generates predictions.
+
+    Args:
+        symbol (str): The symbol being analyzed (for context and data fetching).
+        filename (str): The filename of the trained model (e.g., 'prophet_AAPL.pkl').
+        days (int): Number of days to predict.
+
+    Returns:
+        dict: Prediction data dictionary similar to get_price_predictions,
+              or {'error': 'message'} on failure.
+    """
+    logger.info(f"Attempting prediction for {symbol} using specific file: {filename}")
+    predictor = None
+    model_type = 'unknown'
+    symbol_from_filename = 'unknown'
+
+    try:
+        # --- 1. Parse filename to determine model type and symbol ---
+        base_filename = os.path.basename(filename)
+        parts = base_filename.split('_')
+        file_ext = os.path.splitext(base_filename)[1]
+
+        if len(parts) >= 2:
+            model_type = parts[0].lower()
+            # Handle potential multiple underscores in symbol (e.g., BRK_B)
+            symbol_from_filename = '_'.join(parts[1:]).replace(file_ext, '')
+        else:
+            raise ValueError(f"Invalid model filename format: {filename}")
+
+        logger.info(f"Parsed model type: {model_type}, symbol: {symbol_from_filename} from filename.")
+
+        # --- 2. Validate symbol match ---
+        if symbol.upper() != symbol_from_filename.upper():
+            error_msg = f"Selected model ({filename}) is for symbol {symbol_from_filename}, but analysis is for {symbol}."
+            logger.error(error_msg)
+            return {'error': error_msg}
+
+        # --- 3. Instantiate the correct model class ---
+        if model_type == 'prophet':
+            if not PROPHET_AVAILABLE: raise ImportError("Prophet not installed")
+            predictor = ProphetModel(symbol=symbol, prediction_days=days)
+        elif model_type == 'arima':
+            predictor = ARIMAModel(symbol=symbol, prediction_days=days)
+        elif model_type == 'lstm':
+            if not TENSORFLOW_AVAILABLE: raise ImportError("TensorFlow/Keras not installed")
+            predictor = LSTMModel(symbol=symbol, prediction_days=days)
+        else:
+            raise ValueError(f"Unsupported model type '{model_type}' derived from filename.")
+
+        # --- 4. Load the specific model ---
+        # The load_model method in the classes uses self.symbol and self.model_name
+        # to construct the filename. Since we instantiated with the correct symbol,
+        # it should find the correct file(s).
+        if not predictor.load_model():
+            # load_model logs specific errors
+            raise RuntimeError(f"Failed to load model file(s) for {filename}")
+
+        logger.info(f"Successfully loaded model {filename}")
+
+        # --- 5. Get historical data ---
+        # Use a reasonable period for prediction context (e.g., 1 year)
+        historical_data = data_provider.get_historical_price(symbol, period="1y")
+        if historical_data.empty:
+            raise ValueError(f"No historical data available for {symbol} to make prediction.")
+
+        # --- 6. Make prediction ---
+        predictions_df = predictor.predict(historical_data, days=days)
+
+        if predictions_df is None or predictions_df.empty:
+            raise RuntimeError(f"Prediction using {filename} returned empty result.")
+
+        # --- 7. Format output ---
+        result = {
+            'symbol': symbol,
+            'model': model_type, # Use the type derived from filename
+            'dates': predictions_df.index.strftime('%Y-%m-%d').tolist(),
+            'values': predictions_df['close'].tolist()
+        }
+        # Add confidence intervals if available
+        if 'upper' in predictions_df.columns and 'lower' in predictions_df.columns:
+            result['confidence'] = {
+                'upper': predictions_df['upper'].tolist(),
+                'lower': predictions_df['lower'].tolist()
+            }
+        else: # Add simple confidence if missing (like LSTM)
+            std_dev_factor = 0.05 # Example factor
+            result['confidence'] = {
+                'upper': [v * (1 + std_dev_factor) for v in result['values']],
+                'lower': [v * (1 - std_dev_factor) for v in result['values']]
+            }
+
+        cleaned_result = handle_nan_values(result)
+        if not cleaned_result:
+             raise ValueError("Prediction resulted in all NaN values after cleaning.")
+
+        logger.info(f"Prediction successful using specific model {filename}")
+        return cleaned_result
+
+    except ImportError as e:
+        error_msg = f"Required library not installed for model type '{model_type}': {e}"
+        logger.error(error_msg)
+        return {'error': error_msg}
+    except FileNotFoundError as e:
+         error_msg = f"Model file or scaler not found: {e}"
+         logger.error(error_msg)
+         return {'error': error_msg}
+    except Exception as e:
+        error_msg = f"Error predicting with specific model {filename}: {e}"
+        logger.error(error_msg)
+        logger.error(traceback.format_exc())
+        return {'error': error_msg}
+
