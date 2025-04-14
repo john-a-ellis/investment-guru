@@ -1,11 +1,10 @@
 # components/ml_prediction_component.py
 """
-ML prediction component for the Investment Recommendation System.
-Provides visualization and interaction with ML models for price prediction, trend analysis,
-portfolio insights, and model management.
+Enhanced ML prediction component that allows users to select different model types for training.
+This implementation adds a dropdown to select the model type before training.
 """
 import dash
-from dash import dcc, html, Input, Output, State, callback, ctx # Added ctx
+from dash import dcc, html, Input, Output, State, callback, ctx 
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 import plotly.express as px
@@ -13,22 +12,22 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import time
-import logging # Added
-import traceback # Added for error logging
-import json # Added
+import logging
+import traceback
+import json
 from dash.exceptions import PreventUpdate
 
 # Import custom modules for ML predictions and analysis
 from modules.model_integration import ModelIntegration
 from modules.trend_analysis import TrendAnalyzer
-from modules.price_prediction import get_price_predictions # Keep original prediction function
-from modules.portfolio_utils import load_tracked_assets, load_portfolio, record_transaction # Added record_transaction
+from modules.price_prediction import get_price_predictions
+from modules.portfolio_utils import load_tracked_assets, load_portfolio, record_transaction
 from modules.data_provider import data_provider
 
 # Import the function to get trained model data
 import sys
 import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '..')) # Add parent dir
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 try:
     from modules.db_utils import get_trained_models_data
 except ImportError:
@@ -57,6 +56,208 @@ def create_trained_models_table(models_df):
             html.Th("Notes", style={'maxWidth': '200px'})
         ]))
     ]
+# Register all callbacks for the ML prediction component
+def register_ml_prediction_callbacks(app):
+    """
+    Register callbacks for the enhanced ML prediction component.
+    """
+    # Initialize model integration
+    model_integration = ModelIntegration()
+
+    # Populate asset selectors
+    @app.callback(
+        [Output("ml-asset-selector", "options"), Output("ml-train-asset-selector", "options")],
+        Input("ml-update-interval", "n_intervals")
+    )
+    def update_asset_options(n_intervals):
+        tracked_assets = load_tracked_assets()
+        portfolio = load_portfolio()
+        portfolio_symbols = {details.get("symbol", "") for _, details in portfolio.items() if details.get("symbol")}
+        all_symbols = sorted(set(tracked_assets.keys()) | portfolio_symbols)
+        options = [{"label": f"{symbol} - {tracked_assets.get(symbol, {}).get('name', symbol)}", "value": symbol} for symbol in all_symbols if symbol]
+        return options, options
+
+    # Generate price prediction
+    @app.callback(
+        [Output("ml-prediction-chart", "figure"), Output("ml-prediction-details", "children"), Output("ml-prediction-data", "data")],
+        Input("ml-analyze-button", "n_clicks"),
+        [State("ml-asset-selector", "value"), State("ml-horizon-selector", "value")],
+        prevent_initial_call=True
+    )
+    def update_prediction(n_clicks, symbol, days):
+        if n_clicks is None or not symbol: raise PreventUpdate
+        try:
+            historical_data_df = data_provider.get_historical_price(symbol, period="1y")
+            if historical_data_df.empty:
+                fig = go.Figure().update_layout(title=f"Error: No historical data available for {symbol}", template="plotly_white")
+                return fig, html.Div(f"No historical data available for {symbol}."), None
+
+            prediction_data = get_price_predictions(symbol=symbol, days=days) # Uses the refactored function
+
+            if prediction_data and prediction_data.get('values'):
+                chart = create_prediction_chart(prediction_data, historical_data_df)
+                details = create_prediction_details(prediction_data, historical_data_df)
+                return chart, details, prediction_data
+            else:
+                fig = go.Figure().update_layout(title=f"Error: Could not generate predictions for {symbol}", template="plotly_white")
+                return fig, dbc.Alert(f"Could not generate predictions for {symbol}. Try training a model first.", color="warning"), None
+        except Exception as e:
+            logger.error(f"Error in update_prediction for {symbol}: {e}")
+            traceback.print_exc()
+            fig = go.Figure().update_layout(title=f"Error: {str(e)}", template="plotly_white")
+            return fig, dbc.Alert(f"Error generating prediction: {str(e)}", color="danger"), None
+
+
+    # Generate trend analysis
+    @app.callback(
+        Output("trend-analysis-content", "children"),
+        Input("ml-analyze-button", "n_clicks"),
+        State("ml-asset-selector", "value"),
+        prevent_initial_call=True
+    )
+    def update_trend_analysis(n_clicks, symbol):
+        if n_clicks is None or not symbol: raise PreventUpdate
+        try:
+            analysis = model_integration.get_asset_analysis(symbol)
+            if analysis:
+                return create_trend_analysis_display(analysis)
+            else:
+                return dbc.Alert(f"Could not generate analysis for {symbol}.", color="warning")
+        except Exception as e:
+            logger.error(f"Error generating trend analysis for {symbol}: {e}")
+            return dbc.Alert(f"Error generating trend analysis: {str(e)}", color="danger")
+
+    # Generate portfolio insights
+    @app.callback(
+        Output("ml-portfolio-insights", "children"),
+        Input("ml-portfolio-insights-button", "n_clicks"),
+        prevent_initial_call=True
+    )
+    def update_portfolio_insights(n_clicks):
+        if n_clicks is None: raise PreventUpdate
+        try:
+            recommendations = model_integration.get_portfolio_recommendations()
+            return create_portfolio_insights(recommendations)
+        except Exception as e:
+            logger.error(f"Error generating portfolio insights: {e}")
+            return dbc.Alert(f"Error generating portfolio insights: {str(e)}", color="danger")
+
+    # Train model - Updated to use the selected model type
+    @app.callback(
+        Output("ml-training-status", "children"),
+        Input("ml-train-button", "n_clicks"),
+        [State("ml-train-asset-selector", "value"), 
+         State("ml-train-model-type", "value")],  # Added model type state
+        prevent_initial_call=True
+    )
+    def train_model(n_clicks, symbol, model_type):
+        """Train a model for the selected asset using the selected model type"""
+        if n_clicks is None or not symbol:
+            raise PreventUpdate
+        
+        try:
+            # Use the selected model type (default to prophet if somehow none is selected)
+            selected_model_type = model_type if model_type else "prophet"
+            
+            # Pass model_type to the integration function
+            status = model_integration.train_models_for_symbol(
+                symbol,
+                model_type=selected_model_type,  # Use selected model type
+                lookback_period="2y",
+                async_training=True
+            )
+            
+            if status == "pending":
+                return dbc.Alert(
+                    [
+                        html.H5(f"Training Started"),
+                        html.P(f"Training a {selected_model_type.upper()} model for {symbol}."),
+                        html.P("Check the status table below for updates. Training may take several minutes."),
+                        html.Div([
+                            dbc.Progress(animated=True, value=100, striped=True, className="mb-2")
+                        ])
+                    ], 
+                    color="info"
+                )
+            else:
+                return dbc.Alert(f"Training status for {symbol} ({selected_model_type.upper()}): {status}", color="warning")
+        except Exception as e:
+            logger.error(f"Error initiating training for {symbol} ({model_type}): {e}")
+            return dbc.Alert(f"Error starting training: {str(e)}", color="danger")
+
+    # Update training status table
+    @app.callback(
+        Output("ml-training-status-table", "children"),
+        [Input("ml-update-interval", "n_intervals"),
+         Input("ml-training-status", "children")],
+        prevent_initial_call=False
+    )
+    def update_training_status_table(n_intervals, training_status_feedback):
+        try:
+            status_dict = model_integration.get_model_training_status()
+            return create_training_status_table(status_dict)
+        except Exception as e:
+            logger.error(f"Error retrieving training status table: {e}")
+            traceback.print_exc()
+            return dbc.Alert(f"Error retrieving training status: {str(e)}", color="danger")
+
+    # Handle sell recommendation clicks
+    @app.callback(
+        Output("ml-portfolio-insights", "children", allow_duplicate=True),
+        Input({"type": "sell-rec-button", "symbol": dash.ALL}, "n_clicks"),
+        State({"type": "sell-rec-button", "symbol": dash.ALL}, "id"),
+        prevent_initial_call=True
+    )
+    def handle_sell_recommendation(n_clicks_list, button_ids):
+        if not ctx.triggered or not any(n for n in n_clicks_list if n): raise PreventUpdate
+        clicked_idx = next((i for i, n in enumerate(n_clicks_list) if n), None)
+        if clicked_idx is None: raise PreventUpdate
+        symbol = button_ids[clicked_idx]["symbol"]
+        try:
+            quote = data_provider.get_current_quote(symbol)
+            if quote and 'price' in quote:
+                current_price = quote['price']
+                portfolio = load_portfolio()
+                shares_owned = sum(float(details.get("shares", 0)) for inv_id, details in portfolio.items() if details.get("symbol") == symbol)
+
+                if shares_owned <= 0: return dbc.Alert(f"No shares of {symbol} owned to sell.", color="warning")
+
+                shares_to_sell = shares_owned # Sell all
+                success = record_transaction("sell", symbol, current_price, shares_to_sell, date=datetime.now().strftime("%Y-%m-%d"))
+                if success:
+                    recommendations = model_integration.get_portfolio_recommendations()
+                    insights_content = create_portfolio_insights(recommendations)
+                    return [dbc.Alert(f"Successfully recorded sell transaction for {shares_to_sell:.2f} shares of {symbol}", color="success"), insights_content]
+                else:
+                    return dbc.Alert(f"Failed to record sell transaction for {symbol}", color="danger")
+            else:
+                return dbc.Alert(f"Could not get current price for {symbol} to record sell.", color="warning")
+        except Exception as e:
+            logger.error(f"Error handling sell recommendation for {symbol}: {e}")
+            return dbc.Alert(f"Error creating sell transaction: {str(e)}", color="danger")
+
+    # Callback for Trained Models Table
+    @app.callback(
+        Output("trained-models-table", "children"),
+        [Input("refresh-trained-models", "n_clicks"),
+         Input("ml-prediction-tabs", "active_tab")],
+        prevent_initial_call=False
+    )
+    def update_trained_models_display(refresh_clicks, active_tab):
+        triggered_id = ctx.triggered_id if ctx.triggered else None
+        if active_tab == 'model-training-tab' or triggered_id == 'refresh-trained-models':
+            logger.info(f"Updating trained models table. Trigger: {triggered_id}, Active Tab: {active_tab}")
+            try:
+                models_df = get_trained_models_data()
+                return create_trained_models_table(models_df)
+            except Exception as e:
+                 logger.error(f"Error updating trained models display: {e}")
+                 logger.error(traceback.format_exc())
+                 return dbc.Alert(f"Error loading model data: {e}", color="danger")
+        else:
+            logger.debug(f"Preventing update for trained models table. Trigger: {triggered_id}, Active Tab: {active_tab}")
+            raise PreventUpdate
+    
     rows = []
     for index, row in models_df.iterrows():
         metrics_dict = row.get('metrics', {})
@@ -91,105 +292,9 @@ def create_trained_models_table(models_df):
     body = [html.Tbody(rows)]
     return dbc.Table(header + body, bordered=True, striped=True, hover=True, responsive=True, size="sm")
 
-def create_ml_prediction_component():
-    """
-    Creates the ML Prediction component with a simplified layout that does not rely
-    on the problematic ml-train-model-type component.
-    """
-    return dbc.Card([
-        dbc.CardHeader([
-            html.H4("AI Investment Analysis & Model Management", className="card-title"),
-            html.P("Machine learning predictions, technical analysis, and model overview", className="card-subtitle")
-        ]),
-        dbc.CardBody([
-            dbc.Tabs(id="ml-prediction-tabs", active_tab="price-prediction-tab", children=[
-                # Tab 1: Price Prediction
-                dbc.Tab(label="Price Prediction", tab_id="price-prediction-tab", children=[
-                    dbc.Row([
-                        dbc.Col([
-                            dbc.Label("Select Asset"),
-                            dbc.InputGroup([
-                                dbc.Select(id="ml-asset-selector", placeholder="Select an asset to analyze"),
-                                dbc.Button("Analyze", id="ml-analyze-button", color="primary")
-                            ]),
-                        ], width=6),
-                        dbc.Col([
-                            dbc.Label("Prediction Horizon"),
-                            dbc.RadioItems(
-                                id="ml-horizon-selector",
-                                options=[{"label": "30 Days", "value": 30}, {"label": "60 Days", "value": 60}, {"label": "90 Days", "value": 90}],
-                                value=30, inline=True
-                            )
-                        ], width=6)
-                    ], className="mb-3"),
-                    dbc.Spinner([dcc.Graph(id="ml-prediction-chart")], color="primary", type="border", fullscreen=False),
-                    html.Div(id="ml-prediction-details", className="mt-3"),
-                    dcc.Store(id="ml-prediction-data")
-                ]),
-
-                # Tab 2: Technical Analysis 
-                dbc.Tab(label="Technical Analysis", tab_id="technical-analysis-tab", children=[
-                    dbc.Row([dbc.Col([dbc.Spinner([html.Div(id="trend-analysis-content")], color="primary", type="border")], width=12)])
-                ]),
-
-                # Tab 3: Portfolio Insights
-                dbc.Tab(label="Portfolio Insights", tab_id="portfolio-insights-tab", children=[
-                    dbc.Row([dbc.Col([
-                        dbc.Button("Generate Portfolio Insights", id="ml-portfolio-insights-button", color="success", className="mb-3"),
-                        dbc.Spinner([html.Div(id="ml-portfolio-insights")], color="primary", type="border")
-                    ], width=12)])
-                ]),
-
-                # Tab 4: Model Training (Simplified)
-                dbc.Tab(label="Model Training", tab_id="model-training-tab", children=[
-                    # Trained Model Overview
-                    html.Div([
-                        html.H5("Trained Model Overview"),
-                        dbc.Button(
-                            "Refresh Model List", id="refresh-trained-models",
-                            color="secondary", size="sm", className="mb-3", n_clicks=0
-                        ),
-                        html.Div(id="trained-models-table-container", children=[
-                            dbc.Spinner(html.Div(id="trained-models-table"))
-                        ]),
-                    ]),
-                    html.Hr(),
-                    # Training Controls & Status (Simplified without model type selection)
-                    html.Div([
-                        html.H5("Train New Model / View Status"),
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Label("Select Asset to Train"),
-                                dbc.InputGroup([
-                                    dbc.Select(id="ml-train-asset-selector", placeholder="Select an asset for model training"),
-                                    dbc.Button("Train Prophet Model", id="ml-train-button", color="warning")
-                                ]),
-                                html.Div([
-                                    html.Small("Note: Currently only training Prophet models. Other model types will be supported in a future update.", 
-                                             className="text-muted")
-                                ], className="mt-2")
-                            ], width=12)
-                        ]),
-                        html.Div(id="ml-training-status", className="mt-3"),
-                        html.Hr(),
-                        html.H5("Model Training Status (Live)"),
-                        dbc.Spinner(html.Div(id="ml-training-status-table"))
-                    ])
-                ]),
-            ]),
-            dcc.Interval(
-                id="ml-update-interval",
-                interval=60000,  # Update every minute
-                n_intervals=0
-            )
-        ])
-    ])
-
-
 def create_prediction_chart(prediction_data, historical_data=None):
     """
     Create a prediction chart based on ML model predictions with improved error handling.
-    (Copied from original, assuming it's correct)
     """
     if not prediction_data:
         fig = go.Figure()
@@ -261,11 +366,9 @@ def create_prediction_chart(prediction_data, historical_data=None):
     return fig
 
 
-
 def create_prediction_details(prediction_data, historical_data=None):
     """
     Create detailed analysis of price predictions with improved error handling.
-    (Copied from original, assuming it's correct)
     """
     if not prediction_data: return html.Div("No prediction data available.")
     symbol = prediction_data.get('symbol', 'Unknown')
@@ -316,11 +419,9 @@ def create_prediction_details(prediction_data, historical_data=None):
 
 
 def create_trend_analysis_display(analysis_data):
-    """
-    Create trend analysis visualization for a specific asset.
-    (Copied from original, assuming it's correct and TrendAnalyzer provides the expected dict structure)
-    """
+    """Create trend analysis visualization for a specific asset."""
     if not analysis_data: return html.Div("No trend analysis data available.")
+    
     trend = analysis_data.get('trend', {})
     overall_trend = trend.get('overall_trend', 'unknown')
     trend_strength = trend.get('trend_strength', 0)
@@ -368,12 +469,11 @@ def create_trend_analysis_display(analysis_data):
 
     return html.Div([trend_card, breakout_card, levels_card, patterns_card])
 
+
 def create_portfolio_insights(recommendations):
-    """
-    Create portfolio insights based on ML recommendations.
-    (Copied from original, assuming it's correct and ModelIntegration provides the expected dict structure)
-    """
+    """Create portfolio insights based on ML recommendations."""
     if not recommendations: return html.Div("No portfolio insights available.")
+    
     buy_recs = recommendations.get('buy', [])
     sell_recs = recommendations.get('sell', [])
     portfolio_score = recommendations.get('portfolio_score', 0)
@@ -455,21 +555,18 @@ def create_training_status_table(status_dict):
     ], bordered=True, striped=True, hover=True, size="sm") # Use small size
 
 
-
-# --- MERGED COMPONENT LAYOUT FUNCTION ---
 def create_ml_prediction_component():
     """
-    Creates the merged ML Prediction component layout including all original tabs
-    and the new trained model overview.
+    Creates the enhanced ML Prediction component with model type selection.
     """
     return dbc.Card([
         dbc.CardHeader([
-            html.H4("AI Investment Analysis & Model Management", className="card-title"), # Updated title
-            html.P("Machine learning predictions, technical analysis, and model overview", className="card-subtitle") # Updated subtitle
+            html.H4("AI Investment Analysis & Model Management", className="card-title"),
+            html.P("Machine learning predictions, technical analysis, and model overview", className="card-subtitle")
         ]),
         dbc.CardBody([
-            dbc.Tabs(id="ml-prediction-tabs", active_tab="price-prediction-tab", children=[ # Default to price prediction tab
-                # Tab 1: Price Prediction (Original Structure)
+            dbc.Tabs(id="ml-prediction-tabs", active_tab="price-prediction-tab", children=[
+                # Tab 1: Price Prediction
                 dbc.Tab(label="Price Prediction", tab_id="price-prediction-tab", children=[
                     dbc.Row([
                         dbc.Col([
@@ -490,15 +587,15 @@ def create_ml_prediction_component():
                     ], className="mb-3"),
                     dbc.Spinner([dcc.Graph(id="ml-prediction-chart")], color="primary", type="border", fullscreen=False),
                     html.Div(id="ml-prediction-details", className="mt-3"),
-                    dcc.Store(id="ml-prediction-data") # Keep store if needed by callbacks
+                    dcc.Store(id="ml-prediction-data")
                 ]),
 
-                # Tab 2: Technical Analysis (Original Structure)
+                # Tab 2: Technical Analysis 
                 dbc.Tab(label="Technical Analysis", tab_id="technical-analysis-tab", children=[
                     dbc.Row([dbc.Col([dbc.Spinner([html.Div(id="trend-analysis-content")], color="primary", type="border")], width=12)])
                 ]),
 
-                # Tab 3: Portfolio Insights (Original Structure)
+                # Tab 3: Portfolio Insights
                 dbc.Tab(label="Portfolio Insights", tab_id="portfolio-insights-tab", children=[
                     dbc.Row([dbc.Col([
                         dbc.Button("Generate Portfolio Insights", id="ml-portfolio-insights-button", color="success", className="mb-3"),
@@ -506,9 +603,9 @@ def create_ml_prediction_component():
                     ], width=12)])
                 ]),
 
-                # Tab 4: Model Training (Merged Structure)
+                # Tab 4: Model Training (Enhanced with model type selection)
                 dbc.Tab(label="Model Training", tab_id="model-training-tab", children=[
-                    # --- New: Trained Model Overview ---
+                    # Trained Model Overview
                     html.Div([
                         html.H5("Trained Model Overview"),
                         dbc.Button(
@@ -519,233 +616,60 @@ def create_ml_prediction_component():
                             dbc.Spinner(html.Div(id="trained-models-table"))
                         ]),
                     ]),
-                    html.Hr(), # Separator
-                    # --- Original: Training Controls & Status ---
+                    html.Hr(),
+                    # Training Controls & Status with model type selection
                     html.Div([
                         html.H5("Train New Model / View Status"),
                         dbc.Row([
                             dbc.Col([
                                 dbc.Label("Select Asset to Train"),
-                                dbc.InputGroup([
-                                    dbc.Select(id="ml-train-asset-selector", placeholder="Select an asset for model training"),
-                                    dbc.Button("Train Model", id="ml-train-button", color="warning")
-                                ]),
-                                html.Div(id="ml-training-status", className="mt-3"), # Immediate feedback
-                                html.Hr(),
-                                html.H5("Model Training Status (Live)"),
-                                dbc.Spinner(html.Div(id="ml-training-status-table")) # Table for all statuses
+                                dbc.Select(id="ml-train-asset-selector", placeholder="Select an asset for model training"),
+                            ], width=6),
+                            dbc.Col([
+                                dbc.Label("Select Model Type"),
+                                dbc.Select(
+                                    id="ml-train-model-type",
+                                    options=[
+                                        {"label": "Prophet (Best for Most Cases)", "value": "prophet"},
+                                        {"label": "ARIMA (Statistical Model)", "value": "arima"},
+                                        {"label": "LSTM (Deep Learning)", "value": "lstm"}
+                                    ],
+                                    value="prophet",
+                                    placeholder="Select model type"
+                                ),
+                            ], width=6)
+                        ], className="mb-3"),
+                        dbc.Row([
+                            dbc.Col([
+                                dbc.Button("Train Model", id="ml-train-button", color="warning", className="w-100")
                             ], width=12)
-                        ])
+                        ]),
+                        html.Div([
+                            dbc.Popover(
+                                [
+                                    dbc.PopoverHeader("Model Type Information"),
+                                    dbc.PopoverBody([
+                                        html.P("Prophet: Facebook's forecasting tool. Fast, handles seasonality well, good for most assets."),
+                                        html.P("ARIMA: Statistical time series model. Good for data with clear trends but limited seasonality."),
+                                        html.P("LSTM: Deep learning neural network. Can capture complex patterns but requires more data and training time."),
+                                    ]),
+                                ],
+                                target="ml-train-model-type",
+                                trigger="hover",
+                                placement="bottom"
+                            ),
+                        ]),
+                        html.Div(id="ml-training-status", className="mt-3"),
+                        html.Hr(),
+                        html.H5("Model Training Status (Live)"),
+                        dbc.Spinner(html.Div(id="ml-training-status-table"))
                     ])
                 ]),
             ]),
             dcc.Interval(
-                id="ml-update-interval", # Keep original interval ID if used by original callbacks
-                interval=60000,  # Update every minute (adjust as needed)
+                id="ml-update-interval",
+                interval=60000,  # Update every minute
                 n_intervals=0
             )
         ])
     ])
-
-# --- MERGED CALLBACK REGISTRATION FUNCTION ---
-def register_ml_prediction_callbacks(app):
-    """
-    Register callbacks for the merged ML prediction component.
-    Includes callbacks from the original component and the new overview table.
-    """
-    # Initialize model integration (from original)
-    model_integration = ModelIntegration()
-
-    # --- Callbacks from Original Component ---
-
-    # Populate asset selectors (original)
-    @app.callback(
-        [Output("ml-asset-selector", "options"), Output("ml-train-asset-selector", "options")],
-        Input("ml-update-interval", "n_intervals")
-    )
-    def update_asset_options(n_intervals):
-        # ... (logic remains the same) ...
-        tracked_assets = load_tracked_assets()
-        portfolio = load_portfolio()
-        portfolio_symbols = {details.get("symbol", "") for _, details in portfolio.items() if details.get("symbol")}
-        all_symbols = sorted(set(tracked_assets.keys()) | portfolio_symbols)
-        options = [{"label": f"{symbol} - {tracked_assets.get(symbol, {}).get('name', symbol)}", "value": symbol} for symbol in all_symbols if symbol]
-        return options, options
-
-    # Generate price prediction (original)
-    @app.callback(
-        [Output("ml-prediction-chart", "figure"), Output("ml-prediction-details", "children"), Output("ml-prediction-data", "data")],
-        Input("ml-analyze-button", "n_clicks"),
-        [State("ml-asset-selector", "value"), State("ml-horizon-selector", "value")],
-        prevent_initial_call=True
-    )
-    def update_prediction(n_clicks, symbol, days):
-        # ... (logic remains the same, uses get_price_predictions) ...
-        if n_clicks is None or not symbol: raise PreventUpdate
-        try:
-            historical_data_df = data_provider.get_historical_price(symbol, period="1y")
-            if historical_data_df.empty:
-                fig = go.Figure().update_layout(title=f"Error: No historical data available for {symbol}", template="plotly_white")
-                return fig, html.Div(f"No historical data available for {symbol}."), None
-
-            prediction_data = get_price_predictions(symbol=symbol, days=days) # Uses the refactored function
-
-            if prediction_data and prediction_data.get('values'):
-                chart = create_prediction_chart(prediction_data, historical_data_df)
-                details = create_prediction_details(prediction_data, historical_data_df)
-                return chart, details, prediction_data
-            else:
-                fig = go.Figure().update_layout(title=f"Error: Could not generate predictions for {symbol}", template="plotly_white")
-                return fig, dbc.Alert(f"Could not generate predictions for {symbol}. Try training a model first.", color="warning"), None
-        except Exception as e:
-            logger.error(f"Error in update_prediction for {symbol}: {e}")
-            traceback.print_exc()
-            fig = go.Figure().update_layout(title=f"Error: {str(e)}", template="plotly_white")
-            return fig, dbc.Alert(f"Error generating prediction: {str(e)}", color="danger"), None
-
-
-    # Generate trend analysis (original)
-    @app.callback(
-        Output("trend-analysis-content", "children"),
-        Input("ml-analyze-button", "n_clicks"),
-        State("ml-asset-selector", "value"),
-        prevent_initial_call=True
-    )
-    def update_trend_analysis(n_clicks, symbol):
-         # ... (logic remains the same) ...
-        if n_clicks is None or not symbol: raise PreventUpdate
-        try:
-            analysis = model_integration.get_asset_analysis(symbol)
-            if analysis:
-                return create_trend_analysis_display(analysis)
-            else:
-                return dbc.Alert(f"Could not generate analysis for {symbol}.", color="warning")
-        except Exception as e:
-            logger.error(f"Error generating trend analysis for {symbol}: {e}")
-            return dbc.Alert(f"Error generating trend analysis: {str(e)}", color="danger")
-
-    # Generate portfolio insights (original)
-    @app.callback(
-        Output("ml-portfolio-insights", "children"),
-        Input("ml-portfolio-insights-button", "n_clicks"),
-        prevent_initial_call=True
-    )
-    def update_portfolio_insights(n_clicks):
-         # ... (logic remains the same) ...
-        if n_clicks is None: raise PreventUpdate
-        try:
-            recommendations = model_integration.get_portfolio_recommendations()
-            return create_portfolio_insights(recommendations)
-        except Exception as e:
-            logger.error(f"Error generating portfolio insights: {e}")
-            return dbc.Alert(f"Error generating portfolio insights: {str(e)}", color="danger")
-
-    # Train model (original) - Outputs immediate feedback
-    @app.callback(
-    Output("ml-training-status", "children"),
-    Input("ml-train-button", "n_clicks"),
-    State("ml-train-asset-selector", "value"),
-    prevent_initial_call=True
-)
-    def train_model(n_clicks, symbol):
-        """Train a model for the selected asset using the default Prophet model type"""
-        if n_clicks is None or not symbol:
-            raise PreventUpdate
-        
-        try:
-            # Use 'prophet' as the default model type
-            model_type = "prophet"
-            
-            # Pass model_type to the integration function
-            status = model_integration.train_models_for_symbol(
-                symbol,
-                model_type=model_type,  # Always use prophet for now
-                lookback_period="2y",
-                async_training=True
-            )
-            
-            if status == "pending":
-                return dbc.Alert(f"Training started for {symbol} (Model: {model_type.upper()}). Check status table below.", color="info")
-            else:
-                return dbc.Alert(f"Training status for {symbol} ({model_type.upper()}): {status}", color="warning")
-        except Exception as e:
-            logger.error(f"Error initiating training for {symbol} ({model_type}): {e}")
-            return dbc.Alert(f"Error starting training: {str(e)}", color="danger")
-
-    # Update training status table (original) - Periodically updates the table
-    @app.callback(
-        Output("ml-training-status-table", "children"),
-        [Input("ml-update-interval", "n_intervals"),
-         Input("ml-training-status", "children")],
-        prevent_initial_call=False
-    )
-    def update_training_status_table(n_intervals, training_status_feedback):
-        try:
-            status_dict = model_integration.get_model_training_status()
-            return create_training_status_table(status_dict) # Uses the modified helper
-        except Exception as e:
-            logger.error(f"Error retrieving training status table: {e}")
-            traceback.print_exc()
-            return dbc.Alert(f"Error retrieving training status: {str(e)}", color="danger")
-
-    # Handle sell recommendation clicks (original)
-    @app.callback(
-        Output("ml-portfolio-insights", "children", allow_duplicate=True),
-        Input({"type": "sell-rec-button", "symbol": dash.ALL}, "n_clicks"),
-        State({"type": "sell-rec-button", "symbol": dash.ALL}, "id"),
-        prevent_initial_call=True
-    )
-    def handle_sell_recommendation(n_clicks_list, button_ids):
-        # ... (logic remains the same) ...
-        if not ctx.triggered or not any(n for n in n_clicks_list if n): raise PreventUpdate
-        clicked_idx = next((i for i, n in enumerate(n_clicks_list) if n), None)
-        if clicked_idx is None: raise PreventUpdate
-        symbol = button_ids[clicked_idx]["symbol"]
-        try:
-            quote = data_provider.get_current_quote(symbol)
-            if quote and 'price' in quote:
-                current_price = quote['price']
-                portfolio = load_portfolio()
-                shares_owned = sum(float(details.get("shares", 0)) for inv_id, details in portfolio.items() if details.get("symbol") == symbol)
-
-                if shares_owned <= 0: return dbc.Alert(f"No shares of {symbol} owned to sell.", color="warning")
-
-                shares_to_sell = shares_owned # Sell all
-                success = record_transaction("sell", symbol, current_price, shares_to_sell, date=datetime.now().strftime("%Y-%m-%d"))
-                if success:
-                    recommendations = model_integration.get_portfolio_recommendations()
-                    insights_content = create_portfolio_insights(recommendations)
-                    return [dbc.Alert(f"Successfully recorded sell transaction for {shares_to_sell:.2f} shares of {symbol}", color="success"), insights_content]
-                else:
-                    return dbc.Alert(f"Failed to record sell transaction for {symbol}", color="danger")
-            else:
-                return dbc.Alert(f"Could not get current price for {symbol} to record sell.", color="warning")
-        except Exception as e:
-            logger.error(f"Error handling sell recommendation for {symbol}: {e}")
-            return dbc.Alert(f"Error creating sell transaction: {str(e)}", color="danger")
-
-    # --- Callback for Trained Models Table (New) ---
-    @app.callback(
-        Output("trained-models-table", "children"),
-        [Input("refresh-trained-models", "n_clicks"),
-         Input("ml-prediction-tabs", "active_tab")],
-        prevent_initial_call=False
-    )
-    def update_trained_models_display(refresh_clicks, active_tab):
-        # ... (logic remains the same) ...
-        triggered_id = ctx.triggered_id if ctx.triggered else None
-        if active_tab == 'model-training-tab' or triggered_id == 'refresh-trained-models':
-            logger.info(f"Updating trained models table. Trigger: {triggered_id}, Active Tab: {active_tab}")
-            try:
-                models_df = get_trained_models_data()
-                return create_trained_models_table(models_df)
-            except Exception as e:
-                 logger.error(f"Error updating trained models display: {e}")
-                 logger.error(traceback.format_exc())
-                 return dbc.Alert(f"Error loading model data: {e}", color="danger")
-        else:
-            logger.debug(f"Preventing update for trained models table. Trigger: {triggered_id}, Active Tab: {active_tab}")
-            raise PreventUpdate
-
-
-# --- END OF MERGED CALLBACKS ---
