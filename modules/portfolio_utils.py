@@ -466,18 +466,20 @@ def _update_portfolio_after_transaction(transaction_type, symbol, price, shares,
 def record_transaction(transaction_type, symbol, price, shares, date=None, notes=""):
     """
     Record a buy/sell transaction in the database and update the portfolio.
+    Also updates cash positions to reflect the transaction.
 
     Args:
-        transaction_type (str): "buy" or "sell".
-        symbol (str): Asset symbol.
-        price (float): Price per share/unit.
-        shares (float): Number of shares/units.
-        date (str): Transaction date (YYYY-MM-DD, optional, defaults to current date).
-        notes (str): Transaction notes (optional).
+        transaction_type (str): "buy" or "sell"
+        symbol (str): Asset symbol
+        price (float): Price per share/unit
+        shares (float): Number of shares/units
+        date (str): Transaction date (YYYY-MM-DD, optional, defaults to current date)
+        notes (str): Transaction notes (optional)
 
     Returns:
-        bool: Success status.
+        bool: Success status
     """
+    # Existing code stays the same...
     if date is None:
         date = datetime.now().strftime("%Y-%m-%d")
     else:
@@ -488,13 +490,13 @@ def record_transaction(transaction_type, symbol, price, shares, date=None, notes
              logger.error(f"Invalid date format for transaction: {date}. Using today.")
              date = datetime.now().strftime("%Y-%m-%d")
 
-
     symbol_upper = symbol.upper().strip()
     shares_float = float(shares)
     price_float = float(price)
     amount = price_float * shares_float
     transaction_id = str(uuid.uuid4())
 
+    # Insert transaction
     insert_query = """
     INSERT INTO transactions (
         id, type, symbol, price, shares, amount,
@@ -512,11 +514,27 @@ def record_transaction(transaction_type, symbol, price, shares, date=None, notes
         # Update portfolio based on transaction
         try:
             _update_portfolio_after_transaction(transaction_type, symbol_upper, price_float, shares_float, date)
+            
+            # IMPORTANT NEW CODE: Update cash position based on the transaction
+            try:
+                # Determine currency based on symbol
+                currency = "CAD" if symbol_upper.endswith(".TO") or symbol_upper.endswith(".V") or symbol_upper.startswith("MAW") else "USD"
+                
+                # Update cash - SUBTRACT for buy, ADD for sell
+                if transaction_type.lower() == "buy":
+                    track_cash_position("buy", amount, currency)
+                else:  # sell
+                    track_cash_position("sell", amount, currency)
+                
+                logger.info(f"Cash position updated for {transaction_type} of {symbol_upper}")
+            except Exception as cash_err:
+                logger.error(f"Failed to update cash position: {cash_err}")
+                # Continue execution even if cash update fails
+            
             logger.info(f"Transaction recorded and portfolio updated: {transaction_type} {shares_float} shares of {symbol_upper}")
             return True
         except Exception as update_err:
              logger.error(f"Transaction recorded ({transaction_id}), but failed to update portfolio: {update_err}")
-             # Consider how to handle this inconsistency - maybe flag the transaction?
              return False # Indicate partial failure
     else:
         logger.error(f"Failed to record transaction: {symbol_upper} {transaction_type} {shares_float} shares")
