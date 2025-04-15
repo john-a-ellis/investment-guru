@@ -344,6 +344,7 @@ def migrate_json_to_db():
         if not migrate_tracked_assets(): all_success = False
         if not migrate_user_profile(): all_success = False
         if not migrate_mutual_fund_data(): all_success = False
+        if not migrate_cash_positions(): all_success = False
         
         if all_success:
             logger.info("Migration check from JSON to database completed.")
@@ -357,7 +358,101 @@ def migrate_json_to_db():
         import traceback
         traceback.print_exc()
         return False
-
+def migrate_cash_positions():
+    """Migrate cash positions from JSON to database if available"""
+    logger.info("Checking for cash positions data to migrate...")
+    cash_file = 'data/cash_positions.json'
+    
+    if not os.path.exists(cash_file):
+        logger.info("No cash positions file found. Will initialize with default empty positions.")
+        
+        # Create default USD and CAD positions with zero balance
+        insert_query = """
+        INSERT INTO cash_positions (currency, balance, last_updated)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (currency) DO NOTHING;
+        """
+        
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Add USD position
+        execute_query(insert_query, ("USD", 0.0, now), commit=True)
+        
+        # Add CAD position
+        execute_query(insert_query, ("CAD", 0.0, now), commit=True)
+        
+        logger.info("Initialized default empty cash positions (USD, CAD).")
+        return True
+    
+    try:
+        cash_data = load_json_file(cash_file)
+        migrated_count = 0
+        
+        for currency, details in cash_data.items():
+            currency_upper = currency.upper()
+            
+            # Check if this currency position already exists
+            check_query = "SELECT currency FROM cash_positions WHERE currency = %s;"
+            existing = execute_query(check_query, (currency_upper,), fetchone=True)
+            
+            if existing:
+                logger.debug(f"Cash position for {currency_upper} already exists, updating balance.")
+                # Update existing position
+                update_query = """
+                UPDATE cash_positions
+                SET balance = %s, last_updated = %s
+                WHERE currency = %s;
+                """
+                
+                balance = float(details.get("balance", 0.0))
+                last_updated = details.get("last_updated", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                
+                result = execute_query(update_query, (balance, last_updated, currency_upper), commit=True)
+                if result:
+                    logger.info(f"Updated cash position for {currency_upper}")
+                    migrated_count += 1
+            else:
+                # Insert new position
+                insert_query = """
+                INSERT INTO cash_positions (
+                    currency, balance, last_updated
+                ) VALUES (
+                    %s, %s, %s
+                );
+                """
+                
+                balance = float(details.get("balance", 0.0))
+                last_updated = details.get("last_updated", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                
+                result = execute_query(insert_query, (currency_upper, balance, last_updated), commit=True)
+                if result:
+                    logger.info(f"Added cash position for {currency_upper}")
+                    migrated_count += 1
+                else:
+                    logger.error(f"Failed to add cash position for {currency_upper}")
+        
+        # Ensure we have both USD and CAD positions
+        for currency in ["USD", "CAD"]:
+            check_query = "SELECT currency FROM cash_positions WHERE currency = %s;"
+            existing = execute_query(check_query, (currency,), fetchone=True)
+            
+            if not existing:
+                # Add default position
+                insert_query = """
+                INSERT INTO cash_positions (currency, balance, last_updated)
+                VALUES (%s, %s, %s);
+                """
+                
+                result = execute_query(insert_query, (currency, 0.0, datetime.now().strftime("%Y-%m-%d %H:%M:%S")), commit=True)
+                if result:
+                    logger.info(f"Added default cash position for {currency}")
+        
+        logger.info(f"Cash positions migration complete. Migrated or updated {migrated_count} positions.")
+        return True
+    except Exception as e:
+        logger.error(f"Error during cash positions migration: {e}")
+        return False
+    
 def main():
     """Main function to initialize database and migrate data"""
     logger.info("--- Starting Database Initialization ---")

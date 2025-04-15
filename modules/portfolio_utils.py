@@ -810,6 +810,10 @@ def analyze_current_vs_target(portfolio):
 # Make sure calculate_twrr and get_money_weighted_return use load_transactions from this module
 def calculate_twrr(portfolio, transactions=None, period="3m"):
     """Calculate Time-Weighted Rate of Return (TWRR)."""
+    # Simply pass through to the simplified version
+    # The simplified version handles its own transaction loading
+    return calculate_twrr_simplified(portfolio, period)
+
     # Ensure it uses the load_transactions from this module
     if transactions is None:
         # Define date range based on period
@@ -1062,3 +1066,374 @@ def get_money_weighted_return(portfolio, transactions=None, period="3m"):
     except Exception as e:
         logger.error(f"Error in get_money_weighted_return: {e}")
         return 0
+    
+def reconcile_portfolio_holdings():
+    """
+    Reconcile portfolio holdings against transaction history to detect discrepancies.
+    Calculates expected positions based on transactions and compares to actual holdings.
+    
+    Returns:
+        dict: Reconciliation report with discrepancies if found
+    """
+    # Get all transactions chronologically
+    all_transactions = load_transactions()
+    sorted_transactions = sorted(
+        all_transactions.values(), 
+        key=lambda tx: datetime.strptime(tx['date'], '%Y-%m-%d')
+    )
+    
+    # Calculate expected positions
+    expected_positions = {}
+    for tx in sorted_transactions:
+        symbol = tx['symbol']
+        tx_type = tx['type']
+        shares = float(tx['shares'])
+        
+        if symbol not in expected_positions:
+            expected_positions[symbol] = {
+                'shares': 0,
+                'total_cost': 0,
+                'currency': 'CAD'  # Default, will be updated by transaction
+            }
+        
+        position = expected_positions[symbol]
+        
+        if tx_type == 'buy':
+            # Calculate new average cost
+            current_cost = position['shares'] * position['avg_price'] if 'avg_price' in position else 0
+            new_cost = shares * float(tx['price'])
+            position['shares'] += shares
+            position['total_cost'] = current_cost + new_cost
+            position['avg_price'] = position['total_cost'] / position['shares'] if position['shares'] > 0 else 0
+            # Note the currency from transaction if available
+            if 'currency' in tx:
+                position['currency'] = tx['currency']
+        elif tx_type == 'sell':
+            # Reduce position
+            position['shares'] -= shares
+            if position['shares'] <= 0.000001:  # Using small threshold for floating point
+                position['shares'] = 0
+                position['total_cost'] = 0
+            else:
+                # Keep same average price when selling
+                position['total_cost'] = position['shares'] * position['avg_price'] if 'avg_price' in position else 0
+    
+    # Get actual holdings
+    current_portfolio = load_portfolio()
+    
+    # Compare expected vs. actual
+    discrepancies = []
+    for symbol, expected in expected_positions.items():
+        if expected['shares'] <= 0.000001:
+            # Position should be closed
+            for inv_id, actual in current_portfolio.items():
+                if actual['symbol'] == symbol and float(actual['shares']) > 0.000001:
+                    discrepancies.append({
+                        'symbol': symbol,
+                        'issue': 'Position should be closed but is still open',
+                        'expected_shares': 0,
+                        'actual_shares': float(actual['shares']),
+                        'investment_id': inv_id
+                    })
+        else:
+            # Position should be open
+            found = False
+            total_actual_shares = 0
+            for inv_id, actual in current_portfolio.items():
+                if actual['symbol'] == symbol:
+                    found = True
+                    total_actual_shares += float(actual['shares'])
+            
+            if not found:
+                discrepancies.append({
+                    'symbol': symbol,
+                    'issue': 'Position should be open but is missing',
+                    'expected_shares': expected['shares'],
+                    'actual_shares': 0
+                })
+            elif abs(total_actual_shares - expected['shares']) > 0.001:  # Allow small rounding differences
+                discrepancies.append({
+                    'symbol': symbol,
+                    'issue': 'Share count mismatch',
+                    'expected_shares': expected['shares'],
+                    'actual_shares': total_actual_shares,
+                    'difference': total_actual_shares - expected['shares']
+                })
+    
+    # Check for positions in portfolio not in transaction history
+    for inv_id, holding in current_portfolio.items():
+        symbol = holding['symbol']
+        if symbol not in expected_positions and float(holding['shares']) > 0:
+            discrepancies.append({
+                'symbol': symbol,
+                'issue': 'Position exists but has no transaction history',
+                'expected_shares': 0,
+                'actual_shares': float(holding['shares']),
+                'investment_id': inv_id
+            })
+    
+    return {
+        'reconciliation_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'portfolio_count': len(current_portfolio),
+        'expected_positions_count': len([p for p in expected_positions.values() if p['shares'] > 0]),
+        'discrepancies': discrepancies,
+        'is_reconciled': len(discrepancies) == 0
+    }
+
+def track_cash_position(transaction_type, amount, currency):
+    """
+    Update cash position when recording transactions
+    
+    Args:
+        transaction_type (str): 'buy' or 'sell'
+        amount (float): Transaction amount
+        currency (str): Currency code
+        
+    Returns:
+        bool: Success status
+    """
+    try:
+        # Get current cash positions
+        query = "SELECT * FROM cash_positions WHERE currency = %s;"
+        cash_position = execute_query(query, (currency,), fetchone=True)
+        
+        # Calculate adjustment
+        adjustment = -amount if transaction_type == 'buy' else amount
+        
+        if cash_position:
+            # Update existing position
+            current_balance = float(cash_position['balance'])
+            new_balance = current_balance + adjustment
+            
+            update_query = """
+            UPDATE cash_positions 
+            SET balance = %s, last_updated = %s 
+            WHERE id = %s;
+            """
+            params = (new_balance, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), cash_position['id'])
+            execute_query(update_query, params, commit=True)
+        else:
+            # Create new position
+            insert_query = """
+            INSERT INTO cash_positions (currency, balance, last_updated) 
+            VALUES (%s, %s, %s);
+            """
+            params = (currency, adjustment, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            execute_query(insert_query, params, commit=True)
+        
+        return True
+    except Exception as e:
+        logger.error(f"Error tracking cash position: {e}")
+        return False
+
+def get_cash_positions():
+    """
+    Get current cash positions
+    
+    Returns:
+        dict: Cash positions by currency
+    """
+    query = "SELECT * FROM cash_positions;"
+    positions = execute_query(query, fetchall=True)
+    
+    result = {}
+    if positions:
+        for pos in positions:
+            result[pos['currency']] = {
+                'balance': float(pos['balance']),
+                'last_updated': pos['last_updated'].strftime("%Y-%m-%d %H:%M:%S") if pos.get('last_updated') else None
+            }
+    
+    return result
+
+def snapshot_portfolio_value(comment=None):
+    """
+    Take a snapshot of current portfolio value and store in history table.
+    Useful for tracking performance over time.
+    
+    Args:
+        comment (str): Optional comment about this valuation
+        
+    Returns:
+        dict: Snapshot details
+    """
+    try:
+        # First update portfolio data
+        portfolio = update_portfolio_data()
+        
+        # Calculate total values by currency
+        totals = {'CAD': 0.0, 'USD': 0.0}
+        for inv_id, details in portfolio.items():
+            currency = details.get('currency', 'USD')
+            if currency in totals:
+                totals[currency] += float(details.get('current_value', 0))
+        
+        # Get exchange rate
+        usd_to_cad = get_usd_to_cad_rate()
+        
+        # Calculate total in CAD
+        total_cad = totals['CAD'] + (totals['USD'] * usd_to_cad)
+        
+        # Get cash positions
+        cash_positions = get_cash_positions()
+        cash_cad = float(cash_positions.get('CAD', {}).get('balance', 0))
+        cash_usd = float(cash_positions.get('USD', {}).get('balance', 0))
+        cash_total_cad = cash_cad + (cash_usd * usd_to_cad)
+        
+        # Total portfolio value including cash
+        grand_total_cad = total_cad + cash_total_cad
+        
+        # Record the snapshot
+        snapshot_id = str(uuid.uuid4())
+        snapshot_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        insert_query = """
+        INSERT INTO portfolio_snapshots (
+            id, snapshot_date, value_cad, value_usd, 
+            cash_cad, cash_usd, total_value_cad,
+            exchange_rate_usd_cad, comment
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+        """
+        
+        params = (
+            snapshot_id, snapshot_date, totals['CAD'], totals['USD'],
+            cash_cad, cash_usd, grand_total_cad, 
+            usd_to_cad, comment
+        )
+        
+        execute_query(insert_query, params, commit=True)
+        
+        return {
+            'id': snapshot_id,
+            'date': snapshot_date,
+            'investments_cad': totals['CAD'],
+            'investments_usd': totals['USD'],
+            'cash_cad': cash_cad,
+            'cash_usd': cash_usd,
+            'total_cad': grand_total_cad,
+            'exchange_rate': usd_to_cad
+        }
+    except Exception as e:
+        logger.error(f"Error creating portfolio snapshot: {e}")
+        return None
+    
+# Simplified TWRR calculation for portfolio_utils.py
+
+def calculate_twrr_simplified(portfolio, period="3m"):
+    """
+    Calculate Time-Weighted Rate of Return (TWRR) with simplified approach
+    
+    Args:
+        portfolio (dict): Portfolio data
+        period (str): Time period ('1m', '3m', '6m', '1y', 'all')
+        
+    Returns:
+        dict: TWRR results with normalized series
+    """
+    # Define date range
+    end_date = datetime.now()
+    
+    if period == "1m": start_date = end_date - timedelta(days=30)
+    elif period == "3m": start_date = end_date - timedelta(days=90)
+    elif period == "6m": start_date = end_date - timedelta(days=180)
+    elif period == "1y": start_date = end_date - timedelta(days=365)
+    else:  # "all"
+        earliest_date = get_earliest_transaction_date()
+        start_date = earliest_date if earliest_date else (end_date - timedelta(days=365*5))
+    
+    # Get transactions in this period
+    transactions = load_transactions(start_date=start_date.strftime('%Y-%m-%d'))
+    
+    # Get historical data
+    from components.portfolio_visualizer import get_portfolio_historical_data
+    historical_data = get_portfolio_historical_data(portfolio, period)
+    
+    if historical_data.empty or 'Total' not in historical_data.columns:
+        return {'twrr': 0, 'normalized_series': pd.Series()}
+    
+    # Get portfolio values series
+    portfolio_values = historical_data['Total']
+    
+    # Sort transactions by date
+    sorted_transactions = sorted(
+        transactions.values(), 
+        key=lambda tx: datetime.strptime(tx['date'], '%Y-%m-%d')
+    )
+    
+    # Group transactions by date and calculate net flows
+    flows_by_date = {}
+    for tx in sorted_transactions:
+        tx_date = datetime.strptime(tx['date'], '%Y-%m-%d')
+        if tx_date < start_date or tx_date > end_date:
+            continue
+            
+        tx_amount = float(tx['amount'])
+        flow = -tx_amount if tx['type'] == 'buy' else tx_amount
+        
+        date_key = tx_date.strftime('%Y-%m-%d')
+        if date_key not in flows_by_date:
+            flows_by_date[date_key] = 0
+        flows_by_date[date_key] += flow
+    
+    # Calculate sub-period returns
+    sub_period_returns = []
+    last_value = portfolio_values.iloc[0]
+    last_date = portfolio_values.index[0]
+    
+    # Add flows to significant dates
+    for date_str, flow in flows_by_date.items():
+        flow_date = pd.Timestamp(date_str)
+        
+        # Find closest date in portfolio values on or after flow date
+        try:
+            # Get value just before flow
+            dates_before = portfolio_values.index[portfolio_values.index < flow_date]
+            if not dates_before.empty:
+                before_date = dates_before[-1]
+                before_value = portfolio_values.loc[before_date]
+                
+                # Calculate return for period before flow
+                if last_value > 0:
+                    period_return = before_value / last_value - 1
+                    sub_period_returns.append(1 + period_return)
+                
+                # Adjust for flow
+                last_value = before_value + flow
+                last_date = before_date
+            else:
+                # Flow is before first portfolio value
+                last_value += flow
+        except Exception as e:
+            logger.warning(f"Error processing flow on {date_str}: {e}")
+    
+    # Add final period
+    if last_value > 0:
+        final_value = portfolio_values.iloc[-1]
+        final_return = final_value / last_value - 1
+        sub_period_returns.append(1 + final_return)
+    
+    # Calculate overall TWRR
+    if sub_period_returns:
+        twrr = np.prod(sub_period_returns) - 1
+        twrr_pct = twrr * 100
+    else:
+        # Fallback to simple return if no sub-periods
+        first_value = portfolio_values.iloc[0]
+        last_value = portfolio_values.iloc[-1]
+        twrr = (last_value / first_value) - 1 if first_value > 0 else 0
+        twrr_pct = twrr * 100
+    
+    # Create normalized series for visualization
+    normalized_series = pd.Series(index=portfolio_values.index)
+    normalized_series.iloc[0] = 100.0
+    
+    # Calculate daily returns and apply them to normalized series
+    daily_returns = portfolio_values.pct_change().fillna(0)
+    normalized_series = (1 + daily_returns).cumprod() * 100
+    normalized_series = normalized_series / normalized_series.iloc[0] * 100  # Ensure it starts at exactly 100
+    
+    return {
+        'twrr': twrr_pct, 
+        'historical_values': portfolio_values, 
+        'normalized_series': normalized_series
+    }

@@ -198,6 +198,27 @@ def initialize_database():
             notes TEXT
         );
         """,
+        """
+        CREATE TABLE IF NOT EXISTS cash_positions (
+            id SERIAL PRIMARY KEY,
+            currency VARCHAR(10) UNIQUE NOT NULL,
+            balance NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+            last_updated TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+            id UUID PRIMARY KEY,
+            snapshot_date TIMESTAMP WITH TIME ZONE NOT NULL,
+            value_cad NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+            value_usd NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+            cash_cad NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+            cash_usd NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+            total_value_cad NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+            exchange_rate_usd_cad NUMERIC(10, 6) NOT NULL DEFAULT 1.00,
+            comment TEXT
+        );
+        """,
         # --- INDEXES (Optional but recommended) ---
         """CREATE INDEX IF NOT EXISTS idx_transactions_symbol ON transactions (symbol);""",
         """CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions (transaction_date);""",
@@ -207,6 +228,7 @@ def initialize_database():
         """CREATE INDEX IF NOT EXISTS idx_trained_models_training_date ON trained_models (training_date);""" # New Index
         """CREATE INDEX IF NOT EXISTS idx_trained_models_symbol ON trained_models (symbol);""",
         """CREATE INDEX IF NOT EXISTS idx_trained_models_training_date ON trained_models (training_date);"""
+        """CREATE INDEX IF NOT EXISTS idx_portfolio_snapshots_date ON portfolio_snapshots (snapshot_date);"""
         ]
     
     # Ensure UUID extension is enabled
@@ -223,7 +245,10 @@ def initialize_database():
             for query in create_table_queries:
                 try:
                     cur.execute(query)
-                    logger.debug(f"Successfully executed: {query.splitlines()[1].strip()}...")
+                    lines = query.splitlines()
+                    log_message = lines[1].strip() if len(lines) > 1 else query.strip()
+                    logger.debug(f"Successfully executed: {log_message}...")
+
                 except Exception as table_e:
                     logger.error(f"Error executing query: {query}\nError: {table_e}")
                     conn.rollback()

@@ -45,6 +45,7 @@ from components.user_profile import create_user_profile_component
 from components.mutual_fund_manager import create_mutual_fund_manager_component
 from components.portfolio_management import create_portfolio_management_component, create_portfolio_table
 from components.portfolio_visualizer import create_portfolio_visualizer_component
+from components.portfolio_summary import create_portfolio_summary_component
 from components.portfolio_analysis import (
     create_portfolio_analysis_component, create_allocation_chart, create_sector_chart,
     create_correlation_chart, create_allocation_details, create_sector_details,
@@ -97,6 +98,23 @@ app.layout = dbc.Container([
             html.Img(src="assets/NearNorthClean.png", height="100px", className="float-end")
         ], width=1)
     ], className="mb-4"),
+
+    # Portfolio Summary Component
+    dbc.Row([
+        dbc.Col([
+            html.Div(id="portfolio-summary", children=create_portfolio_summary_component())
+        ], width=11),
+        dbc.Col([
+        dbc.Button(
+            html.I(className="bi bi-arrow-clockwise"), 
+            id="refresh-portfolio-summary",
+            color="light",
+            size="sm",
+            className="mt-2"
+        )
+    ], width=1)
+    ], className="mb-4"),
+
     dbc.Row([
             dbc.Col([
                 create_risk_visualization_component()
@@ -441,7 +459,8 @@ def update_market_overview(n, timeframe):
                         x=hist.index,
                         y=normalized,
                         mode='lines',
-                        name=f"{symbol} - {details.get('name', '')}"
+                        name=f"{symbol} - {details.get('name', '')}",
+                        visible='legendonly'
                     ))
         except Exception as e:
             print(f"Error getting data for {symbol}: {e}")
@@ -853,6 +872,20 @@ def generate_recommendations(n_clicks, risk_level, investment_horizon, initial_i
         )
     
     return recommendation_cards
+#create portfolio summary component
+@app.callback(
+    Output("portfolio-summary", "children"),
+    [Input("portfolio-update-interval", "n_intervals")]
+)
+def update_portfolio_summary(n_intervals):
+    """
+    Update the portfolio summary component with latest data
+    """
+    # Update portfolio data to get latest prices
+    portfolio = update_portfolio_data()
+    
+    # Return the updated summary component
+    return create_portfolio_summary_component(portfolio)
 
 # Mutual Fund Manager Callbacks
 @app.callback(
@@ -1142,6 +1175,21 @@ def update_portfolio_stats(n_intervals, period, calculation_method):
         # For TWRR or simple methods, show the standard summary stats
         from components.portfolio_visualizer import create_summary_stats
         return create_summary_stats(portfolio)
+
+@app.callback(
+    Output("portfolio-summary", "children", allow_duplicate=True),
+    [Input("refresh-portfolio-summary", "n_clicks")],
+    prevent_initial_call=True
+)
+def refresh_portfolio_summary(n_clicks):
+    """
+    Manually refresh the portfolio summary
+    """
+    if n_clicks:
+        portfolio = update_portfolio_data()
+        return create_portfolio_summary_component(portfolio)
+    raise dash.exceptions.PreventUpdate
+
 
 @app.callback(
     Output("portfolio-allocation-chart", "figure"),
