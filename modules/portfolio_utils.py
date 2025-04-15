@@ -152,58 +152,48 @@ def update_portfolio_data():
 
     return load_portfolio() # Return the freshly updated data
 
-def add_investment(symbol, shares, purchase_price, purchase_date, asset_type="stock"):
+def add_investment(symbol, shares, purchase_price, purchase_date, asset_type="stock", name=None):
     """
     Add a new investment to the portfolio database.
-
+    
     Args:
-        symbol (str): Investment symbol.
-        shares (float): Number of shares.
-        purchase_price (float): Purchase price per share.
-        purchase_date (str): Purchase date in YYYY-MM-DD format.
-        asset_type (str): Type of asset (stock, etf, mutual_fund, etc.).
-
+        symbol (str): Investment symbol
+        shares (float): Number of shares
+        purchase_price (float): Purchase price per share
+        purchase_date (str): Purchase date in YYYY-MM-DD format
+        asset_type (str): Type of asset (stock, etf, mutual_fund, etc.)
+        name (str, optional): Name of the asset
+        
     Returns:
-        bool: Success status.
+        bool: Success status
     """
-    investment_id = str(uuid.uuid4())
-    symbol_upper = symbol.upper().strip()
-    shares_float = float(shares)
-    price_float = float(purchase_price)
-
-    initial_value = shares_float * price_float
-
-    # Get current price using DataProvider
-    quote = data_provider.get_current_quote(symbol_upper, asset_type=asset_type)
-    if quote and 'price' in quote and quote['price'] is not None:
-        current_price = float(quote['price'])
-        currency = quote.get('currency', 'USD')
-    else:
-        logger.warning(f"Could not get current price for {symbol_upper}. Using purchase price.")
-        current_price = price_float
-        # Determine currency based on symbol convention if quote fails
-        is_canadian = symbol_upper.endswith((".TO", ".V")) or "-CAD" in symbol_upper or symbol_upper.startswith("MAW")
-        currency = "CAD" if is_canadian else "USD"
-
-    current_value = shares_float * current_price
-    gain_loss = current_value - initial_value
-    gain_loss_percent = ((current_price / price_float) - 1) * 100 if price_float > 0 else 0
-
+    # If name isn't provided, try to look it up from tracked assets
+    if name is None:
+        # Check if this symbol is in tracked assets
+        tracked_assets = load_tracked_assets()
+        if symbol in tracked_assets:
+            name = tracked_assets[symbol].get("name", symbol)
+        else:
+            # Default to symbol if name not provided
+            name = symbol
+    
+    # Rest of function remains the same, but add name to insert query
     insert_query = """
     INSERT INTO portfolio (
-        id, symbol, shares, purchase_price, purchase_date, asset_type,
+        id, symbol, name, shares, purchase_price, purchase_date, asset_type,
         current_price, current_value, gain_loss, gain_loss_percent,
         currency, added_date, last_updated
     ) VALUES (
-        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
     );
     """
+    # Update params to include name
     params = (
-        investment_id, symbol_upper, shares_float, price_float, purchase_date, asset_type,
+        investment_id, symbol_upper, name, shares_float, price_float, purchase_date, asset_type,
         current_price, current_value, gain_loss, gain_loss_percent, currency,
         datetime.now().strftime("%Y-%m-%d %H:%M:%S"), datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     )
-
+    
     result = execute_query(insert_query, params, commit=True)
     if result is not None:
         logger.info(f"Investment added successfully: {symbol_upper} {shares_float} shares")

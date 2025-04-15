@@ -17,6 +17,7 @@ def create_portfolio_management_component():
                     dbc.Label("Add New Investment"),
                     dbc.InputGroup([
                         dbc.Input(id="investment-symbol-input", placeholder="Symbol (e.g., MFC.TO, MAW104)"),
+                        dbc.Input(id="investment-name-input", placeholder="Asset Name (optional)"),
                         dbc.Input(id="investment-shares-input", type="number", placeholder="Number of Shares/Units"),
                         dbc.Input(id="investment-price-input", type="number", placeholder="Purchase Price"),
                         dbc.Input(id="investment-date-input", type="date", 
@@ -69,7 +70,16 @@ def create_portfolio_management_component():
             dbc.Row([
                 dbc.Col([
                     html.H5("Current Portfolio"),
-                    html.Div(id="portfolio-table")
+                    html.Div(id="portfolio-table"),
+                    html.Div([
+                        dbc.Button(
+                            "Reconcile Portfolio", 
+                            id="reconcile-portfolio-button", 
+                            color="secondary", 
+                            className="mt-3"
+                        ),
+                        html.Div(id="reconciliation-results", className="mt-2")
+                    ], className="mt-4")
                 ], width=12)
             ])
         ])

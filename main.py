@@ -249,6 +249,66 @@ app.layout = dbc.Container([
 ])
 
 # Callbacks
+# recondiliation
+@app.callback(
+    Output("reconciliation-results", "children"),
+    Input("reconcile-portfolio-button", "n_clicks"),
+    prevent_initial_call=True
+)
+def run_portfolio_reconciliation(n_clicks):
+    """
+    Run portfolio reconciliation process to detect discrepancies
+    between transaction history and current holdings
+    """
+    if n_clicks is None:
+        raise dash.exceptions.PreventUpdate
+    
+    # Import the reconciliation function
+    from modules.portfolio_utils import reconcile_portfolio_holdings
+    
+    # Run reconciliation
+    results = reconcile_portfolio_holdings()
+    
+    # Display results
+    if results['is_reconciled']:
+        return dbc.Alert(
+            f"Portfolio is fully reconciled. {results['portfolio_count']} positions match transaction history.",
+            color="success"
+        )
+    else:
+        # Create a detailed report for discrepancies
+        discrepancy_rows = []
+        for disc in results['discrepancies']:
+            discrepancy_rows.append(
+                html.Tr([
+                    html.Td(disc['symbol']),
+                    html.Td(disc['issue']),
+                    html.Td(f"{disc['expected_shares']:.4f}"),
+                    html.Td(f"{disc['actual_shares']:.4f}"),
+                    html.Td(f"{disc.get('difference', 'N/A')}")
+                ])
+            )
+        
+        return html.Div([
+            dbc.Alert(
+                f"Found {len(results['discrepancies'])} discrepancies between transaction history and portfolio holdings.",
+                color="warning"
+            ),
+            dbc.Table([
+                html.Thead(
+                    html.Tr([
+                        html.Th("Symbol"),
+                        html.Th("Issue"),
+                        html.Th("Expected Shares"),
+                        html.Th("Actual Shares"),
+                        html.Th("Difference")
+                    ])
+                ),
+                html.Tbody(discrepancy_rows)
+            ], bordered=True, striped=True, hover=True)
+        ])
+
+
 # Callback to load and display tracked assets on application startup
 @app.callback(
     Output("tracked-assets-table", "children"),
@@ -976,19 +1036,21 @@ def view_fund_history(n_clicks, fund_code):
     [Output("add-investment-feedback", "children"),
      Output("portfolio-table", "children"),
      Output("investment-symbol-input", "value"),
+     Output("investment-name-input", "value"),  # New output for name field
      Output("investment-shares-input", "value"),
      Output("investment-price-input", "value")],
     [Input("add-investment-button", "n_clicks"),
      Input("portfolio-update-interval", "n_intervals"),
      Input({"type": "remove-investment-button", "index": ALL}, "n_clicks")],
     [State("investment-symbol-input", "value"),
+     State("investment-name-input", "value"),  # New state for name field
      State("investment-shares-input", "value"),
      State("investment-price-input", "value"),
      State("investment-date-input", "value"),
      State("investment-type-select", "value")],
     prevent_initial_call=True
 )
-def manage_portfolio(add_clicks, update_interval, remove_clicks, symbol, shares, price, date, asset_type):
+def manage_portfolio(add_clicks, update_interval, remove_clicks, symbol, name, shares, price, date, asset_type):
     """
     Consolidated callback to manage portfolio actions (add, update, remove)
     """
@@ -996,12 +1058,13 @@ def manage_portfolio(add_clicks, update_interval, remove_clicks, symbol, shares,
     feedback = None
     updated_table = dash.no_update
     clear_symbol = dash.no_update
+    clear_name = dash.no_update  # New default for name
     clear_shares = dash.no_update
     clear_price = dash.no_update
     
     # Get the triggered component
     if not ctx.triggered:
-        return feedback, updated_table, clear_symbol, clear_shares, clear_price
+        return feedback, updated_table, clear_symbol, clear_name, clear_shares, clear_price
     
     trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
     
@@ -1013,18 +1076,23 @@ def manage_portfolio(add_clicks, update_interval, remove_clicks, symbol, shares,
             # Standardize symbol format
             symbol_upper = symbol.upper().strip()
             
-            # Add investment with asset type
-            success = add_investment(symbol_upper, shares, price, date, asset_type)
+            # Get asset name (use symbol if not provided)
+            asset_name = name.strip() if name else symbol_upper
+            
+            # Add investment with asset type and name
+            # Note: you'll need to modify add_investment function to accept the name parameter
+            success = add_investment(symbol_upper, shares, price, date, asset_type, asset_name)
             
             if success:
-                feedback = dbc.Alert(f"Successfully added {symbol_upper}", color="success")
+                feedback = dbc.Alert(f"Successfully added {asset_name} ({symbol_upper})", color="success")
                 clear_symbol = ""
+                clear_name = ""  # Clear name field
                 clear_shares = None
                 clear_price = None
             else:
                 feedback = dbc.Alert("Failed to add investment", color="danger")
     
-    # Handle remove investment
+    # Handle remove investment (unchanged)
     elif isinstance(trigger_id, str) and "{" in trigger_id:  # Pattern matching ID
         try:
             button_id = json.loads(trigger_id)
@@ -1042,7 +1110,7 @@ def manage_portfolio(add_clicks, update_interval, remove_clicks, symbol, shares,
     portfolio = update_portfolio_data()
     updated_table = create_portfolio_table(portfolio)
     
-    return feedback, updated_table, clear_symbol, clear_shares, clear_price
+    return feedback, updated_table, clear_symbol, clear_name, clear_shares, clear_price
 
 @app.callback(
     Output("portfolio-performance-graph", "figure"),
