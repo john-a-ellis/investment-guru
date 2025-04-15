@@ -128,7 +128,7 @@ def register_ml_prediction_callbacks(app):
         prevent_initial_call=True
     )
     def handle_delete_model(delete_clicks, confirm_clicks, button_ids, confirm_message):
-        """Handle model deletion with improved trigger checking"""
+        """Handle model deletion with improved trigger checking and JSON parsing"""
         # Use the callback context to determine what triggered the callback
         triggered = dash.callback_context.triggered
         
@@ -146,31 +146,31 @@ def register_ml_prediction_callbacks(app):
         table_output = dash.no_update
         
         # First check: Is this a delete button click?
-        if "{" in trigger_id and "delete-model-button" in trigger_id:
+        if "{" in trigger_id and "delete-model-button" in trigger_id and ".n_clicks" in trigger_id:
             # Check if any delete button was actually clicked (not just initialized)
-            if not any(click for click in delete_clicks if click):
+            if not any(n for n in delete_clicks if n):
                 raise PreventUpdate
                 
-            # Find which delete button was clicked
-            try:
-                # Parse the JSON ID to get the button information
-                import json
-                # Extract the part before the dot to get the component ID
-                component_id = trigger_id.split(".")[0]
-                # Replace single quotes with double quotes for proper JSON parsing
-                component_id = component_id.replace("'", '"')
-                button_info = json.loads(component_id)
-                filename_to_delete = button_info.get("filename")
-                
-                if filename_to_delete:
-                    # Display confirmation dialog
-                    confirm_displayed = True
-                    new_confirm_message = f"Are you sure you want to delete model '{filename_to_delete}' and its record?"
-                    logger.info(f"Delete requested for {filename_to_delete}. Displaying confirmation.")
-                    return confirm_displayed, new_confirm_message, feedback, table_output
-            except Exception as e:
-                logger.error(f"Error parsing delete button ID: {e}")
-                return False, dash.no_update, dbc.Alert(f"Error: {e}", color="danger"), dash.no_update
+            # Find which button was clicked
+            clicked_index = None
+            for i, n in enumerate(delete_clicks):
+                if n:
+                    clicked_index = i
+                    break
+            
+            if clicked_index is not None and clicked_index < len(button_ids):
+                # Get filename directly from the button's id
+                try:
+                    filename_to_delete = button_ids[clicked_index].get("filename")
+                    if filename_to_delete:
+                        # Display confirmation dialog
+                        confirm_displayed = True
+                        new_confirm_message = f"Are you sure you want to delete model '{filename_to_delete}' and its record?"
+                        logger.info(f"Delete requested for {filename_to_delete}. Displaying confirmation.")
+                        return confirm_displayed, new_confirm_message, feedback, table_output
+                except Exception as e:
+                    logger.error(f"Error getting filename from button ID: {e}")
+                    return False, dash.no_update, dbc.Alert(f"Error processing delete request: {str(e)}", color="danger"), dash.no_update
         
         # Second check: Is this a confirmation dialog submission?
         elif "delete-model-confirm.submit_n_clicks" in trigger_id:
@@ -179,7 +179,14 @@ def register_ml_prediction_callbacks(app):
                 
             # Process the confirmation
             try:
-                filename_to_delete = confirm_message.split("'")[1]
+                # Extract filename from confirmation message
+                import re
+                filename_match = re.search(r"'([^']+)'", confirm_message)
+                if filename_match:
+                    filename_to_delete = filename_match.group(1)
+                else:
+                    return False, dash.no_update, dbc.Alert("Could not determine which model to delete", color="danger"), dash.no_update
+                
                 logger.info(f"Confirmation received to delete {filename_to_delete}")
                 
                 # --- Import the delete function ---
