@@ -167,38 +167,115 @@ def add_investment(symbol, shares, purchase_price, purchase_date, asset_type="st
     Returns:
         bool: Success status
     """
+    # Generate unique ID for this investment
+    import uuid
+    investment_id = str(uuid.uuid4())
+    
+    # Standardize symbol format
+    symbol_upper = symbol.upper().strip()
+    
     # If name isn't provided, try to look it up from tracked assets
     if name is None:
         # Check if this symbol is in tracked assets
         tracked_assets = load_tracked_assets()
-        if symbol in tracked_assets:
-            name = tracked_assets[symbol].get("name", symbol)
+        if symbol_upper in tracked_assets:
+            name = tracked_assets[symbol_upper].get("name", symbol_upper)
         else:
             # Default to symbol if name not provided
-            name = symbol
+            name = symbol_upper
     
-    # Rest of function remains the same, but add name to insert query
+    # Convert values to float for consistency
+    shares_float = float(shares)
+    price_float = float(purchase_price)
+    
+    # Calculate initial values
+    initial_value = shares_float * price_float
+    
+    # Default current price to purchase price
+    current_price = price_float
+    
+    # For mutual funds, try to get price from our provider
+    if asset_type == "mutual_fund":
+        from modules.mutual_fund_provider import MutualFundProvider
+        mutual_fund_provider = MutualFundProvider()
+        
+        # Get the most recent price
+        fund_price = mutual_fund_provider.get_current_price(symbol_upper)
+        if fund_price:
+            current_price = fund_price
+            
+        # Always treat mutual funds as CAD
+        currency = "CAD"
+    else:
+        # Determine currency based on symbol for non-mutual fund investments
+        is_canadian = symbol_upper.endswith(".TO") or symbol_upper.endswith(".V") or "-CAD" in symbol_upper
+        currency = "CAD" if is_canadian else "USD"
+        
+        # Find if we already have this symbol in our portfolio for the current price
+        select_query = "SELECT current_price FROM portfolio WHERE symbol = %s LIMIT 1;"
+        existing_price = execute_query(select_query, (symbol_upper,), fetchone=True)
+        
+        if existing_price and existing_price['current_price']:
+            current_price = float(existing_price['current_price'])
+        
+        # If we don't have an existing price, try to get it from the API
+        if current_price == price_float and asset_type != "mutual_fund":
+            try:
+                # First try using DataProvider
+                from modules.data_provider import data_provider
+                quote = data_provider.get_current_quote(symbol_upper)
+                if quote and 'price' in quote:
+                    current_price = float(quote['price'])
+                else:
+                    # Fallback to yfinance
+                    import yfinance as yf
+                    ticker = yf.Ticker(symbol_upper)
+                    price_data = ticker.history(period="1d")
+                    
+                    if not price_data.empty:
+                        current_price = price_data['Close'].iloc[-1]
+            except Exception as e:
+                logger.error(f"Error getting initial price for {symbol_upper}: {e}")
+    
+    # Calculate current value and gain/loss
+    current_value = shares_float * current_price
+    gain_loss = current_value - initial_value
+    gain_loss_percent = ((current_price / price_float) - 1) * 100 if price_float > 0 else 0
+    
+    # Insert into portfolio table
     insert_query = """
     INSERT INTO portfolio (
         id, symbol, name, shares, purchase_price, purchase_date, asset_type,
-        current_price, current_value, gain_loss, gain_loss_percent,
+        current_price, current_value, gain_loss, gain_loss_percent, 
         currency, added_date, last_updated
     ) VALUES (
         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
     );
     """
-    # Update params to include name
+    
     params = (
-        investment_id, symbol_upper, name, shares_float, price_float, purchase_date, asset_type,
-        current_price, current_value, gain_loss, gain_loss_percent, currency,
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"), datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        investment_id,
+        symbol_upper,
+        name,
+        shares_float,
+        price_float,
+        purchase_date,
+        asset_type,
+        current_price,
+        current_value,
+        gain_loss,
+        gain_loss_percent,
+        currency,
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     )
     
     result = execute_query(insert_query, params, commit=True)
+    
     if result is not None:
         logger.info(f"Investment added successfully: {symbol_upper} {shares_float} shares")
         return True
-
+    
     logger.error(f"Failed to add investment: {symbol_upper}")
     return False
 
