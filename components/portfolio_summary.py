@@ -7,7 +7,7 @@ import pandas as pd
 
 def create_portfolio_summary_component(portfolio=None, include_cards=True):
     """
-    Create a comprehensive portfolio summary component
+    Create a comprehensive portfolio summary component with cash flow information
     
     Args:
         portfolio (dict): Portfolio data (if None, will be loaded)
@@ -16,7 +16,7 @@ def create_portfolio_summary_component(portfolio=None, include_cards=True):
     Returns:
         Component: Dash component with portfolio summary
     """
-    from modules.portfolio_utils import load_portfolio, update_portfolio_data, get_cash_positions
+    from modules.portfolio_utils import load_portfolio, update_portfolio_data, get_cash_positions, load_cash_flows
     
     # Load portfolio if not provided
     if portfolio is None:
@@ -24,6 +24,9 @@ def create_portfolio_summary_component(portfolio=None, include_cards=True):
     
     # Get cash positions
     cash_positions = get_cash_positions()
+    
+    # Get recent cash flows (last 5)
+    recent_flows = load_cash_flows()[:5]
     
     # Calculate portfolio metrics
     total_value_cad = 0
@@ -78,8 +81,9 @@ def create_portfolio_summary_component(portfolio=None, include_cards=True):
     grand_total_cad = total_value_cad + usd_value_in_cad + cash_cad + cash_usd_in_cad
     total_invested_cad_equiv = total_invested_cad + usd_invested_in_cad
     
-    # Calculate gain/loss
-    total_gain_loss_cad = (total_value_cad + usd_value_in_cad) - total_invested_cad_equiv
+    # Calculate gain/loss (excluding cash)
+    investment_value_cad = total_value_cad + usd_value_in_cad
+    total_gain_loss_cad = investment_value_cad - total_invested_cad_equiv
     gain_loss_pct = (total_gain_loss_cad / total_invested_cad_equiv * 100) if total_invested_cad_equiv > 0 else 0
     
     # Create asset type breakdown
@@ -155,8 +159,11 @@ def create_portfolio_summary_component(portfolio=None, include_cards=True):
                         dbc.CardBody([
                             html.H5("Cash Positions", className="card-title"),
                             html.Div([
-                                html.Div(f"CAD: ${cash_cad:.2f}"),
-                                html.Div(f"USD: ${cash_usd:.2f} (${cash_usd_in_cad:.2f} CAD)")
+                                html.Div(f"CAD: ${cash_cad:.2f}", className="d-flex justify-content-between"),
+                                html.Div(f"USD: ${cash_usd:.2f} (${cash_usd_in_cad:.2f} CAD)", className="d-flex justify-content-between"),
+                                html.Hr(className="my-1"),
+                                html.Div(f"Total Cash: ${(cash_cad + cash_usd_in_cad):.2f} CAD", 
+                                         className="fw-bold d-flex justify-content-between")
                             ])
                         ])
                     ])
@@ -176,6 +183,31 @@ def create_portfolio_summary_component(portfolio=None, include_cards=True):
         html.Tbody(asset_type_rows)
     ], bordered=True, striped=True, size="sm")
     
+    # Create recent cash flows table
+    recent_flows_table = None
+    if recent_flows:
+        recent_flows_table = dbc.Table([
+            html.Thead(
+                html.Tr([
+                    html.Th("Date"),
+                    html.Th("Type"),
+                    html.Th("Amount"),
+                    html.Th("Currency"),
+                    html.Th("Description")
+                ])
+            ),
+            html.Tbody([
+                html.Tr([
+                    html.Td(flow['date']),
+                    html.Td(flow['flow_type'].capitalize(), 
+                           style={"color": "green" if flow['flow_type'] == "deposit" else "red"}),
+                    html.Td(f"${flow['amount']:.2f}"),
+                    html.Td(flow['currency']),
+                    html.Td(flow.get('description', ''))
+                ]) for flow in recent_flows[:5]  # Show up to 5 most recent
+            ])
+        ], bordered=True, hover=True, size="sm", className="mt-3")
+    
     # Create final component
     return html.Div([
         *summary_cards,
@@ -187,7 +219,15 @@ def create_portfolio_summary_component(portfolio=None, include_cards=True):
                         asset_allocation_table
                     ])
                 ])
-            ], width=12)
+            ], width=7),
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader("Recent Cash Flows"),
+                    dbc.CardBody([
+                        recent_flows_table if recent_flows_table else html.P("No recent cash flows recorded.")
+                    ])
+                ])
+            ], width=5)
         ]),
         html.Div(
             f"Exchange Rate: 1 USD = {exchange_rate:.4f} CAD | Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",

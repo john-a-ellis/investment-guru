@@ -1455,3 +1455,223 @@ def calculate_twrr_simplified(portfolio, period="3m"):
         'historical_values': portfolio_values, 
         'normalized_series': normalized_series
     }
+
+def record_cash_flow(flow_type, amount, currency, date=None, description=""):
+    """
+    Record a cash flow (deposit or withdrawal) in the database.
+    
+    Args:
+        flow_type (str): "deposit" or "withdrawal"
+        amount (float): Amount of money
+        currency (str): Currency code ("CAD" or "USD")
+        date (str): Date in YYYY-MM-DD format (optional, defaults to today)
+        description (str): Description/notes (optional)
+        
+    Returns:
+        bool: Success status
+    """
+    if date is None:
+        date = datetime.now().strftime("%Y-%m-%d")
+    else:
+        # Ensure date is in YYYY-MM-DD format
+        try:
+            date = datetime.strptime(str(date), '%Y-%m-%d').strftime('%Y-%m-%d')
+        except ValueError:
+            logger.error(f"Invalid date format for cash flow: {date}. Using today.")
+            date = datetime.now().strftime("%Y-%m-%d")
+    
+    # Generate a unique ID for the cash flow
+    import uuid
+    flow_id = str(uuid.uuid4())
+    
+    # Insert cash flow record
+    insert_query = """
+    INSERT INTO cash_flows (
+        id, flow_type, amount, currency, flow_date, description, recorded_at
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s);
+    """
+    
+    params = (
+        flow_id,
+        flow_type.lower(),
+        float(amount),
+        currency.upper(),
+        date,
+        description,
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    )
+    
+    result = execute_query(insert_query, params, commit=True)
+    
+    if result is not None:
+        # Update cash position
+        multiplier = 1 if flow_type.lower() == "deposit" else -1
+        try:
+            update_cash_position(currency.upper(), amount * multiplier)
+            logger.info(f"Cash flow recorded: {flow_type} of {amount} {currency}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update cash position after recording cash flow: {e}")
+            return False
+    else:
+        logger.error(f"Failed to record cash flow: {flow_type} of {amount} {currency}")
+        return False
+
+def update_cash_position(currency, amount_change):
+    """
+    Update a cash position by a specified amount.
+    
+    Args:
+        currency (str): Currency code
+        amount_change (float): Amount to change (positive for increase, negative for decrease)
+        
+    Returns:
+        bool: Success status
+    """
+    # Check if cash position exists
+    query = "SELECT * FROM cash_positions WHERE currency = %s;"
+    cash_position = execute_query(query, (currency,), fetchone=True)
+    
+    if cash_position:
+        # Update existing position
+        current_balance = float(cash_position['balance'])
+        new_balance = current_balance + amount_change
+        
+        update_query = """
+        UPDATE cash_positions 
+        SET balance = %s, last_updated = %s 
+        WHERE currency = %s;
+        """
+        
+        params = (
+            new_balance,
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            currency
+        )
+        
+        result = execute_query(update_query, params, commit=True)
+        return result is not None
+    else:
+        # Create new position
+        insert_query = """
+        INSERT INTO cash_positions (currency, balance, last_updated) 
+        VALUES (%s, %s, %s);
+        """
+        
+        params = (
+            currency,
+            amount_change,
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        )
+        
+        result = execute_query(insert_query, params, commit=True)
+        return result is not None
+
+def load_cash_flows(start_date=None, end_date=None):
+    """
+    Load cash flow records from database.
+    
+    Args:
+        start_date (str): Filter by start date (YYYY-MM-DD, optional)
+        end_date (str): Filter by end date (YYYY-MM-DD, optional)
+        
+    Returns:
+        list: Cash flow records sorted by date (newest first)
+    """
+    query = "SELECT * FROM cash_flows"
+    params = []
+    filters = []
+    
+    if start_date:
+        filters.append("flow_date >= %s")
+        params.append(start_date)
+    
+    if end_date:
+        filters.append("flow_date <= %s")
+        params.append(end_date)
+    
+    if filters:
+        query += " WHERE " + " AND ".join(filters)
+    
+    query += " ORDER BY flow_date DESC, recorded_at DESC;"
+    
+    cash_flows = execute_query(query, tuple(params) if params else None, fetchall=True)
+    
+    result = []
+    if cash_flows:
+        for flow in cash_flows:
+            try:
+                flow_dict = dict(flow)
+                
+                # Convert Decimal to float
+                if 'amount' in flow_dict and flow_dict['amount'] is not None:
+                    flow_dict['amount'] = float(flow_dict['amount'])
+                
+                # Format dates
+                flow_dict['date'] = flow_dict['flow_date'].strftime("%Y-%m-%d")
+                flow_dict['flow_date'] = flow_dict['flow_date'].strftime("%Y-%m-%d")
+                if flow_dict.get('recorded_at'):
+                    flow_dict['recorded_at'] = flow_dict['recorded_at'].strftime("%Y-%m-%d %H:%M:%S")
+                
+                # Ensure ID is string
+                flow_dict['id'] = str(flow_dict['id'])
+                
+                result.append(flow_dict)
+            except Exception as e:
+                logger.error(f"Error processing cash flow {flow.get('id')}: {e}")
+                continue
+    
+    return result
+
+def get_cash_flow_summary(period="all"):
+    """
+    Get summary of cash flows for a specific period.
+    
+    Args:
+        period (str): Time period ('1m', '3m', '6m', '1y', 'all')
+        
+    Returns:
+        dict: Summary of deposits and withdrawals by currency
+    """
+    # Define date range based on period
+    end_date = datetime.now()
+    
+    if period == "1m":
+        start_date = end_date - timedelta(days=30)
+    elif period == "3m":
+        start_date = end_date - timedelta(days=90)
+    elif period == "6m":
+        start_date = end_date - timedelta(days=180)
+    elif period == "1y":
+        start_date = end_date - timedelta(days=365)
+    else:  # all
+        start_date = None
+    
+    # Load cash flows for the period
+    cash_flows = load_cash_flows(
+        start_date=start_date.strftime("%Y-%m-%d") if start_date else None
+    )
+    
+    # Initialize summary
+    summary = {
+        "CAD": {"deposits": 0, "withdrawals": 0, "net": 0},
+        "USD": {"deposits": 0, "withdrawals": 0, "net": 0}
+    }
+    
+    # Calculate totals
+    for flow in cash_flows:
+        currency = flow.get('currency', 'CAD')
+        flow_type = flow.get('type', '').lower()
+        amount = flow.get('amount', 0)
+        
+        if currency not in summary:
+            summary[currency] = {"deposits": 0, "withdrawals": 0, "net": 0}
+        
+        if flow_type == 'deposit':
+            summary[currency]['deposits'] += amount
+            summary[currency]['net'] += amount
+        elif flow_type == 'withdrawal':
+            summary[currency]['withdrawals'] += amount
+            summary[currency]['net'] -= amount
+    
+    return summary

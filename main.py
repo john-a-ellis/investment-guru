@@ -21,6 +21,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # Custom modules - consolidated imports from our improved architecture
 from modules.help_system import get_help_content_html, get_available_topics
 from components.help_display import create_help_display_component
+from components.cash_management import create_cash_management_component, create_cash_flow_table
 from modules.market_analyzer import MarketAnalyzer
 from modules.news_analyzer import NewsAnalyzer
 from modules.recommendation_engine import RecommendationEngine
@@ -112,7 +113,13 @@ app.layout = dbc.Container([
             size="sm",
             className="mt-2"
         )
-    ], width=1)
+        ], width=1)
+    ], className="mb-4"),
+
+    dbc.Row([
+        dbc.Col([
+            create_cash_management_component()
+        ], width=12)
     ], className="mb-4"),
 
     dbc.Row([
@@ -1629,6 +1636,112 @@ def display_help_topic(topic_clicks, help_button_clicks):
     # Default return if none of the above conditions are met
     raise PreventUpdate
 
+@app.callback(
+    [Output("deposit-feedback", "children"),
+     Output("cash-flow-history-table", "children", allow_duplicate=True),
+     Output("deposit-amount-input", "value"),
+     Output("deposit-description-input", "value")],
+    Input("record-deposit-button", "n_clicks"),
+    [State("deposit-amount-input", "value"),
+     State("deposit-currency-select", "value"),
+     State("deposit-date-input", "value"),
+     State("deposit-description-input", "value")],
+    prevent_initial_call=True
+)
+def record_deposit(n_clicks, amount, currency, date, description):
+    """
+    Record a deposit (capital entering the portfolio)
+    """
+    from modules.portfolio_utils import record_cash_flow
+    
+    if n_clicks is None or not amount:
+        raise dash.exceptions.PreventUpdate
+    
+    # Record the deposit
+    success = record_cash_flow("deposit", amount, currency, date, description)
+    
+    if success:
+        # Update cash flow history and clear form
+        return (
+            dbc.Alert(f"Successfully recorded deposit of {currency} {amount}", color="success"),
+            create_cash_flow_table(),
+            None,
+            ""
+        )
+    else:
+        return (
+            dbc.Alert("Failed to record deposit", color="danger"),
+            dash.no_update,
+            dash.no_update,
+            dash.no_update
+        )
+
+@app.callback(
+    [Output("withdrawal-feedback", "children"),
+     Output("cash-flow-history-table", "children", allow_duplicate=True),
+     Output("withdrawal-amount-input", "value"),
+     Output("withdrawal-description-input", "value")],
+    Input("record-withdrawal-button", "n_clicks"),
+    [State("withdrawal-amount-input", "value"),
+     State("withdrawal-currency-select", "value"),
+     State("withdrawal-date-input", "value"),
+     State("withdrawal-description-input", "value")],
+    prevent_initial_call=True
+)
+def record_withdrawal(n_clicks, amount, currency, date, description):
+    """
+    Record a withdrawal (capital leaving the portfolio)
+    """
+    from modules.portfolio_utils import record_cash_flow
+    
+    if n_clicks is None or not amount:
+        raise dash.exceptions.PreventUpdate
+    
+    # Record the withdrawal
+    success = record_cash_flow("withdrawal", amount, currency, date, description)
+    
+    if success:
+        # Update cash flow history and clear form
+        return (
+            dbc.Alert(f"Successfully recorded withdrawal of {currency} {amount}", color="success"),
+            create_cash_flow_table(),
+            None,
+            ""
+        )
+    else:
+        return (
+            dbc.Alert("Failed to record withdrawal", color="danger"),
+            dash.no_update,
+            dash.no_update,
+            dash.no_update
+        )
+
+@app.callback(
+    Output("cash-flow-history-table", "children"),
+    Input("cash-tabs", "active_tab"),
+    prevent_initial_call=False
+)
+def load_cash_flow_history(active_tab):
+    """
+    Load and display cash flow history when the tab is selected
+    """
+    if active_tab == "tab-2":  # Adjust based on the actual tab ID
+        return create_cash_flow_table()
+    return dash.no_update
+
+# Update the portfolio summary to include cash positions and flows
+@app.callback(
+    Output("portfolio-summary", "children", allow_duplicate=True),
+    [Input("record-deposit-button", "n_clicks"),
+     Input("record-withdrawal-button", "n_clicks")],
+    prevent_initial_call=True
+)
+def refresh_summary_after_cash_flow(deposit_clicks, withdrawal_clicks):
+    """
+    Refresh the portfolio summary after a deposit or withdrawal
+    """
+    portfolio = update_portfolio_data()
+    return create_portfolio_summary_component(portfolio)
 
 register_ml_prediction_callbacks(app)
 

@@ -219,6 +219,17 @@ def initialize_database():
             comment TEXT
         );
         """,
+        """
+        CREATE TABLE IF NOT EXISTS cash_flows (
+            id UUID PRIMARY KEY,
+            flow_type VARCHAR(20) NOT NULL, -- 'deposit' or 'withdrawal'
+            amount NUMERIC(15, 2) NOT NULL,
+            currency VARCHAR(10) NOT NULL,
+            flow_date DATE NOT NULL,
+            description TEXT,
+            recorded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+        """,
         # --- INDEXES (Optional but recommended) ---
         """CREATE INDEX IF NOT EXISTS idx_transactions_symbol ON transactions (symbol);""",
         """CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions (transaction_date);""",
@@ -229,6 +240,7 @@ def initialize_database():
         """CREATE INDEX IF NOT EXISTS idx_trained_models_symbol ON trained_models (symbol);""",
         """CREATE INDEX IF NOT EXISTS idx_trained_models_training_date ON trained_models (training_date);"""
         """CREATE INDEX IF NOT EXISTS idx_portfolio_snapshots_date ON portfolio_snapshots (snapshot_date);"""
+        """CREATE INDEX IF NOT EXISTS idx_cash_flows_date ON cash_flows (flow_date);"""
         ]
     
     # Ensure UUID extension is enabled
