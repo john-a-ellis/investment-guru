@@ -1779,3 +1779,174 @@ def get_cash_flow_summary(period="all"):
             summary[currency]['net'] -= amount
     
     return summary
+
+def record_currency_exchange(from_currency, from_amount, to_currency, to_amount, date=None, description=""):
+    """
+    Record a currency exchange transaction in the database.
+    
+    Args:
+        from_currency (str): Source currency code ("CAD" or "USD")
+        from_amount (float): Amount in source currency
+        to_currency (str): Target currency code ("CAD" or "USD")
+        to_amount (float): Amount in target currency
+        date (str): Date in YYYY-MM-DD format (optional, defaults to today)
+        description (str): Description/notes (optional)
+        
+    Returns:
+        bool: Success status
+    """
+    if date is None:
+        date = datetime.now().strftime("%Y-%m-%d")
+    else:
+        # Ensure date is in YYYY-MM-DD format
+        try:
+            date = datetime.strptime(str(date), '%Y-%m-%d').strftime('%Y-%m-%d')
+        except ValueError:
+            logger.error(f"Invalid date format for currency exchange: {date}. Using today.")
+            date = datetime.now().strftime("%Y-%m-%d")
+    
+    # Calculate the exchange rate
+    rate = from_amount / to_amount if to_amount > 0 else 0
+    
+    # Generate a unique ID for the exchange
+    exchange_id = str(uuid.uuid4())
+    
+    # Insert exchange record
+    insert_query = """
+    INSERT INTO currency_exchanges (
+        id, from_currency, from_amount, to_currency, to_amount, rate,
+        exchange_date, description, recorded_at
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+    """
+    
+    params = (
+        exchange_id,
+        from_currency.upper(),
+        float(from_amount),
+        to_currency.upper(),
+        float(to_amount),
+        float(rate),
+        date,
+        description,
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    )
+    
+    result = execute_query(insert_query, params, commit=True)
+    
+    if result is not None:
+        # Update cash positions for both currencies
+        try:
+            # Subtract from source currency
+            update_cash_position(from_currency.upper(), -float(from_amount))
+            
+            # Add to target currency
+            update_cash_position(to_currency.upper(), float(to_amount))
+            
+            logger.info(f"Currency exchange recorded: {from_amount} {from_currency} to {to_amount} {to_currency}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update cash positions after recording currency exchange: {e}")
+            return False
+    else:
+        logger.error(f"Failed to record currency exchange: {from_amount} {from_currency} to {to_amount} {to_currency}")
+        return False
+
+def load_currency_exchanges(start_date=None, end_date=None):
+    """
+    Load currency exchange records from database.
+    
+    Args:
+        start_date (str): Filter by start date (YYYY-MM-DD, optional)
+        end_date (str): Filter by end date (YYYY-MM-DD, optional)
+        
+    Returns:
+        list: Currency exchange records sorted by date (newest first)
+    """
+    query = "SELECT * FROM currency_exchanges"
+    params = []
+    filters = []
+    
+    if start_date:
+        filters.append("exchange_date >= %s")
+        params.append(start_date)
+    
+    if end_date:
+        filters.append("exchange_date <= %s")
+        params.append(end_date)
+    
+    if filters:
+        query += " WHERE " + " AND ".join(filters)
+    
+    query += " ORDER BY exchange_date DESC, recorded_at DESC;"
+    
+    exchanges = execute_query(query, tuple(params) if params else None, fetchall=True)
+    
+    result = []
+    if exchanges:
+        for exchange in exchanges:
+            try:
+                exchange_dict = dict(exchange)
+                
+                # Convert Decimal to float
+                for key in ['from_amount', 'to_amount', 'rate']:
+                    if key in exchange_dict and exchange_dict[key] is not None:
+                        exchange_dict[key] = float(exchange_dict[key])
+                
+                # Format dates
+                exchange_dict['date'] = exchange_dict['exchange_date'].strftime("%Y-%m-%d")
+                exchange_dict['exchange_date'] = exchange_dict['exchange_date'].strftime("%Y-%m-%d")
+                if exchange_dict.get('recorded_at'):
+                    exchange_dict['recorded_at'] = exchange_dict['recorded_at'].strftime("%Y-%m-%d %H:%M:%S")
+                
+                # Ensure ID is string
+                exchange_dict['id'] = str(exchange_dict['id'])
+                
+                result.append(exchange_dict)
+            except Exception as e:
+                logger.error(f"Error processing currency exchange {exchange.get('id')}: {e}")
+                continue
+    
+    return result
+
+def get_weighted_exchange_rate(from_currency="CAD", to_currency="USD", lookback_days=365):
+    """
+    Calculate the weighted average exchange rate from historical exchanges.
+    
+    Args:
+        from_currency (str): Source currency code
+        to_currency (str): Target currency code
+        lookback_days (int): Number of days to look back
+        
+    Returns:
+        float: Weighted average exchange rate or current rate if no data
+    """
+    # Calculate start date based on lookback days
+    start_date = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    
+    # Load relevant exchanges
+    exchanges = load_currency_exchanges(start_date=start_date)
+    
+    # Filter exchanges for the specified currency pair
+    relevant_exchanges = [
+        ex for ex in exchanges 
+        if ex.get('from_currency') == from_currency.upper() and ex.get('to_currency') == to_currency.upper()
+    ]
+    
+    if relevant_exchanges:
+        # Calculate weighted average
+        total_from_amount = sum(ex.get('from_amount', 0) for ex in relevant_exchanges)
+        total_to_amount = sum(ex.get('to_amount', 0) for ex in relevant_exchanges)
+        
+        if total_to_amount > 0:
+            weighted_rate = total_from_amount / total_to_amount
+            return weighted_rate
+    
+    # Fallback to current rate if no data
+    if from_currency.upper() == "CAD" and to_currency.upper() == "USD":
+        # Invert for CAD to USD
+        return 1.0 / get_usd_to_cad_rate()
+    elif from_currency.upper() == "USD" and to_currency.upper() == "CAD":
+        return get_usd_to_cad_rate()
+    else:
+        # Default fallback
+        return 1.0

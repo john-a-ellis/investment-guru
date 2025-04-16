@@ -19,6 +19,7 @@ import multiprocessing
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Custom modules - consolidated imports from our improved architecture
+from components.currency_exchange_component import create_currency_exchange_component
 from modules.help_system import get_help_content_html, get_available_topics
 from components.help_display import create_help_display_component
 from components.cash_management import create_cash_management_component, create_cash_flow_table
@@ -121,6 +122,12 @@ app.layout = dbc.Container([
             create_cash_management_component()
         ], width=12)
     ], className="mb-4"),
+
+    dbc.Row([
+        dbc.Col([
+            create_currency_exchange_component()
+        ], width=12)
+    ], className="mb-4"), 
 
     dbc.Row([
             dbc.Col([
@@ -1788,7 +1795,76 @@ def record_deposit(n_clicks, amount, currency, date, description):
             dash.no_update,
             dash.no_update
         )
+    
+@app.callback(
+    Output("resulting-usd-display", "children"),
+    [Input("cad-amount-input", "value"),
+     Input("exchange-rate-input", "value"),
+     Input("refresh-exchange-rate-button", "n_clicks")]
+)
+def update_usd_display(cad_amount, exchange_rate, refresh_clicks):
+    """
+    Update the displayed USD amount based on CAD amount and exchange rate
+    """
+    # If refresh button clicked, get the latest rate
+    ctx_triggered = ctx.triggered_id
+    if ctx_triggered == "refresh-exchange-rate-button" and refresh_clicks:
+        from modules.portfolio_utils import get_usd_to_cad_rate
+        current_rate = get_usd_to_cad_rate()
+        exchange_rate = 1 / current_rate if current_rate > 0 else 0
 
+    if cad_amount and exchange_rate and exchange_rate > 0:
+        usd_amount = cad_amount / exchange_rate
+        return f"${usd_amount:.2f} USD"
+    return "—"
+
+@app.callback(
+    [Output("exchange-feedback", "children"),
+     Output("exchange-history-table", "children", allow_duplicate=True),
+     Output("cad-amount-input", "value"),
+     Output("exchange-description-input", "value"),
+     Output("exchange-rate-input", "value", allow_duplicate=True)],
+    Input("execute-exchange-button", "n_clicks"),
+    [State("cad-amount-input", "value"),
+     State("exchange-rate-input", "value"),
+     State("exchange-date-input", "value"),
+     State("exchange-description-input", "value")],
+    prevent_initial_call=True
+)
+def execute_currency_exchange(n_clicks, cad_amount, exchange_rate, date, description):
+    """
+    Record a currency exchange from CAD to USD
+    """
+    from modules.portfolio_utils import record_currency_exchange
+    
+    if n_clicks is None or not cad_amount or not exchange_rate or exchange_rate <= 0:
+        raise dash.exceptions.PreventUpdate
+    
+    # Calculate USD amount
+    usd_amount = cad_amount / exchange_rate
+    
+    # Record the exchange
+    success = record_currency_exchange("CAD", cad_amount, "USD", usd_amount, date, description)
+    
+    if success:
+        # Update history table and clear form
+        return (
+            dbc.Alert(f"Successfully converted ${cad_amount:.2f} CAD to ${usd_amount:.2f} USD at rate {exchange_rate:.4f}", color="success"),
+            create_exchange_history_table(),
+            None,
+            "",
+            exchange_rate  # Keep the same exchange rate
+        )
+        # If exchange fails
+    else:
+        return (
+            dbc.Alert("Failed to record currency exchange", color="danger"),
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update
+        )
+    
 @app.callback(
     [Output("withdrawal-feedback", "children"),
      Output("cash-flow-history-table", "children", allow_duplicate=True),
@@ -1828,6 +1904,53 @@ def record_withdrawal(n_clicks, amount, currency, date, description):
             dash.no_update,
             dash.no_update
         )
+
+@app.callback(
+    Output("exchange-history-table", "children"),
+    Input("exchange-tabs", "active_tab"),
+    prevent_initial_call=False
+)
+def load_exchange_history(active_tab):
+    """
+    Load and display exchange history when the tab is selected
+    """
+    if active_tab == "tab-2":  # Adjust based on the actual tab ID
+        return create_exchange_history_table()
+    return dash.no_update
+
+@app.callback(
+    Output("fx-impact-summary", "children"),
+    Input("analyze-fx-impact-button", "n_clicks"),
+    prevent_initial_call=True
+)
+def show_fx_impact_analysis(n_clicks):
+    """
+    Analyze and display the FX impact on portfolio returns
+    """
+    if n_clicks is None:
+        raise dash.exceptions.PreventUpdate
+    
+    # Load portfolio data
+    portfolio = load_portfolio()
+    
+    # Create and return FX impact summary
+    from components.currency_exchange_component import create_fx_impact_summary
+    return create_fx_impact_summary(portfolio)
+
+@app.callback(
+    Output("portfolio-summary", "children", allow_duplicate=True),
+    [Input("execute-exchange-button", "n_clicks")],
+    prevent_initial_call=True
+)
+def refresh_summary_after_exchange(n_clicks):
+    """
+    Refresh the portfolio summary after a currency exchange
+    """
+    if n_clicks:
+        portfolio = update_portfolio_data()
+        return create_portfolio_summary_component(portfolio)
+    raise dash.exceptions.PreventUpdate
+
 
 @app.callback(
     Output("cash-flow-history-table", "children"),

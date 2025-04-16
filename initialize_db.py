@@ -345,6 +345,7 @@ def migrate_json_to_db():
         if not migrate_user_profile(): all_success = False
         if not migrate_mutual_fund_data(): all_success = False
         if not migrate_cash_positions(): all_success = False
+        if not migrate_currency_exchanges(): all_success = False
         
         if all_success:
             logger.info("Migration check from JSON to database completed.")
@@ -487,6 +488,71 @@ def main():
 
     logger.info("--- Database Initialization Process Completed ---")
     return True
+
+# Add this to the migrate_json_to_db function in initialize_db.py
+def migrate_currency_exchanges():
+    """Migrate currency exchange data from JSON to database if available"""
+    logger.info("Checking for currency exchange data to migrate...")
+    exchange_file = 'data/currency_exchanges.json'
+    
+    if not os.path.exists(exchange_file):
+        logger.info("No currency exchange file found. Nothing to migrate.")
+        return True
+    
+    try:
+        exchange_data = load_json_file(exchange_file)
+        migrated_count = 0
+        
+        for exchange_id, details in exchange_data.items():
+            # Check if this exchange already exists
+            check_query = "SELECT id FROM currency_exchanges WHERE id = %s;"
+            existing = execute_query(check_query, (exchange_id,), fetchone=True)
+            
+            if existing:
+                logger.debug(f"Currency exchange {exchange_id} already exists, skipping.")
+                continue
+                
+            # Format for insertion
+            from_currency = details.get("from_currency", "CAD")
+            from_amount = float(details.get("from_amount", 0))
+            to_currency = details.get("to_currency", "USD")
+            to_amount = float(details.get("to_amount", 0))
+            rate = float(details.get("rate", 0))
+            exchange_date = details.get("exchange_date", datetime.now().strftime("%Y-%m-%d"))
+            description = details.get("description", "")
+            recorded_at = details.get("recorded_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            
+            insert_query = """
+            INSERT INTO currency_exchanges (
+                id, from_currency, from_amount, to_currency, to_amount, rate,
+                exchange_date, description, recorded_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+            """
+            
+            params = (
+                exchange_id,
+                from_currency,
+                from_amount,
+                to_currency,
+                to_amount,
+                rate,
+                exchange_date,
+                description,
+                recorded_at
+            )
+            
+            result = execute_query(insert_query, params, commit=True)
+            if result:
+                migrated_count += 1
+            else:
+                logger.error(f"Failed to migrate currency exchange {exchange_id}")
+        
+        logger.info(f"Currency exchange migration complete. Migrated {migrated_count} exchanges.")
+        return True
+    except Exception as e:
+        logger.error(f"Error during currency exchange migration: {e}")
+        return False
+
 
 if __name__ == "__main__":
     if main():

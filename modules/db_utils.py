@@ -230,6 +230,19 @@ def initialize_database():
             recorded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );
         """,
+        """
+        CREATE TABLE IF NOT EXISTS currency_exchanges (
+            id UUID PRIMARY KEY,
+            from_currency VARCHAR(10) NOT NULL,
+            from_amount NUMERIC(15, 2) NOT NULL,
+            to_currency VARCHAR(10) NOT NULL,
+            to_amount NUMERIC(15, 2) NOT NULL,
+            rate NUMERIC(15, 6) NOT NULL,
+            exchange_date DATE NOT NULL,
+            description TEXT,
+            recorded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+        """
         # --- INDEXES (Optional but recommended) ---
         """CREATE INDEX IF NOT EXISTS idx_transactions_symbol ON transactions (symbol);""",
         """CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions (transaction_date);""",
@@ -241,6 +254,7 @@ def initialize_database():
         """CREATE INDEX IF NOT EXISTS idx_trained_models_training_date ON trained_models (training_date);"""
         """CREATE INDEX IF NOT EXISTS idx_portfolio_snapshots_date ON portfolio_snapshots (snapshot_date);"""
         """CREATE INDEX IF NOT EXISTS idx_cash_flows_date ON cash_flows (flow_date);"""
+        """CREATE INDEX IF NOT EXISTS idx_currency_exchanges_date ON currency_exchanges (exchange_date);"""
         ]
     
     # Ensure UUID extension is enabled
