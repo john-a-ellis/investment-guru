@@ -18,16 +18,9 @@ from modules.portfolio_utils import load_transactions
 from modules.portfolio_utils import get_usd_to_cad_rate
 from modules.mutual_fund_provider import MutualFundProvider
 from modules.yf_utils import download_yf_data, get_ticker_history
-# from modules.portfolio_utils import get_historical_usd_to_cad_rates
-# Import functions directly to avoid circular imports
-# We're already importing these individually above, so this commented code is just for reference
-# from modules.portfolio_utils import (
-#     get_usd_to_cad_rate, 
-#     get_historical_usd_to_cad_rates,
-#     calculate_twrr, 
-#     get_money_weighted_return, 
-#     load_transactions
-# )
+from modules.portfolio_utils import calculate_total_return
+
+
 
 def get_portfolio_historical_data(portfolio, period="3m"):
     """
@@ -817,7 +810,35 @@ def create_summary_stats(portfolio):
         worst_investment = {"symbol": "N/A", "gain_loss_pct": 0, "currency": "CAD"}
     
     # Create summary cards
-    return dbc.Row([
+    total_return_data = calculate_total_return(portfolio, period="1y")
+    total_return_card = dbc.Col([
+        dbc.Card([
+            dbc.CardBody([
+                html.H5("Total Return (1yr)", className="card-title"),
+                html.Div([
+                    html.H3(
+                        f"{total_return_data['total_return_pct']:.2f}%", 
+                        className="text-success" if total_return_data['total_return_pct'] >= 0 else "text-danger"
+                    ),
+                    html.Div([
+                        html.Span("Price Return: ", className="fw-bold"),
+                        html.Span(
+                            f"{total_return_data['price_return_pct']:.2f}%",
+                            className="text-success" if total_return_data['price_return_pct'] >= 0 else "text-danger"
+                        )
+                    ]),
+                    html.Div([
+                        html.Span("Dividend Return: ", className="fw-bold"),
+                        html.Span(
+                            f"{total_return_data['dividend_return_pct']:.2f}%",
+                            className="text-success"
+                        )
+                    ])
+                ])
+            ])
+        ])
+    ], width=3)
+    new_row = dbc.Row([
         dbc.Col([
             dbc.Card([
                 dbc.CardBody([
@@ -845,27 +866,60 @@ def create_summary_stats(portfolio):
                 ])
             ])
         ], width=3),
-        dbc.Col([
-            dbc.Card([
-                dbc.CardBody([
-                    html.H5("Best & Worst Performers", className="card-title"),
-                    html.Div([
-                        html.Span(f"Best: {best_investment['symbol']} ", className="font-weight-bold"),
-                        html.Span(
-                            f"+{best_investment['gain_loss_pct']:.2f}%" if best_investment['gain_loss_pct'] >= 0 else f"{best_investment['gain_loss_pct']:.2f}%",
-                            className="text-success" if best_investment['gain_loss_pct'] >= 0 else "text-danger"
-                        ),
-                        html.Br(),
-                        html.Span(f"Worst: {worst_investment['symbol']} ", className="font-weight-bold"),
-                        html.Span(
-                            f"+{worst_investment['gain_loss_pct']:.2f}%" if worst_investment['gain_loss_pct'] >= 0 else f"{worst_investment['gain_loss_pct']:.2f}%",
-                            className="text-success" if worst_investment['gain_loss_pct'] >= 0 else "text-danger"
-                        )
-                    ])
-                ])
-            ])
-        ], width=3)
-    ])
+        total_return_card  # Add the new card
+    ], className="mb-4")
+
+    # Return the updated row
+    return new_row
+    # return dbc.Row([
+    #     dbc.Col([
+    #         dbc.Card([
+    #             dbc.CardBody([
+    #                 html.H5("Total Value (CAD)", className="card-title"),
+    #                 html.H3(f"${total_value:.2f}", className="text-primary")
+    #             ])
+    #         ])
+    #     ], width=3),
+    #     dbc.Col([
+    #         dbc.Card([
+    #             dbc.CardBody([
+    #                 html.H5("Total Investment", className="card-title"),
+    #                 html.H3(f"${total_investment:.2f}", className="text-secondary")
+    #             ])
+    #         ])
+    #     ], width=3),
+    #     dbc.Col([
+    #         dbc.Card([
+    #             dbc.CardBody([
+    #                 html.H5("Total Gain/Loss", className="card-title"),
+    #                 html.H3(
+    #                     f"${total_gain_loss:.2f} ({total_gain_loss_pct:.2f}%)", 
+    #                     className="text-success" if total_gain_loss >= 0 else "text-danger"
+    #                 )
+    #             ])
+    #         ])
+    #     ], width=3),
+    #     dbc.Col([
+    #         dbc.Card([
+    #             dbc.CardBody([
+    #                 html.H5("Best & Worst Performers", className="card-title"),
+    #                 html.Div([
+    #                     html.Span(f"Best: {best_investment['symbol']} ", className="font-weight-bold"),
+    #                     html.Span(
+    #                         f"+{best_investment['gain_loss_pct']:.2f}%" if best_investment['gain_loss_pct'] >= 0 else f"{best_investment['gain_loss_pct']:.2f}%",
+    #                         className="text-success" if best_investment['gain_loss_pct'] >= 0 else "text-danger"
+    #                     ),
+    #                     html.Br(),
+    #                     html.Span(f"Worst: {worst_investment['symbol']} ", className="font-weight-bold"),
+    #                     html.Span(
+    #                         f"+{worst_investment['gain_loss_pct']:.2f}%" if worst_investment['gain_loss_pct'] >= 0 else f"{worst_investment['gain_loss_pct']:.2f}%",
+    #                         className="text-success" if worst_investment['gain_loss_pct'] >= 0 else "text-danger"
+    #                     )
+    #                 ])
+    #             ])
+    #         ])
+    #     ], width=3)
+    # ])
 
 def create_normalized_performance_graph(portfolio, period="3m"):
     """

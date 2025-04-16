@@ -242,7 +242,25 @@ def initialize_database():
             description TEXT,
             recorded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );
+        """,
         """
+        CREATE TABLE IF NOT EXISTS dividends (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            symbol VARCHAR(50) NOT NULL,
+            dividend_date DATE NOT NULL,
+            record_date DATE,
+            amount_per_share NUMERIC(15, 6) NOT NULL,
+            shares_held NUMERIC(15, 6) NOT NULL,
+            total_amount NUMERIC(15, 4) NOT NULL,
+            currency VARCHAR(10) DEFAULT 'CAD',
+            is_drip BOOLEAN DEFAULT FALSE,
+            drip_shares NUMERIC(15, 6) DEFAULT 0,
+            drip_price NUMERIC(15, 4) DEFAULT 0,
+            notes TEXT,
+            recorded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+
         # --- INDEXES (Optional but recommended) ---
         """CREATE INDEX IF NOT EXISTS idx_transactions_symbol ON transactions (symbol);""",
         """CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions (transaction_date);""",
@@ -255,6 +273,8 @@ def initialize_database():
         """CREATE INDEX IF NOT EXISTS idx_portfolio_snapshots_date ON portfolio_snapshots (snapshot_date);"""
         """CREATE INDEX IF NOT EXISTS idx_cash_flows_date ON cash_flows (flow_date);"""
         """CREATE INDEX IF NOT EXISTS idx_currency_exchanges_date ON currency_exchanges (exchange_date);"""
+        """CREATE INDEX IF NOT EXISTS idx_dividends_symbol ON dividends (symbol);"""
+        """CREATE INDEX IF NOT EXISTS idx_dividends_date ON dividends (dividend_date);"""
         ]
     
     # Ensure UUID extension is enabled

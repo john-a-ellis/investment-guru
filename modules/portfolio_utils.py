@@ -440,7 +440,7 @@ def _update_portfolio_after_transaction(transaction_type, symbol, price, shares,
     Called internally by record_transaction.
 
     Args:
-        transaction_type (str): "buy" or "sell".
+        transaction_type (str): "buy", "sell", or "drip"
         symbol (str): Asset symbol.
         price (float): Price per share.
         shares (float): Number of shares.
@@ -451,7 +451,8 @@ def _update_portfolio_after_transaction(transaction_type, symbol, price, shares,
     select_query = "SELECT * FROM portfolio WHERE symbol = %s;"
     existing_investment = execute_query(select_query, (symbol,), fetchone=True)
 
-    if transaction_type.lower() == "buy":
+    # Handle buy and drip transactions similarly - both add shares
+    if transaction_type.lower() == "buy" or transaction_type.lower() == "drip":
         if existing_investment:
             # Update existing investment
             inv_id = existing_investment['id']
@@ -460,10 +461,17 @@ def _update_portfolio_after_transaction(transaction_type, symbol, price, shares,
             current_price = float(existing_investment['current_price']) if existing_investment.get('current_price') else price # Use transaction price if no current price
 
             new_shares = current_shares + shares
-            # Calculate new average purchase price (weighted average)
-            current_cost = current_shares * current_purchase_price
-            new_cost = shares * price
-            new_avg_price = (current_cost + new_cost) / new_shares if new_shares > 0 else 0
+            
+            # For DRIP, we don't change the average purchase price since it's reinvested dividends
+            # For buy, we recalculate the average purchase price
+            if transaction_type.lower() == "buy":
+                # Calculate new average purchase price (weighted average)
+                current_cost = current_shares * current_purchase_price
+                new_cost = shares * price
+                new_avg_price = (current_cost + new_cost) / new_shares if new_shares > 0 else 0
+            else:  # drip
+                # Keep the same average purchase price for DRIP
+                new_avg_price = current_purchase_price
 
             current_value = new_shares * current_price
             gain_loss = current_value - (new_shares * new_avg_price)
@@ -479,8 +487,8 @@ def _update_portfolio_after_transaction(transaction_type, symbol, price, shares,
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S"), inv_id
             )
 
-            # If purchase date is earlier than current, update it
-            if date < existing_investment['purchase_date'].strftime("%Y-%m-%d"):
+            # If purchase date is earlier than current, update it (for buy only, not for DRIP)
+            if transaction_type.lower() == "buy" and date < existing_investment['purchase_date'].strftime("%Y-%m-%d"):
                 update_query = """
                 UPDATE portfolio SET shares = %s, purchase_price = %s, purchase_date = %s,
                     current_value = %s, gain_loss = %s, gain_loss_percent = %s, last_updated = %s
@@ -497,10 +505,10 @@ def _update_portfolio_after_transaction(transaction_type, symbol, price, shares,
                 params = params[:-2] + (asset_name,) + params[-2:]
 
             execute_query(update_query, params, commit=True)
-            logger.info(f"Updated existing investment {symbol} after buy.")
+            logger.info(f"Updated existing investment {symbol} after {transaction_type}.")
         else:
             # Add new investment if it doesn't exist
-            logger.info(f"Adding new investment {symbol} after buy.")
+            logger.info(f"Adding new investment {symbol} after {transaction_type}.")
             # Use provided asset_name and asset_type, or default
             name_to_use = asset_name if asset_name else symbol
             add_investment(symbol, shares, price, date, asset_type=asset_type, name=name_to_use)
@@ -543,11 +551,11 @@ def _update_portfolio_after_transaction(transaction_type, symbol, price, shares,
 
 def record_transaction(transaction_type, symbol, price, shares, date=None, notes="", asset_name=None, asset_type=None):
     """
-    Record a buy/sell transaction in the database and update the portfolio.
+    Record a buy/sell/drip transaction in the database and update the portfolio.
     Also updates cash positions to reflect the transaction.
 
     Args:
-        transaction_type (str): "buy" or "sell"
+        transaction_type (str): "buy", "sell", or "drip"
         symbol (str): Asset symbol
         price (float): Price per share/unit
         shares (float): Number of shares/units
@@ -575,6 +583,15 @@ def record_transaction(transaction_type, symbol, price, shares, date=None, notes
     amount = price_float * shares_float
     transaction_id = str(uuid.uuid4())
 
+    # Standardize transaction type
+    transaction_type = transaction_type.lower()
+    
+    # Validate transaction type
+    valid_types = ["buy", "sell", "drip"]
+    if transaction_type not in valid_types:
+        logger.error(f"Invalid transaction type: {transaction_type}. Must be one of: {valid_types}")
+        return False
+
     # Insert transaction
     insert_query = """
     INSERT INTO transactions (
@@ -583,7 +600,7 @@ def record_transaction(transaction_type, symbol, price, shares, date=None, notes
     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
     """
     params = (
-        transaction_id, transaction_type.lower(), symbol_upper, price_float, shares_float, amount,
+        transaction_id, transaction_type, symbol_upper, price_float, shares_float, amount,
         date, notes, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     )
 
@@ -593,12 +610,12 @@ def record_transaction(transaction_type, symbol, price, shares, date=None, notes
         # Update portfolio based on transaction
         try:
             # For buy transactions of new assets, use the specified name and asset type
-            if transaction_type.lower() == "buy":
+            if transaction_type == "buy" or transaction_type == "drip":
                 # Check if this asset exists in portfolio
                 select_query = "SELECT * FROM portfolio WHERE symbol = %s;"
                 existing_investment = execute_query(select_query, (symbol_upper,), fetchone=True)
                 
-                if not existing_investment and asset_name and asset_type:
+                if not existing_investment and (transaction_type == "buy" or transaction_type == "drip"):
                     # This is a new investment, add it with the provided name and type
                     add_investment(symbol_upper, shares_float, price_float, date, asset_type, asset_name)
                 else:
@@ -612,28 +629,29 @@ def record_transaction(transaction_type, symbol, price, shares, date=None, notes
                 _update_portfolio_after_transaction(transaction_type, symbol_upper, price_float, shares_float, date)
             
             
-            # Update cash position based on the transaction
-            try:
-                # Determine currency based on symbol or from existing investment
-                select_query = "SELECT currency FROM portfolio WHERE symbol = %s LIMIT 1;"
-                currency_result = execute_query(select_query, (symbol_upper,), fetchone=True)
-                
-                if currency_result and currency_result.get('currency'):
-                    currency = currency_result.get('currency')
-                else:
-                    # Default currency determination based on symbol
-                    currency = "CAD" if symbol_upper.endswith(".TO") or symbol_upper.endswith(".V") or symbol_upper.startswith("MAW") else "USD"
-                
-                # Update cash - SUBTRACT for buy, ADD for sell
-                if transaction_type.lower() == "buy":
-                    track_cash_position("buy", amount, currency)
-                else:  # sell
-                    track_cash_position("sell", amount, currency)
-                
-                logger.info(f"Cash position updated for {transaction_type} of {symbol_upper}")
-            except Exception as cash_err:
-                logger.error(f"Failed to update cash position: {cash_err}")
-                # Continue execution even if cash update fails
+            # Update cash position based on the transaction (only for buy/sell, not for DRIP)
+            if transaction_type != "drip":  # Skip cash update for DRIP transactions
+                try:
+                    # Determine currency based on symbol or from existing investment
+                    select_query = "SELECT currency FROM portfolio WHERE symbol = %s LIMIT 1;"
+                    currency_result = execute_query(select_query, (symbol_upper,), fetchone=True)
+                    
+                    if currency_result and currency_result.get('currency'):
+                        currency = currency_result.get('currency')
+                    else:
+                        # Default currency determination based on symbol
+                        currency = "CAD" if symbol_upper.endswith(".TO") or symbol_upper.endswith(".V") or symbol_upper.startswith("MAW") else "USD"
+                    
+                    # Update cash - SUBTRACT for buy, ADD for sell
+                    if transaction_type == "buy":
+                        track_cash_position("buy", amount, currency)
+                    elif transaction_type == "sell":
+                        track_cash_position("sell", amount, currency)
+                    
+                    logger.info(f"Cash position updated for {transaction_type} of {symbol_upper}")
+                except Exception as cash_err:
+                    logger.error(f"Failed to update cash position: {cash_err}")
+                    # Continue execution even if cash update fails
             
             logger.info(f"Transaction recorded and portfolio updated: {transaction_type} {shares_float} shares of {symbol_upper}")
             return True
@@ -1950,3 +1968,85 @@ def get_weighted_exchange_rate(from_currency="CAD", to_currency="USD", lookback_
     else:
         # Default fallback
         return 1.0
+    
+def calculate_total_return(portfolio, period="1y", include_dividends=True):
+    """
+    Calculate total return for the portfolio including price appreciation and dividends.
+    
+    Args:
+        portfolio (dict): Portfolio data
+        period (str): Time period ('1m', '3m', '6m', '1y', 'all')
+        include_dividends (bool): Whether to include dividend income in return calculation
+        
+    Returns:
+        dict: Total return information
+    """
+    # Import twrr calculation
+    from modules.portfolio_utils import calculate_twrr_simplified
+    
+    # Get time-weighted return (price appreciation only)
+    twrr_data = calculate_twrr_simplified(portfolio, period)
+    price_return_pct = twrr_data.get('twrr', 0)
+    
+    if not include_dividends:
+        return {
+            "price_return_pct": price_return_pct,
+            "dividend_return_pct": 0,
+            "total_return_pct": price_return_pct,
+            "includes_dividends": False
+        }
+    
+    # Define date range based on period
+    end_date = datetime.now()
+    
+    if period == "1m":
+        start_date = (end_date - timedelta(days=30)).strftime("%Y-%m-%d")
+    elif period == "3m":
+        start_date = (end_date - timedelta(days=90)).strftime("%Y-%m-%d")
+    elif period == "6m":
+        start_date = (end_date - timedelta(days=180)).strftime("%Y-%m-%d")
+    elif period == "1y":
+        start_date = (end_date - timedelta(days=365)).strftime("%Y-%m-%d")
+    else:  # "all"
+        earliest_date = get_earliest_transaction_date()
+        start_date = earliest_date.strftime("%Y-%m-%d") if earliest_date else (end_date - timedelta(days=365*5)).strftime("%Y-%m-%d")
+    
+    end_date = end_date.strftime("%Y-%m-%d")
+    
+    # Calculate portfolio value at start of period
+    # This is a simplification - ideally would use actual portfolio value at start date
+    portfolio_value_start = sum((float(inv.get("shares", 0)) * float(inv.get("purchase_price", 0))) for inv in portfolio.values())
+    if portfolio_value_start <= 0:
+        return {
+            "price_return_pct": price_return_pct,
+            "dividend_return_pct": 0,
+            "total_return_pct": price_return_pct,
+            "includes_dividends": True
+        }
+    
+    # Get dividend data for period
+    from modules.dividend_utils import load_dividends
+    dividends = load_dividends(start_date=start_date, end_date=end_date)
+    
+    # Calculate dividend return
+    total_cad_dividends = sum(div["total_amount"] for div in dividends if div["currency"] == "CAD")
+    total_usd_dividends = sum(div["total_amount"] for div in dividends if div["currency"] == "USD")
+    
+    # Convert USD dividends to CAD
+    usd_to_cad_rate = get_usd_to_cad_rate()
+    total_dividends_cad = total_cad_dividends + (total_usd_dividends * usd_to_cad_rate)
+    
+    # Calculate dividend return as percentage of starting portfolio value
+    dividend_return_pct = (total_dividends_cad / portfolio_value_start) * 100
+    
+    # Calculate total return (price + dividends)
+    total_return_pct = price_return_pct + dividend_return_pct
+    
+    return {
+        "price_return_pct": price_return_pct,
+        "dividend_return_pct": dividend_return_pct,
+        "total_return_pct": total_return_pct,
+        "includes_dividends": True,
+        "total_dividends_cad": total_dividends_cad,
+        "portfolio_value_start": portfolio_value_start
+    }

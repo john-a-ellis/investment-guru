@@ -19,6 +19,19 @@ import multiprocessing
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Custom modules - consolidated imports from our improved architecture
+from components.dividend_management import (
+    create_dividend_management_component, 
+    create_dividend_history_table,
+    create_dividend_summary,
+    create_dividend_yield_display,
+    create_top_dividend_yields_table
+)
+from modules.dividend_utils import (
+    record_dividend, 
+    load_dividends, 
+    get_dividend_yield,
+    get_dividend_summary_by_symbol
+)
 from components.currency_exchange_component import create_currency_exchange_component
 from modules.help_system import get_help_content_html, get_available_topics
 from components.help_display import create_help_display_component
@@ -116,7 +129,11 @@ app.layout = dbc.Container([
         )
         ], width=1)
     ], className="mb-4"),
-
+    dbc.Row([
+        dbc.Col([
+            create_dividend_management_component()
+        ], width=12)
+    ], className="mb-4"),
     dbc.Row([
         dbc.Col([
             create_cash_management_component()
@@ -256,6 +273,268 @@ app.layout = dbc.Container([
 ])
 
 # Callbacks
+# Callback to toggle DRIP row visibility
+@app.callback(
+    Output("dividend-drip-row", "style"),
+    Input("dividend-drip-switch", "value")
+)
+def toggle_drip_row(drip_enabled):
+    """Toggle visibility of DRIP details row based on switch value"""
+    if drip_enabled:
+        return {"display": "flex"}
+    return {"display": "none"}
+
+# Callback to update total dividend amount
+@app.callback(
+    Output("dividend-total-display", "children"),
+    [Input("dividend-amount-input", "value"),
+     Input("dividend-shares-input", "value"),
+     Input("dividend-symbol-input", "value")]
+)
+def update_dividend_total(amount_per_share, shares, symbol):
+    """Calculate and display total dividend amount"""
+    if amount_per_share is None:
+        return "—"
+    
+    # If shares not provided, try to get from portfolio
+    if shares is None and symbol:
+        from modules.portfolio_utils import load_portfolio
+        portfolio = load_portfolio()
+        total_shares = 0
+        
+        for inv_id, inv in portfolio.items():
+            if inv.get("symbol", "").upper() == symbol.upper():
+                total_shares += float(inv.get("shares", 0))
+        
+        if total_shares > 0:
+            shares = total_shares
+    
+    if shares is not None:
+        total = float(amount_per_share) * float(shares)
+        return f"${total:.2f}"
+    return "—"
+
+# Callback to update DRIP total
+@app.callback(
+    Output("dividend-drip-total-display", "children"),
+    [Input("dividend-drip-shares-input", "value"),
+     Input("dividend-drip-price-input", "value")]
+)
+def update_drip_total(shares, price):
+    """Calculate and display total DRIP amount"""
+    if shares is None or price is None:
+        return "—"
+    
+    total = float(shares) * float(price)
+    return f"${total:.2f}"
+
+# Callback to update currency based on symbol
+@app.callback(
+    Output("dividend-currency-select", "value"),
+    Input("dividend-symbol-input", "value")
+)
+def update_dividend_currency(symbol):
+    """Auto-select currency based on symbol"""
+    if not symbol:
+        return ""
+    
+    symbol_upper = symbol.upper().strip()
+    is_canadian = symbol_upper.endswith(".TO") or symbol_upper.endswith(".V") or "-CAD" in symbol_upper
+    
+    return "CAD" if is_canadian else "USD"
+
+# Callback to record dividend
+@app.callback(
+    [Output("dividend-feedback", "children"),
+     Output("dividend-symbol-input", "value"),
+     Output("dividend-amount-input", "value"),
+     Output("dividend-shares-input", "value"),
+     Output("dividend-notes-input", "value"),
+     Output("dividend-drip-shares-input", "value"),
+     Output("dividend-drip-price-input", "value"),
+     Output("dividend-drip-switch", "value")],
+    Input("record-dividend-button", "n_clicks"),
+    [State("dividend-symbol-input", "value"),
+     State("dividend-date-input", "value"),
+     State("dividend-record-date-input", "value"),
+     State("dividend-amount-input", "value"),
+     State("dividend-shares-input", "value"),
+     State("dividend-currency-select", "value"),
+     State("dividend-drip-switch", "value"),
+     State("dividend-drip-shares-input", "value"),
+     State("dividend-drip-price-input", "value"),
+     State("dividend-notes-input", "value")]
+)
+def record_dividend_callback(n_clicks, symbol, date, record_date, amount_per_share, 
+                            shares, currency, is_drip, drip_shares, drip_price, notes):
+    """Record a dividend payment"""
+    if n_clicks is None or not n_clicks:
+        raise dash.exceptions.PreventUpdate
+    
+    if not symbol or not date or not amount_per_share:
+        return (
+            dbc.Alert("Symbol, date, and amount per share are required", color="danger"),
+            dash.no_update, dash.no_update, dash.no_update, dash.no_update, 
+            dash.no_update, dash.no_update, dash.no_update
+        )
+    
+    # For DRIP, need shares and price
+    if is_drip and (not drip_shares or not drip_price):
+        return (
+            dbc.Alert("DRIP shares and price are required when DRIP is enabled", color="warning"),
+            dash.no_update, dash.no_update, dash.no_update, dash.no_update, 
+            dash.no_update, dash.no_update, dash.no_update
+        )
+    
+    success = record_dividend(
+        symbol=symbol,
+        dividend_date=date,
+        amount_per_share=amount_per_share,
+        shares_held=shares,  # None is handled in the function
+        record_date=record_date,
+        currency=currency,
+        is_drip=is_drip,
+        drip_shares=drip_shares if is_drip else 0,
+        drip_price=drip_price if is_drip else 0,
+        notes=notes
+    )
+    
+    if success:
+        # Clear the form and show success message
+        return (
+            dbc.Alert("Dividend recorded successfully", color="success"),
+            "", None, None, "", None, None, False
+        )
+    else:
+        # Keep values and show error
+        return (
+            dbc.Alert("Failed to record dividend. Please check your inputs.", color="danger"),
+            dash.no_update, dash.no_update, dash.no_update, dash.no_update, 
+            dash.no_update, dash.no_update, dash.no_update
+        )
+
+# Callback to load and filter dividend history
+@app.callback(
+    Output("dividend-history-table", "children"),
+    [Input("dividend-filter-button", "n_clicks"),
+     Input("dividend-tabs", "active_tab")],
+    [State("dividend-filter-symbol-input", "value"),
+     State("dividend-date-range-select", "value")]
+)
+def update_dividend_history(n_clicks, active_tab, symbol, date_range):
+    """Load and display dividend history with filters"""
+    if active_tab != "tab-1":  # Assuming Dividend History is tab-1
+        # Only run when on the History tab
+        raise dash.exceptions.PreventUpdate
+    
+    # Calculate date range
+    end_date = datetime.now().strftime("%Y-%m-%d")
+    
+    if date_range == "ytd":
+        # Year to date
+        start_date = datetime(datetime.now().year, 1, 1).strftime("%Y-%m-%d")
+    elif date_range == "1y":
+        # Last 12 months
+        start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+    else:
+        # All time
+        start_date = None
+    
+    # Load dividends
+    filtered_symbol = symbol.strip().upper() if symbol else None
+    dividends = load_dividends(symbol=filtered_symbol, start_date=start_date, end_date=end_date)
+    
+    # Create and return table
+    return create_dividend_history_table(dividends)
+
+# Callback to update dividend analysis
+@app.callback(
+    [Output("dividend-summary-content", "children"),
+     Output("dividend-yield-content", "children"),
+     Output("dividend-by-symbol-chart", "figure"),
+     Output("top-dividend-yields-table", "children")],
+    Input("dividend-tabs", "active_tab")
+)
+def update_dividend_analysis(active_tab):
+    """Update all dividend analysis components when analysis tab is selected"""
+    if active_tab != "tab-2":  # Assuming Dividend Analysis is tab-2
+        # Only run when on the Analysis tab
+        raise dash.exceptions.PreventUpdate
+    
+    # Standard one-year period for analysis
+    end_date = datetime.now().strftime("%Y-%m-%d")
+    start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+    
+    # Load dividend data
+    dividends = load_dividends(start_date=start_date, end_date=end_date)
+    
+    # Calculate yield data
+    yield_data = get_dividend_yield(period="1y")
+    
+    # Get symbol summary
+    symbols_summary = get_dividend_summary_by_symbol(start_date=start_date, end_date=end_date)
+    
+    # Create summary card
+    summary_card = create_dividend_summary(dividends, period="1y")
+    
+    # Create yield display
+    yield_display = create_dividend_yield_display(yield_data)
+    
+    # Create chart of dividends by symbol
+    chart_data = []
+    for symbol, data in symbols_summary.items():
+        chart_data.append({
+            "symbol": symbol,
+            "cad_amount": data["total_cad"],
+            "usd_amount": data["total_usd"]
+        })
+    
+    # Sort by total dividend amount
+    chart_data.sort(key=lambda x: x["cad_amount"] + x["usd_amount"], reverse=True)
+    
+    # Take top 10 symbols
+    chart_data = chart_data[:10]
+    
+    # Create chart figure
+    import plotly.express as px
+    
+    if not chart_data:
+        # Empty placeholder figure
+        fig = px.bar(
+            x=["No Data"],
+            y=[0],
+            title="Dividend Income by Symbol (Last 12 Months)"
+        )
+    else:
+        # Create stacked bar chart
+        fig = px.bar(
+            chart_data,
+            x="symbol",
+            y=["cad_amount", "usd_amount"],
+            title="Dividend Income by Symbol (Last 12 Months)",
+            labels={"value": "Amount", "symbol": "Symbol", "variable": "Currency"},
+            color_discrete_map={"cad_amount": "#2C3E50", "usd_amount": "#1ABC9C"},
+            hover_data={"variable": False}
+        )
+        
+        # Update layout
+        fig.update_layout(
+            xaxis_title="Symbol",
+            yaxis_title="Dividend Amount",
+            legend_title="Currency",
+            template="plotly_white"
+        )
+        
+        # Rename legend items
+        new_names = {"cad_amount": "CAD", "usd_amount": "USD"}
+        for trace in fig.data:
+            trace.name = new_names.get(trace.name, trace.name)
+    
+    # Create top yields table
+    yields_table = create_top_dividend_yields_table(symbols_summary)
+    
+    return summary_card, yield_display, fig, yields_table
+
 # recondiliation
 @app.callback(
     Output("reconciliation-results", "children"),
