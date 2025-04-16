@@ -1377,7 +1377,7 @@ def load_initial_portfolio_table(n_intervals):
     [Output("quick-transaction-feedback", "children"),
      Output("portfolio-table", "children", allow_duplicate=True),
      Output("quick-transaction-symbol", "value"),
-     Output("quick-transaction-name", "value"),
+     Output("quick-transaction-name", "value", allow_duplicate=True),
      Output("quick-transaction-shares", "value"),
      Output("quick-transaction-price", "value")],
     Input("record-quick-transaction", "n_clicks"),

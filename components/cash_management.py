@@ -113,7 +113,7 @@ def create_cash_flow_table():
         html.Tbody([
             html.Tr([
                 html.Td(flow['date']),
-                html.Td(flow['type'], style={"color": "green" if flow['type'] == "deposit" else "red"}),
+                html.Td(flow['flow_type'].capitalize(), style={"color": "green" if flow['type'] == "deposit" else "red"}),
                 html.Td(f"${flow['amount']:.2f}"),
                 html.Td(flow['currency']),
                 html.Td(flow['description'])
