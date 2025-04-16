@@ -609,6 +609,20 @@ def record_transaction(transaction_type, symbol, price, shares, date=None, notes
     if result is not None:
         # Update portfolio based on transaction
         try:
+            # Determine currency based on symbol or from existing investment
+            # Look up the currency from the portfolio first for accuracy
+            currency = None
+            
+            # Check portfolio for this symbol to determine currency
+            select_query = "SELECT currency FROM portfolio WHERE symbol = %s LIMIT 1;"
+            currency_result = execute_query(select_query, (symbol_upper,), fetchone=True)
+            
+            if currency_result and currency_result.get('currency'):
+                currency = currency_result.get('currency')
+            else:
+                # Default currency determination based on symbol
+                currency = "CAD" if symbol_upper.endswith(".TO") or symbol_upper.endswith(".V") or symbol_upper.startswith("MAW") else "USD"
+            
             # For buy transactions of new assets, use the specified name and asset type
             if transaction_type == "buy" or transaction_type == "drip":
                 # Check if this asset exists in portfolio
@@ -617,7 +631,8 @@ def record_transaction(transaction_type, symbol, price, shares, date=None, notes
                 
                 if not existing_investment and (transaction_type == "buy" or transaction_type == "drip"):
                     # This is a new investment, add it with the provided name and type
-                    add_investment(symbol_upper, shares_float, price_float, date, asset_type, asset_name)
+                    asset_type_to_use = asset_type if asset_type else "stock"
+                    add_investment(symbol_upper, shares_float, price_float, date, asset_type_to_use, asset_name)
                 else:
                     # Existing investment, update with standard function but pass name and type
                     _update_portfolio_after_transaction(
@@ -628,27 +643,16 @@ def record_transaction(transaction_type, symbol, price, shares, date=None, notes
                 # For sell transactions, use standard update function
                 _update_portfolio_after_transaction(transaction_type, symbol_upper, price_float, shares_float, date)
             
-            
             # Update cash position based on the transaction (only for buy/sell, not for DRIP)
             if transaction_type != "drip":  # Skip cash update for DRIP transactions
                 try:
-                    # Determine currency based on symbol or from existing investment
-                    select_query = "SELECT currency FROM portfolio WHERE symbol = %s LIMIT 1;"
-                    currency_result = execute_query(select_query, (symbol_upper,), fetchone=True)
-                    
-                    if currency_result and currency_result.get('currency'):
-                        currency = currency_result.get('currency')
-                    else:
-                        # Default currency determination based on symbol
-                        currency = "CAD" if symbol_upper.endswith(".TO") or symbol_upper.endswith(".V") or symbol_upper.startswith("MAW") else "USD"
-                    
                     # Update cash - SUBTRACT for buy, ADD for sell
                     if transaction_type == "buy":
-                        track_cash_position(transaction_type, amount, currency)
+                        track_cash_position("buy", amount, currency)
                     elif transaction_type == "sell":
-                        track_cash_position(transaction_type, amount, currency)
+                        track_cash_position("sell", amount, currency)
                     
-                    logger.info(f"Cash position updated for {transaction_type} of {symbol_upper}")
+                    logger.info(f"Cash position updated for {transaction_type} of {symbol_upper} in {currency}")
                 except Exception as cash_err:
                     logger.error(f"Failed to update cash position: {cash_err}")
                     # Continue execution even if cash update fails
@@ -657,6 +661,8 @@ def record_transaction(transaction_type, symbol, price, shares, date=None, notes
             return True
         except Exception as update_err:
              logger.error(f"Transaction recorded ({transaction_id}), but failed to update portfolio: {update_err}")
+             import traceback
+             traceback.print_exc()
              return False # Indicate partial failure
     else:
         logger.error(f"Failed to record transaction: {symbol_upper} {transaction_type} {shares_float} shares")

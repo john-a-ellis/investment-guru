@@ -122,6 +122,16 @@ def record_dividend(symbol, dividend_date, amount_per_share, shares_held=None,
             # If this is a DRIP, update the portfolio with new shares
             if is_drip and drip_shares > 0:
                 _update_portfolio_for_drip(symbol, drip_shares, drip_price, dividend_date)
+            else:
+                # For non-DRIP dividends, update cash positions with the dividend amount
+                from modules.portfolio_utils import update_cash_position
+                
+                # Increase cash position by the dividend amount
+                update_success = update_cash_position(currency, total_amount)
+                if update_success:
+                    logger.info(f"Cash position updated for dividend: {total_amount} {currency}")
+                else:
+                    logger.warning(f"Failed to update cash position for dividend: {total_amount} {currency}")
             
             return True
         else:
@@ -130,8 +140,10 @@ def record_dividend(symbol, dividend_date, amount_per_share, shares_held=None,
             
     except Exception as e:
         logger.error(f"Error recording dividend: {e}")
+        import traceback
+        traceback.print_exc()
         return False
-
+    
 def _update_portfolio_for_drip(symbol, drip_shares, drip_price, date):
     """
     Internal helper to update portfolio holdings when dividends are reinvested.
