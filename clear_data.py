@@ -13,6 +13,8 @@ def clear_all_tables():
     tables = [
         'cash_flows', 
         'cash_positions',
+        'currency_exchanges',
+        'dividends',
         'mutual_fund_prices',
         'portfolio_snapshots',
         'trained_models',

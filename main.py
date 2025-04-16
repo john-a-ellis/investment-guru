@@ -51,6 +51,7 @@ from modules.portfolio_utils import (
     load_target_allocation, save_target_allocation, # Moved from rebalancer
     analyze_current_vs_target # Moved from rebalancer
 )
+from components.currency_exchange_component import create_exchange_history_table
 from modules.portfolio_tracker import PortfolioTracker
 from modules.portfolio_rebalancer import create_rebalance_plan
 from components.risk_metrics_component import create_risk_visualization_component
