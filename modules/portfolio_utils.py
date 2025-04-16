@@ -431,7 +431,10 @@ def save_user_profile(profile):
 
 # --- Transactions ---
 
-def _update_portfolio_after_transaction(transaction_type, symbol, price, shares, date):
+# Update to the _update_portfolio_after_transaction function in modules/portfolio_utils.py
+# Replace the existing function with this enhanced version
+
+def _update_portfolio_after_transaction(transaction_type, symbol, price, shares, date, asset_name=None, asset_type="stock"):
     """
     PRIVATE HELPER: Update portfolio based on a transaction.
     Called internally by record_transaction.
@@ -442,6 +445,8 @@ def _update_portfolio_after_transaction(transaction_type, symbol, price, shares,
         price (float): Price per share.
         shares (float): Number of shares.
         date (str): Transaction date (YYYY-MM-DD).
+        asset_name (str, optional): Name of the asset.
+        asset_type (str, optional): Type of asset (default: "stock").
     """
     select_query = "SELECT * FROM portfolio WHERE symbol = %s;"
     existing_investment = execute_query(select_query, (symbol,), fetchone=True)
@@ -486,14 +491,19 @@ def _update_portfolio_after_transaction(transaction_type, symbol, price, shares,
                     datetime.now().strftime("%Y-%m-%d %H:%M:%S"), inv_id
                 )
 
+            # Update name if provided and not already set
+            if asset_name and (existing_investment.get('name') is None or existing_investment.get('name') == symbol):
+                update_query = update_query.replace("last_updated = %s", "name = %s, last_updated = %s")
+                params = params[:-2] + (asset_name,) + params[-2:]
+
             execute_query(update_query, params, commit=True)
             logger.info(f"Updated existing investment {symbol} after buy.")
         else:
             # Add new investment if it doesn't exist
             logger.info(f"Adding new investment {symbol} after buy.")
-            # Need to determine asset type - default to stock or try to infer?
-            # For simplicity, let's default to 'stock' here. A better approach might involve looking up the symbol.
-            add_investment(symbol, shares, price, date, asset_type="stock")
+            # Use provided asset_name and asset_type, or default
+            name_to_use = asset_name if asset_name else symbol
+            add_investment(symbol, shares, price, date, asset_type=asset_type, name=name_to_use)
 
     elif transaction_type.lower() == "sell":
         if existing_investment:
@@ -530,7 +540,8 @@ def _update_portfolio_after_transaction(transaction_type, symbol, price, shares,
             logger.warning(f"Attempted to sell {symbol} which is not in the portfolio.")
 
 
-def record_transaction(transaction_type, symbol, price, shares, date=None, notes=""):
+
+def record_transaction(transaction_type, symbol, price, shares, date=None, notes="", asset_name=None, asset_type=None):
     """
     Record a buy/sell transaction in the database and update the portfolio.
     Also updates cash positions to reflect the transaction.
@@ -542,11 +553,12 @@ def record_transaction(transaction_type, symbol, price, shares, date=None, notes
         shares (float): Number of shares/units
         date (str): Transaction date (YYYY-MM-DD, optional, defaults to current date)
         notes (str): Transaction notes (optional)
+        asset_name (str): Name of the asset (optional, used for new investments)
+        asset_type (str): Type of asset (optional, used for new investments)
 
     Returns:
         bool: Success status
     """
-    # Existing code stays the same...
     if date is None:
         date = datetime.now().strftime("%Y-%m-%d")
     else:
@@ -580,12 +592,37 @@ def record_transaction(transaction_type, symbol, price, shares, date=None, notes
     if result is not None:
         # Update portfolio based on transaction
         try:
-            _update_portfolio_after_transaction(transaction_type, symbol_upper, price_float, shares_float, date)
+            # For buy transactions of new assets, use the specified name and asset type
+            if transaction_type.lower() == "buy":
+                # Check if this asset exists in portfolio
+                select_query = "SELECT * FROM portfolio WHERE symbol = %s;"
+                existing_investment = execute_query(select_query, (symbol_upper,), fetchone=True)
+                
+                if not existing_investment and asset_name and asset_type:
+                    # This is a new investment, add it with the provided name and type
+                    add_investment(symbol_upper, shares_float, price_float, date, asset_type, asset_name)
+                else:
+                    # Existing investment, update with standard function but pass name and type
+                    _update_portfolio_after_transaction(
+                        transaction_type, symbol_upper, price_float, shares_float, 
+                        date, asset_name=asset_name, asset_type=asset_type
+                    )
+            else:
+                # For sell transactions, use standard update function
+                _update_portfolio_after_transaction(transaction_type, symbol_upper, price_float, shares_float, date)
             
-            # IMPORTANT NEW CODE: Update cash position based on the transaction
+            
+            # Update cash position based on the transaction
             try:
-                # Determine currency based on symbol
-                currency = "CAD" if symbol_upper.endswith(".TO") or symbol_upper.endswith(".V") or symbol_upper.startswith("MAW") else "USD"
+                # Determine currency based on symbol or from existing investment
+                select_query = "SELECT currency FROM portfolio WHERE symbol = %s LIMIT 1;"
+                currency_result = execute_query(select_query, (symbol_upper,), fetchone=True)
+                
+                if currency_result and currency_result.get('currency'):
+                    currency = currency_result.get('currency')
+                else:
+                    # Default currency determination based on symbol
+                    currency = "CAD" if symbol_upper.endswith(".TO") or symbol_upper.endswith(".V") or symbol_upper.startswith("MAW") else "USD"
                 
                 # Update cash - SUBTRACT for buy, ADD for sell
                 if transaction_type.lower() == "buy":

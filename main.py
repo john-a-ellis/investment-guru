@@ -1374,40 +1374,85 @@ def load_initial_portfolio_table(n_intervals):
         return html.Div(f"Error loading portfolio: {str(e)}")
 
 @app.callback(
-    Output("quick-transaction-feedback", "children"),
-    Output("portfolio-table", "children", allow_duplicate=True),
+    [Output("quick-transaction-feedback", "children"),
+     Output("portfolio-table", "children", allow_duplicate=True),
+     Output("quick-transaction-symbol", "value"),
+     Output("quick-transaction-name", "value"),
+     Output("quick-transaction-shares", "value"),
+     Output("quick-transaction-price", "value")],
     Input("record-quick-transaction", "n_clicks"),
     [State("quick-transaction-type", "value"),
      State("quick-transaction-symbol", "value"),
+     State("quick-transaction-name", "value"),
+     State("quick-transaction-asset-type", "value"),
      State("quick-transaction-shares", "value"),
      State("quick-transaction-price", "value"),
      State("quick-transaction-date", "value")],
     prevent_initial_call=True
 )
-def record_quick_transaction(n_clicks, transaction_type, symbol, shares, price, date):
+def record_quick_transaction(n_clicks, transaction_type, symbol, name, asset_type, shares, price, date):
+    """
+    Record a transaction using the quick transaction form with name and asset type
+    """
     if n_clicks is None or not symbol or shares is None or price is None:
         raise dash.exceptions.PreventUpdate
     
     # Standardize values
     symbol = symbol.upper().strip()
     
-    # Record the transaction
-    success = record_transaction(transaction_type, symbol, price, shares, date)
-    
-    # Update portfolio table
-    portfolio = update_portfolio_data()
-    updated_table = create_portfolio_table(portfolio)
-    
-    # Return appropriate feedback
-    if success:
-        action = "purchase" if transaction_type == "buy" else "sale"
+    try:
+        # For buy transactions, we'll need to update the record_transaction function
+        # to handle name and asset_type
+        if transaction_type == "buy":
+            # Check if this is a new asset not in the portfolio
+            portfolio = load_portfolio()
+            symbol_exists = any(details.get("symbol", "").upper() == symbol for _, details in portfolio.items())
+            
+            if not symbol_exists:
+                # This is a new asset, so add it to the portfolio
+                success = add_investment(symbol, shares, price, date, asset_type, name)
+                action_desc = "purchase and addition"
+            else:
+                # Just record the transaction for existing asset
+                success = record_transaction(transaction_type, symbol, price, shares, date, 
+                                            notes="", asset_name=name, asset_type=asset_type)
+                action_desc = "purchase"
+        else:
+            # For sells, just use the standard transaction recording
+            success = record_transaction(transaction_type, symbol, price, shares, date)
+            action_desc = "sale"
+
+        
+        # Update portfolio table
+        portfolio = update_portfolio_data()
+        updated_table = create_portfolio_table(portfolio)
+        
+        # Return appropriate feedback
+        if success:
+            return (
+                dbc.Alert(f"Successfully recorded {action_desc} of {shares} shares of {symbol}", color="success"),
+                updated_table,
+                "",  # Clear symbol
+                "",  # Clear name
+                None,  # Clear shares
+                None   # Clear price
+            )
+        else:
+            return (
+                dbc.Alert(f"Failed to record transaction. Please check your inputs.", color="danger"),
+                dash.no_update,
+                dash.no_update,
+                dash.no_update,
+                dash.no_update,
+                dash.no_update
+            )
+    except Exception as e:
         return (
-            dbc.Alert(f"Successfully recorded {action} of {shares} shares of {symbol}", color="success"),
-            updated_table
-        )
-    else:
-        return (
-            dbc.Alert(f"Failed to record transaction. Please check your inputs.", color="danger"),
+            dbc.Alert(f"Error recording transaction: {str(e)}", color="danger"),
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
             dash.no_update
         )
 
@@ -1810,6 +1855,37 @@ def refresh_summary_after_cash_flow(deposit_clicks, withdrawal_clicks):
     """
     portfolio = update_portfolio_data()
     return create_portfolio_summary_component(portfolio)
+
+# Update the portfolio table to include cash positions and flows
+@app.callback(
+    [Output("quick-transaction-name", "value"),
+     Output("quick-transaction-asset-type", "value")],
+    Input("quick-transaction-symbol", "value"),
+    prevent_initial_call=True
+)
+def populate_transaction_fields(symbol):
+    """
+    Auto-populate name and asset type fields when a symbol is entered
+    """
+    if not symbol:
+        return "", "stock"  # Default values if symbol is empty
+    
+    # Standardize symbol
+    symbol_upper = symbol.upper().strip()
+    
+    # Try to find in portfolio first
+    portfolio = load_portfolio()
+    for inv_id, details in portfolio.items():
+        if details.get("symbol", "").upper() == symbol_upper:
+            return details.get("name", symbol_upper), details.get("asset_type", "stock")
+    
+    # If not in portfolio, check tracked assets
+    tracked_assets = load_tracked_assets()
+    if symbol_upper in tracked_assets:
+        return tracked_assets[symbol_upper].get("name", symbol_upper), tracked_assets[symbol_upper].get("type", "stock")
+    
+    # If symbol not found, just return the symbol as name and default asset type
+    return symbol_upper, "stock"
 
 register_ml_prediction_callbacks(app)
 

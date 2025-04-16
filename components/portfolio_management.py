@@ -56,6 +56,20 @@ def create_portfolio_management_component():
                             style={"width": "80px"}
                         ),
                         dbc.Input(id="quick-transaction-symbol", placeholder="Symbol", style={"width": "100px"}),
+                        dbc.Input(id="quick-transaction-name", placeholder="Asset Name", style={"width": "150px"}),
+                        dbc.Select(
+                            id="quick-transaction-asset-type",
+                            options=[
+                                {"label": "Stock", "value": "stock"},
+                                {"label": "ETF", "value": "etf"},
+                                {"label": "Mutual Fund", "value": "mutual_fund"},
+                                {"label": "Cryptocurrency", "value": "crypto"},
+                                {"label": "Bond", "value": "bond"},
+                                {"label": "Cash", "value": "cash"}
+                            ],
+                            value="stock",
+                            style={"width": "120px"}
+                        ),
                         dbc.Input(id="quick-transaction-shares", type="number", placeholder="Shares", step="0.001", style={"width": "100px"}),
                         dbc.Input(id="quick-transaction-price", type="number", placeholder="Price", style={"width": "100px"}),
                         dbc.Input(id="quick-transaction-date", type="date", value=datetime.now().strftime("%Y-%m-%d"), style={"width": "150px"}),
