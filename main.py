@@ -1659,6 +1659,8 @@ def load_initial_portfolio_table(n_intervals):
         traceback.print_exc()
         return html.Div(f"Error loading portfolio: {str(e)}")
 
+# Add this callback to main.py or update if it already exists
+
 @app.callback(
     [Output("quick-transaction-feedback", "children"),
      Output("portfolio-table", "children", allow_duplicate=True),
@@ -1678,45 +1680,37 @@ def load_initial_portfolio_table(n_intervals):
 )
 def record_quick_transaction(n_clicks, transaction_type, symbol, name, asset_type, shares, price, date):
     """
-    Record a transaction using the quick transaction form with name and asset type
+    Record a transaction using the quick transaction form with improved error handling
+    and consistent formatting for reconciliation purposes.
     """
     if n_clicks is None or not symbol or shares is None or price is None:
         raise dash.exceptions.PreventUpdate
     
     # Standardize values
     symbol = symbol.upper().strip()
+    shares_float = float(shares)
+    price_float = float(price)
     
     try:
-        # For buy transactions, we'll need to update the record_transaction function
-        # to handle name and asset_type
-        if transaction_type == "buy":
-            # Check if this is a new asset not in the portfolio
-            portfolio = load_portfolio()
-            symbol_exists = any(details.get("symbol", "").upper() == symbol for _, details in portfolio.items())
-            
-            if not symbol_exists:
-                # This is a new asset, so add it to the portfolio
-                success = add_investment(symbol, shares, price, date, asset_type, name)
-                action_desc = "purchase and addition"
-            else:
-                # Just record the transaction for existing asset
-                success = record_transaction(transaction_type, symbol, price, shares, date, 
-                                            notes="", asset_name=name, asset_type=asset_type)
-                action_desc = "purchase"
-        else:
-            # For sells, just use the standard transaction recording
-            success = record_transaction(transaction_type, symbol, price, shares, date)
-            action_desc = "sale"
-
+        # Ensure we pass both name and asset_type to the transaction recording function
+        success = record_transaction(
+            transaction_type=transaction_type,
+            symbol=symbol,
+            price=price_float,
+            shares=shares_float,
+            date=date,
+            notes=f"Added via Quick Transaction Recording",
+            asset_name=name.strip() if name else symbol,
+            asset_type=asset_type
+        )
         
-        # Update portfolio table
-        portfolio = update_portfolio_data()
-        updated_table = create_portfolio_table(portfolio)
-        
-        # Return appropriate feedback
         if success:
+            # Immediately update the portfolio data to ensure consistency
+            updated_portfolio = update_portfolio_data()
+            updated_table = create_portfolio_table(updated_portfolio)
+            
             return (
-                dbc.Alert(f"Successfully recorded {action_desc} of {shares} shares of {symbol}", color="success"),
+                dbc.Alert(f"Successfully recorded {transaction_type} of {shares} shares of {symbol}", color="success"),
                 updated_table,
                 "",  # Clear symbol
                 "",  # Clear name
@@ -1733,6 +1727,9 @@ def record_quick_transaction(n_clicks, transaction_type, symbol, name, asset_typ
                 dash.no_update
             )
     except Exception as e:
+        print(f"Error in quick transaction recording: {e}")
+        import traceback
+        traceback.print_exc()
         return (
             dbc.Alert(f"Error recording transaction: {str(e)}", color="danger"),
             dash.no_update,
@@ -1741,6 +1738,7 @@ def record_quick_transaction(n_clicks, transaction_type, symbol, name, asset_typ
             dash.no_update,
             dash.no_update
         )
+
 
 # Fixed pattern-matching callback for buy transactions from accordion
 @app.callback(

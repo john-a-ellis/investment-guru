@@ -644,9 +644,9 @@ def record_transaction(transaction_type, symbol, price, shares, date=None, notes
                     
                     # Update cash - SUBTRACT for buy, ADD for sell
                     if transaction_type == "buy":
-                        track_cash_position("buy", amount, currency)
+                        track_cash_position(transaction_type, amount, currency)
                     elif transaction_type == "sell":
-                        track_cash_position("sell", amount, currency)
+                        track_cash_position(transaction_type, amount, currency)
                     
                     logger.info(f"Cash position updated for {transaction_type} of {symbol_upper}")
                 except Exception as cash_err:
@@ -2050,3 +2050,4 @@ def calculate_total_return(portfolio, period="1y", include_dividends=True):
         "total_dividends_cad": total_dividends_cad,
         "portfolio_value_start": portfolio_value_start
     }
+
