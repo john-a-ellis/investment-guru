@@ -188,8 +188,8 @@ def add_investment(symbol, shares, purchase_price, purchase_date, asset_type="st
     shares_float = float(shares)
     price_float = float(purchase_price)
     
-    # Calculate initial values
-    initial_value = shares_float * price_float
+    # Calculate book value (important for cost basis)
+    book_value = shares_float * price_float
     
     # Default current price to purchase price
     current_price = price_float
@@ -239,45 +239,120 @@ def add_investment(symbol, shares, purchase_price, purchase_date, asset_type="st
     
     # Calculate current value and gain/loss
     current_value = shares_float * current_price
-    gain_loss = current_value - initial_value
+    gain_loss = current_value - book_value
     gain_loss_percent = ((current_price / price_float) - 1) * 100 if price_float > 0 else 0
     
-    # Insert into portfolio table
-    insert_query = """
-    INSERT INTO portfolio (
-        id, symbol, name, shares, purchase_price, purchase_date, asset_type,
-        current_price, current_value, gain_loss, gain_loss_percent, 
-        currency, added_date, last_updated
-    ) VALUES (
-        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-    );
-    """
+    # Check if this symbol already exists in portfolio
+    existing_query = "SELECT * FROM portfolio WHERE symbol = %s;"
+    existing_investments = execute_query(existing_query, (symbol_upper,), fetchall=True)
     
-    params = (
-        investment_id,
-        symbol_upper,
-        name,
-        shares_float,
-        price_float,
-        purchase_date,
-        asset_type,
-        current_price,
-        current_value,
-        gain_loss,
-        gain_loss_percent,
-        currency,
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    )
-    
-    result = execute_query(insert_query, params, commit=True)
-    
-    if result is not None:
-        logger.info(f"Investment added successfully: {symbol_upper} {shares_float} shares")
-        return True
-    
-    logger.error(f"Failed to add investment: {symbol_upper}")
-    return False
+    if existing_investments:
+        # When adding more of an existing investment, calculate the weighted average
+        # Similar logic to _update_portfolio_after_transaction for buy
+        total_shares = shares_float
+        total_book_value = book_value
+        first_investment = None
+        
+        for i, inv in enumerate(existing_investments):
+            if i == 0:
+                first_investment = inv
+            
+            existing_shares = float(inv['shares'])
+            existing_price = float(inv['purchase_price'])
+            total_shares += existing_shares
+            total_book_value += existing_shares * existing_price
+        
+        # Calculate weighted average price
+        weighted_price = total_book_value / total_shares if total_shares > 0 else price_float
+        
+        # Calculate new current value and gain/loss
+        new_current_value = total_shares * current_price
+        new_gain_loss = new_current_value - total_book_value
+        new_gain_loss_pct = ((new_current_value / total_book_value) - 1) * 100 if total_book_value > 0 else 0
+        
+        # Update the first investment with the new totals
+        update_query = """
+        UPDATE portfolio SET
+            shares = %s,
+            purchase_price = %s,
+            current_price = %s,
+            current_value = %s,
+            gain_loss = %s,
+            gain_loss_percent = %s,
+            last_updated = %s
+        WHERE id = %s;
+        """
+        
+        params = (
+            total_shares,
+            weighted_price,
+            current_price,
+            new_current_value,
+            new_gain_loss,
+            new_gain_loss_pct,
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            first_investment['id']
+        )
+        
+        # If the new purchase date is earlier, update it
+        if purchase_date < first_investment['purchase_date'].strftime("%Y-%m-%d"):
+            update_query = update_query.replace("last_updated = %s", "purchase_date = %s, last_updated = %s")
+            params = params[:-2] + (purchase_date,) + params[-2:]
+        
+        # If name is provided and existing is blank or just the symbol, update it
+        if name and (first_investment.get('name') is None or first_investment.get('name') == symbol_upper):
+            update_query = update_query.replace("last_updated = %s", "name = %s, last_updated = %s")
+            params = params[:-2] + (name,) + params[-2:]
+        
+        result = execute_query(update_query, params, commit=True)
+        
+        # Delete any other investments for this symbol to maintain one consolidated record
+        if len(existing_investments) > 1:
+            for i, inv in enumerate(existing_investments):
+                if i > 0:  # Skip the first one
+                    delete_query = "DELETE FROM portfolio WHERE id = %s;"
+                    execute_query(delete_query, (inv['id'],), commit=True)
+        
+        logger.info(f"Updated existing investment {symbol_upper}: new total {total_shares} shares, avg price ${weighted_price:.2f}")
+        return result is not None
+    else:
+        # Insert as a new investment
+        insert_query = """
+        INSERT INTO portfolio (
+            id, symbol, name, shares, purchase_price, purchase_date, asset_type,
+            current_price, current_value, gain_loss, gain_loss_percent, 
+            currency, added_date, last_updated
+        ) VALUES (
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        );
+        """
+        
+        params = (
+            investment_id,
+            symbol_upper,
+            name,
+            shares_float,
+            price_float,
+            purchase_date,
+            asset_type,
+            current_price,
+            current_value,
+            gain_loss,
+            gain_loss_percent,
+            currency,
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        )
+        
+        result = execute_query(insert_query, params, commit=True)
+        
+        if result is not None:
+            logger.info(f"New investment added: {symbol_upper}, {shares_float} shares at ${price_float}, book value ${book_value:.2f}")
+            return True
+        
+        logger.error(f"Failed to add investment: {symbol_upper}")
+        return False
+
 
 def remove_investment(investment_id):
     """
@@ -448,104 +523,225 @@ def _update_portfolio_after_transaction(transaction_type, symbol, price, shares,
         asset_name (str, optional): Name of the asset.
         asset_type (str, optional): Type of asset (default: "stock").
     """
+    # Convert inputs to proper types to prevent calculation errors
+    price_float = float(price)
+    shares_float = float(shares)
+    transaction_amount = price_float * shares_float
+    
+    # Normalize transaction type
+    transaction_type = transaction_type.lower()
+    
+    # Get existing investments for this symbol
     select_query = "SELECT * FROM portfolio WHERE symbol = %s;"
-    existing_investment = execute_query(select_query, (symbol,), fetchone=True)
-
+    existing_investments = execute_query(select_query, (symbol,), fetchall=True)
+    
+    logger.info(f"Processing portfolio update for {transaction_type} of {shares_float} shares of {symbol} at ${price_float}")
+    
     # Handle buy and drip transactions similarly - both add shares
-    if transaction_type.lower() == "buy" or transaction_type.lower() == "drip":
-        if existing_investment:
-            # Update existing investment
-            inv_id = existing_investment['id']
-            current_shares = float(existing_investment['shares'])
-            current_purchase_price = float(existing_investment['purchase_price'])
-            current_price = float(existing_investment['current_price']) if existing_investment.get('current_price') else price # Use transaction price if no current price
-
-            new_shares = current_shares + shares
+    if transaction_type in ["buy", "drip"]:
+        if existing_investments:
+            # Get the total of all existing positions for this symbol
+            total_current_shares = 0
+            total_book_value = 0
+            first_investment = None
+            
+            for i, inv in enumerate(existing_investments):
+                if i == 0:
+                    first_investment = inv  # Save the first one for the update
+                
+                current_shares = float(inv['shares'])
+                purchase_price = float(inv['purchase_price'])
+                total_current_shares += current_shares
+                total_book_value += current_shares * purchase_price
+            
+            # Calculate new totals after the transaction
+            new_total_shares = total_current_shares + shares_float
             
             # For DRIP, we don't change the average purchase price since it's reinvested dividends
             # For buy, we recalculate the average purchase price
-            if transaction_type.lower() == "buy":
+            if transaction_type == "buy":
                 # Calculate new average purchase price (weighted average)
-                current_cost = current_shares * current_purchase_price
-                new_cost = shares * price
-                new_avg_price = (current_cost + new_cost) / new_shares if new_shares > 0 else 0
+                new_total_book_value = total_book_value + transaction_amount
+                new_avg_price = new_total_book_value / new_total_shares if new_total_shares > 0 else 0
             else:  # drip
-                # Keep the same average purchase price for DRIP
-                new_avg_price = current_purchase_price
-
-            current_value = new_shares * current_price
-            gain_loss = current_value - (new_shares * new_avg_price)
-            gain_loss_percent = ((current_value / (new_shares * new_avg_price)) - 1) * 100 if new_avg_price > 0 else 0
-
+                # For DRIP, average cost basis is reduced since we're adding shares "for free"
+                new_total_book_value = total_book_value  # Book value stays the same
+                new_avg_price = new_total_book_value / new_total_shares if new_total_shares > 0 else 0
+            
+            # Get current market price
+            current_price = float(first_investment['current_price']) if first_investment.get('current_price') else price_float
+            
+            # Calculate new current value and gain/loss
+            new_current_value = new_total_shares * current_price
+            new_gain_loss = new_current_value - new_total_book_value
+            new_gain_loss_pct = ((new_current_value / new_total_book_value) - 1) * 100 if new_total_book_value > 0 else 0
+            
+            # We'll update just the first investment record with the new totals
+            # and remove any other records for this symbol
+            inv_id = first_investment['id']
+            
+            # Update the first investment with new totals
             update_query = """
-            UPDATE portfolio SET shares = %s, purchase_price = %s, current_value = %s,
-                gain_loss = %s, gain_loss_percent = %s, last_updated = %s
+            UPDATE portfolio SET 
+                shares = %s, 
+                purchase_price = %s, 
+                current_value = %s,
+                gain_loss = %s, 
+                gain_loss_percent = %s, 
+                last_updated = %s
             WHERE id = %s;
             """
+            
             params = (
-                new_shares, new_avg_price, current_value, gain_loss, gain_loss_percent,
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"), inv_id
+                new_total_shares,
+                new_avg_price,
+                new_current_value,
+                new_gain_loss,
+                new_gain_loss_pct,
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                inv_id
             )
-
+            
             # If purchase date is earlier than current, update it (for buy only, not for DRIP)
-            if transaction_type.lower() == "buy" and date < existing_investment['purchase_date'].strftime("%Y-%m-%d"):
+            if transaction_type == "buy" and first_investment['purchase_date'] and date < first_investment['purchase_date'].strftime("%Y-%m-%d"):
                 update_query = """
-                UPDATE portfolio SET shares = %s, purchase_price = %s, purchase_date = %s,
-                    current_value = %s, gain_loss = %s, gain_loss_percent = %s, last_updated = %s
+                UPDATE portfolio SET 
+                    shares = %s, 
+                    purchase_price = %s, 
+                    purchase_date = %s,
+                    current_value = %s,
+                    gain_loss = %s, 
+                    gain_loss_percent = %s, 
+                    last_updated = %s
                 WHERE id = %s;
                 """
+                
                 params = (
-                    new_shares, new_avg_price, date, current_value, gain_loss, gain_loss_percent,
-                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"), inv_id
+                    new_total_shares,
+                    new_avg_price,
+                    date,
+                    new_current_value,
+                    new_gain_loss,
+                    new_gain_loss_pct,
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    inv_id
                 )
-
+            
             # Update name if provided and not already set
-            if asset_name and (existing_investment.get('name') is None or existing_investment.get('name') == symbol):
+            if asset_name and (first_investment.get('name') is None or first_investment.get('name') == symbol):
                 update_query = update_query.replace("last_updated = %s", "name = %s, last_updated = %s")
                 params = params[:-2] + (asset_name,) + params[-2:]
-
+            
+            # Execute the update
             execute_query(update_query, params, commit=True)
-            logger.info(f"Updated existing investment {symbol} after {transaction_type}.")
+            
+            # If there were multiple investments for this symbol, delete the others
+            if len(existing_investments) > 1:
+                for i, inv in enumerate(existing_investments):
+                    if i > 0:  # Skip the first one which we updated above
+                        delete_query = "DELETE FROM portfolio WHERE id = %s;"
+                        execute_query(delete_query, (inv['id'],), commit=True)
+            
+            logger.info(f"Updated {symbol} portfolio: {total_current_shares} + {shares_float} = {new_total_shares} shares, " +
+                       f"new avg price: ${new_avg_price:.2f}, book value: ${new_total_book_value:.2f}")
         else:
             # Add new investment if it doesn't exist
-            logger.info(f"Adding new investment {symbol} after {transaction_type}.")
+            logger.info(f"Adding new investment {symbol} after {transaction_type}")
             # Use provided asset_name and asset_type, or default
             name_to_use = asset_name if asset_name else symbol
-            add_investment(symbol, shares, price, date, asset_type=asset_type, name=name_to_use)
-
-    elif transaction_type.lower() == "sell":
-        if existing_investment:
-            inv_id = existing_investment['id']
-            current_shares = float(existing_investment['shares'])
-            purchase_price = float(existing_investment['purchase_price'])
-            current_price = float(existing_investment['current_price']) if existing_investment.get('current_price') else price # Use transaction price if no current price
-
-            new_shares = current_shares - shares
-
-            if new_shares <= 0.000001: # Use tolerance for float comparison
-                # If all shares sold, remove investment
-                logger.info(f"Removing investment {symbol} after selling all shares.")
-                remove_investment(inv_id)
-            else:
-                # Update shares and current value
-                current_value = new_shares * current_price
-                purchase_cost = new_shares * purchase_price
-                gain_loss = current_value - purchase_cost
-                gain_loss_percent = ((current_value / purchase_cost) - 1) * 100 if purchase_cost > 0 else 0
-
-                update_query = """
-                UPDATE portfolio SET shares = %s, current_value = %s, gain_loss = %s,
-                    gain_loss_percent = %s, last_updated = %s
-                WHERE id = %s;
-                """
-                params = (
-                    new_shares, current_value, gain_loss, gain_loss_percent,
-                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"), inv_id
-                )
-                execute_query(update_query, params, commit=True)
-                logger.info(f"Updated investment {symbol} after sell.")
+            add_investment(symbol, shares_float, price_float, date, asset_type=asset_type, name=name_to_use)
+    
+    elif transaction_type == "sell":
+        if existing_investments:
+            # Get the total of all existing positions for this symbol
+            total_current_shares = 0
+            total_book_value = 0
+            first_investment = None
+            
+            for i, inv in enumerate(existing_investments):
+                if i == 0:
+                    first_investment = inv  # Save the first one for the update
+                
+                current_shares = float(inv['shares'])
+                purchase_price = float(inv['purchase_price'])
+                total_current_shares += current_shares
+                total_book_value += current_shares * purchase_price
+            
+            # Calculate new totals after the sell
+            new_total_shares = total_current_shares - shares_float
+            
+            # Handle case where selling more shares than owned
+            if new_total_shares < 0:
+                logger.warning(f"Cannot sell more shares than owned: attempting to sell {shares_float} but only have {total_current_shares}")
+                return False
+            
+            # Handle case where all shares are sold
+            if new_total_shares <= 0.000001:  # Use small threshold for float comparison
+                logger.info(f"Removing all investments for {symbol} after selling all shares")
+                
+                # Delete all existing investments for this symbol
+                for inv in existing_investments:
+                    delete_query = "DELETE FROM portfolio WHERE id = %s;"
+                    execute_query(delete_query, (inv['id'],), commit=True)
+                
+                return True
+            
+            # Calculate proportion of book value being sold
+            proportion_sold = shares_float / total_current_shares
+            book_value_sold = total_book_value * proportion_sold
+            new_total_book_value = total_book_value - book_value_sold
+            
+            # Keep the same average purchase price
+            current_purchase_price = float(first_investment['purchase_price'])
+            
+            # Get current market price
+            current_price = float(first_investment['current_price']) if first_investment.get('current_price') else price_float
+            
+            # Calculate new current value and gain/loss
+            new_current_value = new_total_shares * current_price
+            new_gain_loss = new_current_value - new_total_book_value
+            new_gain_loss_pct = ((new_current_value / new_total_book_value) - 1) * 100 if new_total_book_value > 0 else 0
+            
+            # Update the first investment with new totals
+            inv_id = first_investment['id']
+            
+            update_query = """
+            UPDATE portfolio SET 
+                shares = %s, 
+                current_value = %s,
+                gain_loss = %s, 
+                gain_loss_percent = %s, 
+                last_updated = %s
+            WHERE id = %s;
+            """
+            
+            params = (
+                new_total_shares,
+                new_current_value,
+                new_gain_loss,
+                new_gain_loss_pct,
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                inv_id
+            )
+            
+            # Execute the update
+            execute_query(update_query, params, commit=True)
+            
+            # If there were multiple investments for this symbol, delete the others
+            if len(existing_investments) > 1:
+                for i, inv in enumerate(existing_investments):
+                    if i > 0:  # Skip the first one which we updated above
+                        delete_query = "DELETE FROM portfolio WHERE id = %s;"
+                        execute_query(delete_query, (inv['id'],), commit=True)
+            
+            logger.info(f"Updated {symbol} portfolio after sell: {total_current_shares} - {shares_float} = {new_total_shares} shares, " +
+                       f"Book value reduced from ${total_book_value:.2f} to ${new_total_book_value:.2f}")
         else:
-            logger.warning(f"Attempted to sell {symbol} which is not in the portfolio.")
+            logger.warning(f"Cannot sell {symbol} because it is not in the portfolio")
+            return False
+    
+    return True
+
 
 
 
@@ -592,7 +788,23 @@ def record_transaction(transaction_type, symbol, price, shares, date=None, notes
         logger.error(f"Invalid transaction type: {transaction_type}. Must be one of: {valid_types}")
         return False
 
-    # Insert transaction
+    # Determine currency based on symbol or from existing investment
+    # Look up the currency from the portfolio first for accuracy
+    currency = None
+    
+    # Check portfolio for this symbol to determine currency
+    select_query = "SELECT currency FROM portfolio WHERE symbol = %s LIMIT 1;"
+    currency_result = execute_query(select_query, (symbol_upper,), fetchone=True)
+    
+    if currency_result and currency_result.get('currency'):
+        currency = currency_result.get('currency')
+    else:
+        # Default currency determination based on symbol
+        currency = "CAD" if symbol_upper.endswith(".TO") or symbol_upper.endswith(".V") or symbol_upper.startswith("MAW") else "USD"
+    
+    logger.info(f"Recording {transaction_type} transaction for {symbol_upper}: {shares_float} shares at {price_float} {currency}")
+    
+    # Insert transaction first
     insert_query = """
     INSERT INTO transactions (
         id, type, symbol, price, shares, amount,
@@ -606,67 +818,49 @@ def record_transaction(transaction_type, symbol, price, shares, date=None, notes
 
     result = execute_query(insert_query, params, commit=True)
 
-    if result is not None:
-        # Update portfolio based on transaction
-        try:
-            # Determine currency based on symbol or from existing investment
-            # Look up the currency from the portfolio first for accuracy
-            currency = None
-            
-            # Check portfolio for this symbol to determine currency
-            select_query = "SELECT currency FROM portfolio WHERE symbol = %s LIMIT 1;"
-            currency_result = execute_query(select_query, (symbol_upper,), fetchone=True)
-            
-            if currency_result and currency_result.get('currency'):
-                currency = currency_result.get('currency')
-            else:
-                # Default currency determination based on symbol
-                currency = "CAD" if symbol_upper.endswith(".TO") or symbol_upper.endswith(".V") or symbol_upper.startswith("MAW") else "USD"
-            
-            # For buy transactions of new assets, use the specified name and asset type
-            if transaction_type == "buy" or transaction_type == "drip":
-                # Check if this asset exists in portfolio
-                select_query = "SELECT * FROM portfolio WHERE symbol = %s;"
-                existing_investment = execute_query(select_query, (symbol_upper,), fetchone=True)
-                
-                if not existing_investment and (transaction_type == "buy" or transaction_type == "drip"):
-                    # This is a new investment, add it with the provided name and type
-                    asset_type_to_use = asset_type if asset_type else "stock"
-                    add_investment(symbol_upper, shares_float, price_float, date, asset_type_to_use, asset_name)
-                else:
-                    # Existing investment, update with standard function but pass name and type
-                    _update_portfolio_after_transaction(
-                        transaction_type, symbol_upper, price_float, shares_float, 
-                        date, asset_name=asset_name, asset_type=asset_type
-                    )
-            else:
-                # For sell transactions, use standard update function
-                _update_portfolio_after_transaction(transaction_type, symbol_upper, price_float, shares_float, date)
-            
-            # Update cash position based on the transaction (only for buy/sell, not for DRIP)
-            if transaction_type != "drip":  # Skip cash update for DRIP transactions
-                try:
-                    # Update cash - SUBTRACT for buy, ADD for sell
-                    if transaction_type == "buy":
-                        track_cash_position("buy", amount, currency)
-                    elif transaction_type == "sell":
-                        track_cash_position("sell", amount, currency)
-                    
-                    logger.info(f"Cash position updated for {transaction_type} of {symbol_upper} in {currency}")
-                except Exception as cash_err:
-                    logger.error(f"Failed to update cash position: {cash_err}")
-                    # Continue execution even if cash update fails
-            
-            logger.info(f"Transaction recorded and portfolio updated: {transaction_type} {shares_float} shares of {symbol_upper}")
-            return True
-        except Exception as update_err:
-             logger.error(f"Transaction recorded ({transaction_id}), but failed to update portfolio: {update_err}")
-             import traceback
-             traceback.print_exc()
-             return False # Indicate partial failure
-    else:
-        logger.error(f"Failed to record transaction: {symbol_upper} {transaction_type} {shares_float} shares")
+    if result is None:
+        logger.error(f"Failed to record transaction in database: {symbol_upper} {transaction_type} {shares_float} shares")
         return False
+        
+    # Now update cash positions BEFORE updating portfolio
+    # Skip cash updates for DRIP transactions
+    cash_updated = True
+    if transaction_type != "drip":
+        cash_updated = track_cash_position(transaction_type, amount, currency)
+        if not cash_updated:
+            logger.warning(f"Failed to update cash position for {transaction_type} of {symbol_upper} in {currency}")
+            # Continue with portfolio update even if cash update fails
+    
+    # Now update the portfolio
+    try:
+        # For buy transactions of new assets, use the specified name and asset type
+        if transaction_type == "buy" or transaction_type == "drip":
+            # Check if this asset exists in portfolio
+            select_query = "SELECT * FROM portfolio WHERE symbol = %s;"
+            existing_investment = execute_query(select_query, (symbol_upper,), fetchone=True)
+            
+            if not existing_investment:
+                # This is a new investment, add it with the provided name and type
+                asset_type_to_use = asset_type if asset_type else "stock"
+                add_investment(symbol_upper, shares_float, price_float, date, asset_type_to_use, asset_name)
+            else:
+                # Existing investment, update with standard function but pass name and type
+                _update_portfolio_after_transaction(
+                    transaction_type, symbol_upper, price_float, shares_float, 
+                    date, asset_name=asset_name, asset_type=asset_type
+                )
+        else:
+            # For sell transactions, use standard update function
+            _update_portfolio_after_transaction(transaction_type, symbol_upper, price_float, shares_float, date)
+        
+        logger.info(f"Transaction recorded and portfolio updated: {transaction_type} {shares_float} shares of {symbol_upper}")
+        return True
+    except Exception as update_err:
+        logger.error(f"Transaction recorded ({transaction_id}), but failed to update portfolio: {update_err}")
+        import traceback
+        traceback.print_exc()
+        return False
+
 
 def load_transactions(symbol=None, start_date=None, end_date=None):
     """
@@ -1331,7 +1525,7 @@ def track_cash_position(transaction_type, amount, currency):
     Update cash position when recording transactions
     
     Args:
-        transaction_type (str): 'buy' or 'sell'
+        transaction_type (str): 'buy', 'sell', 'drip', etc.
         amount (float): Transaction amount
         currency (str): Currency code
         
@@ -1339,12 +1533,24 @@ def track_cash_position(transaction_type, amount, currency):
         bool: Success status
     """
     try:
+        # Normalize transaction type to lowercase
+        transaction_type = transaction_type.lower()
+        
+        # Skip cash tracking for DRIP transactions
+        if transaction_type == 'drip':
+            logger.info(f"Skipping cash tracking for DRIP transaction (no cash involved)")
+            return True
+            
         # Get current cash positions
         query = "SELECT * FROM cash_positions WHERE currency = %s;"
         cash_position = execute_query(query, (currency,), fetchone=True)
         
-        # Calculate adjustment
-        adjustment = -amount if transaction_type == 'buy' else amount
+        # Calculate adjustment:
+        # - Buy transactions DECREASE cash (-amount)
+        # - Sell transactions INCREASE cash (+amount)
+        adjustment = -float(amount) if transaction_type == 'buy' else float(amount)
+        
+        logger.info(f"Adjusting {currency} cash position by {adjustment} for {transaction_type} transaction")
         
         if cash_position:
             # Update existing position
@@ -1357,7 +1563,14 @@ def track_cash_position(transaction_type, amount, currency):
             WHERE id = %s;
             """
             params = (new_balance, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), cash_position['id'])
-            execute_query(update_query, params, commit=True)
+            result = execute_query(update_query, params, commit=True)
+            
+            if result is None:
+                logger.error(f"Database error updating cash position: {currency} balance to {new_balance}")
+                return False
+                
+            logger.info(f"Updated {currency} cash position from {current_balance} to {new_balance}")
+            return True
         else:
             # Create new position
             insert_query = """
@@ -1365,11 +1578,18 @@ def track_cash_position(transaction_type, amount, currency):
             VALUES (%s, %s, %s);
             """
             params = (currency, adjustment, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-            execute_query(insert_query, params, commit=True)
-        
-        return True
+            result = execute_query(insert_query, params, commit=True)
+            
+            if result is None:
+                logger.error(f"Database error creating new cash position for {currency} with balance {adjustment}")
+                return False
+                
+            logger.info(f"Created new cash position for {currency} with initial balance {adjustment}")
+            return True
     except Exception as e:
         logger.error(f"Error tracking cash position: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def get_cash_positions():
@@ -2057,3 +2277,674 @@ def calculate_total_return(portfolio, period="1y", include_dividends=True):
         "portfolio_value_start": portfolio_value_start
     }
 
+def rebuild_portfolio_from_transactions():
+    """
+    Rebuilds the entire portfolio from transaction history to ensure
+    accurate book values and share counts.
+    
+    This function:
+    1. Gets all transactions in chronological order
+    2. Rebuilds portfolio positions transaction by transaction
+    3. Updates the portfolio database with corrected values
+    4. Returns a report of changes made
+    
+    Returns:
+        dict: Report of the rebuild process
+    """
+    logger.info("Starting portfolio rebuild from transaction history")
+    
+    # Load all transactions
+    all_transactions = load_transactions()
+    
+    # Sort transactions chronologically 
+    sorted_transactions = sorted(
+        all_transactions.values(), 
+        key=lambda tx: datetime.strptime(tx['date'], '%Y-%m-%d')
+    )
+    
+    logger.info(f"Found {len(sorted_transactions)} transactions to process")
+    
+    # Track positions as we build them
+    rebuilt_positions = {}
+    rebuild_log = []
+    
+    # Process each transaction chronologically
+    for tx in sorted_transactions:
+        symbol = tx['symbol'].upper().strip()
+        tx_type = tx['type'].lower()
+        tx_date = tx['date']
+        tx_shares = float(tx['shares'])
+        tx_price = float(tx['price'])
+        tx_amount = tx_shares * tx_price
+        
+        # Initialize position if it doesn't exist
+        if symbol not in rebuilt_positions:
+            rebuilt_positions[symbol] = {
+                'shares': 0.0,
+                'book_value': 0.0,
+                'last_date': None,
+                'asset_type': None,
+                'currency': None,
+                'name': None,
+                'transactions': []
+            }
+        
+        position = rebuilt_positions[symbol]
+        
+        # Process based on transaction type
+        if tx_type == 'buy':
+            # For buy: add shares and increase book value
+            prev_shares = position['shares']
+            prev_book_value = position['book_value']
+            
+            position['shares'] += tx_shares
+            position['book_value'] += tx_amount
+            
+            # Update other details if this is the first transaction
+            if not position['last_date'] or tx_date < position['last_date']:
+                position['last_date'] = tx_date
+            
+            # Get currency from transaction or determine from symbol
+            if tx.get('currency'):
+                position['currency'] = tx['currency']
+            elif position['currency'] is None:
+                position['currency'] = "CAD" if symbol.endswith(".TO") or symbol.endswith(".V") or "-CAD" in symbol else "USD"
+                
+            # Store transaction in log
+            rebuild_log.append({
+                'symbol': symbol,
+                'date': tx_date,
+                'action': 'buy',
+                'shares_change': tx_shares,
+                'book_value_change': tx_amount,
+                'new_shares': position['shares'],
+                'new_book_value': position['book_value']
+            })
+            
+        elif tx_type == 'sell':
+            # For sell: remove shares and reduce book value proportionally
+            if position['shares'] <= 0:
+                logger.warning(f"Cannot sell {tx_shares} shares of {symbol} on {tx_date} - position shows zero shares")
+                rebuild_log.append({
+                    'symbol': symbol,
+                    'date': tx_date,
+                    'action': 'sell_error',
+                    'error': 'Attempting to sell from zero position',
+                    'shares_change': 0,
+                    'book_value_change': 0,
+                    'new_shares': position['shares'],
+                    'new_book_value': position['book_value']
+                })
+                continue
+                
+            if tx_shares > position['shares']:
+                logger.warning(f"Cannot sell {tx_shares} shares of {symbol} on {tx_date} - only {position['shares']} shares available")
+                rebuild_log.append({
+                    'symbol': symbol,
+                    'date': tx_date,
+                    'action': 'sell_error',
+                    'error': 'Selling more shares than owned',
+                    'shares_requested': tx_shares,
+                    'shares_available': position['shares'],
+                    'new_shares': position['shares'],
+                    'new_book_value': position['book_value']
+                })
+                continue
+            
+            # Calculate proportion of position being sold
+            proportion_sold = tx_shares / position['shares']
+            book_value_sold = position['book_value'] * proportion_sold
+            
+            # Update position
+            prev_shares = position['shares']
+            prev_book_value = position['book_value']
+            
+            position['shares'] -= tx_shares
+            position['book_value'] -= book_value_sold
+            
+            # Handle small floating point errors - if shares are very close to zero, set to exactly zero
+            if abs(position['shares']) < 0.000001:
+                position['shares'] = 0.0
+                position['book_value'] = 0.0
+            
+            # Store transaction in log
+            rebuild_log.append({
+                'symbol': symbol,
+                'date': tx_date,
+                'action': 'sell',
+                'shares_change': -tx_shares,
+                'book_value_change': -book_value_sold,
+                'proportion_sold': proportion_sold,
+                'new_shares': position['shares'],
+                'new_book_value': position['book_value']
+            })
+            
+        elif tx_type == 'drip':
+            # For DRIP: add shares but don't change book value (reinvested dividends)
+            prev_shares = position['shares']
+            prev_book_value = position['book_value']
+            
+            position['shares'] += tx_shares
+            # Book value stays the same for DRIP transactions
+            
+            # Store transaction in log
+            rebuild_log.append({
+                'symbol': symbol,
+                'date': tx_date,
+                'action': 'drip',
+                'shares_change': tx_shares,
+                'book_value_change': 0,
+                'new_shares': position['shares'],
+                'new_book_value': position['book_value']
+            })
+            
+        else:
+            # Unrecognized transaction type
+            logger.warning(f"Unrecognized transaction type: {tx_type} for {symbol} on {tx_date}")
+            rebuild_log.append({
+                'symbol': symbol,
+                'date': tx_date,
+                'action': 'unknown',
+                'error': f'Unrecognized transaction type: {tx_type}',
+                'shares_change': 0,
+                'book_value_change': 0
+            })
+            continue
+            
+        # Save the transaction in the position's history
+        position['transactions'].append({
+            'date': tx_date,
+            'type': tx_type,
+            'shares': tx_shares,
+            'price': tx_price,
+            'amount': tx_amount,
+            'running_shares': position['shares'],
+            'running_book_value': position['book_value'],
+            'running_avg_cost': position['book_value'] / position['shares'] if position['shares'] > 0 else 0
+        })
+    
+    # Get current portfolio to compare
+    current_portfolio = load_portfolio()
+    
+    # Now update the portfolio database with rebuilt positions
+    changes_made = 0
+    positions_added = 0
+    positions_removed = 0
+    positions_updated = 0
+    
+    # Remove positions with zero shares
+    for symbol in list(rebuilt_positions.keys()):
+        if rebuilt_positions[symbol]['shares'] <= 0:
+            del rebuilt_positions[symbol]
+            
+    # Track all changes to be made
+    positions_to_update = []  # existing positions to update
+    positions_to_add = []     # new positions to add
+    positions_to_remove = []  # current positions to remove
+    
+    # Find positions to update and missing positions to add
+    for symbol, position in rebuilt_positions.items():
+        if position['shares'] <= 0:
+            continue  # Skip positions with no shares
+            
+        # Look for this symbol in current portfolio
+        existing_id = None
+        
+        for inv_id, details in current_portfolio.items():
+            if details['symbol'].upper() == symbol:
+                existing_id = inv_id
+                break
+        
+        # Get additional details for this position if needed
+        if not position.get('asset_type'):
+            # Look up in existing portfolio first
+            if existing_id:
+                position['asset_type'] = current_portfolio[existing_id].get('asset_type', 'stock')
+            else:
+                # Try looking up in tracked assets
+                tracked_assets = load_tracked_assets()
+                if symbol in tracked_assets:
+                    position['asset_type'] = tracked_assets[symbol].get('type', 'stock')
+                    position['name'] = tracked_assets[symbol].get('name', symbol)
+                else:
+                    position['asset_type'] = 'stock'
+        
+        if not position.get('name'):
+            # Look up in existing portfolio first
+            if existing_id:
+                position['name'] = current_portfolio[existing_id].get('name', symbol)
+            else:
+                position['name'] = symbol
+                
+        # Get current price for calculating gain/loss
+        current_price = 0
+        
+        if existing_id:
+            # Use current price from existing position
+            current_price = float(current_portfolio[existing_id].get('current_price', 0))
+        else:
+            # Try to get current price from API
+            try:
+                # First try using DataProvider
+                from modules.data_provider import data_provider
+                quote = data_provider.get_current_quote(symbol)
+                if quote and 'price' in quote:
+                    current_price = float(quote['price'])
+                else:
+                    # Fallback to purchase price from last transaction
+                    if position['transactions']:
+                        current_price = position['transactions'][-1]['price']
+                    else:
+                        current_price = 0
+            except Exception as e:
+                logger.error(f"Error getting price for {symbol}: {e}")
+                if position['transactions']:
+                    current_price = position['transactions'][-1]['price']
+                else:
+                    current_price = 0
+        
+        # Calculate current value and gain/loss
+        current_value = position['shares'] * current_price
+        gain_loss = current_value - position['book_value']
+        gain_loss_percent = ((current_price / (position['book_value'] / position['shares'])) - 1) * 100 if position['shares'] > 0 and position['book_value'] > 0 else 0
+        
+        # If position exists, update it
+        if existing_id:
+            positions_to_update.append({
+                'id': existing_id,
+                'shares': position['shares'],
+                'purchase_price': position['book_value'] / position['shares'] if position['shares'] > 0 else 0,
+                'current_price': current_price,
+                'current_value': current_value,
+                'gain_loss': gain_loss,
+                'gain_loss_percent': gain_loss_percent,
+                'purchase_date': position['last_date'],
+                'asset_type': position['asset_type'],
+                'currency': position['currency'],
+                'name': position['name'],
+                'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            })
+        else:
+            # Add new position
+            positions_to_add.append({
+                'symbol': symbol,
+                'shares': position['shares'],
+                'purchase_price': position['book_value'] / position['shares'] if position['shares'] > 0 else 0,
+                'current_price': current_price,
+                'current_value': current_value,
+                'gain_loss': gain_loss,
+                'gain_loss_percent': gain_loss_percent,
+                'purchase_date': position['last_date'],
+                'asset_type': position['asset_type'],
+                'currency': position['currency'],
+                'name': position['name'],
+                'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            })
+    
+    # Find positions to remove (those in current portfolio but not in rebuilt positions)
+    current_symbols = {details['symbol'].upper() for _, details in current_portfolio.items()}
+    rebuilt_symbols = set(rebuilt_positions.keys())
+    
+    for inv_id, details in current_portfolio.items():
+        if details['symbol'].upper() not in rebuilt_symbols:
+            positions_to_remove.append(inv_id)
+    
+    # Now execute all the changes in a transaction if database supports it
+    # First remove positions
+    for inv_id in positions_to_remove:
+        remove_query = "DELETE FROM portfolio WHERE id = %s;"
+        result = execute_query(remove_query, (inv_id,), commit=True)
+        
+        if result is not None:
+            positions_removed += 1
+            logger.info(f"Removed position {current_portfolio[inv_id]['symbol']} (ID: {inv_id})")
+    
+    # Then update existing positions
+    for position in positions_to_update:
+        update_query = """
+        UPDATE portfolio SET
+            shares = %s,
+            purchase_price = %s,
+            current_price = %s,
+            current_value = %s,
+            gain_loss = %s,
+            gain_loss_percent = %s,
+            purchase_date = %s,
+            asset_type = %s,
+            currency = %s,
+            name = %s,
+            last_updated = %s
+        WHERE id = %s;
+        """
+        
+        params = (
+            position['shares'],
+            position['purchase_price'],
+            position['current_price'],
+            position['current_value'],
+            position['gain_loss'],
+            position['gain_loss_percent'],
+            position['purchase_date'],
+            position['asset_type'],
+            position['currency'],
+            position['name'],
+            position['last_updated'],
+            position['id']
+        )
+        
+        result = execute_query(update_query, params, commit=True)
+        
+        if result is not None:
+            positions_updated += 1
+            changes_made += 1
+            logger.info(f"Updated position for {current_portfolio[position['id']]['symbol']} (ID: {position['id']})")
+    
+    # Finally add new positions
+    for position in positions_to_add:
+        # Generate new ID
+        new_id = str(uuid.uuid4())
+        
+        insert_query = """
+        INSERT INTO portfolio (
+            id, symbol, shares, purchase_price, purchase_date, asset_type,
+            current_price, current_value, gain_loss, gain_loss_percent, 
+            currency, name, added_date, last_updated
+        ) VALUES (
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        );
+        """
+        
+        params = (
+            new_id,
+            position['symbol'],
+            position['shares'],
+            position['purchase_price'],
+            position['purchase_date'],
+            position['asset_type'],
+            position['current_price'],
+            position['current_value'],
+            position['gain_loss'],
+            position['gain_loss_percent'],
+            position['currency'],
+            position['name'],
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            position['last_updated']
+        )
+        
+        result = execute_query(insert_query, params, commit=True)
+        
+        if result is not None:
+            positions_added += 1
+            changes_made += 1
+            logger.info(f"Added new position for {position['symbol']} (ID: {new_id})")
+    
+    # Return a report of the rebuild process
+    return {
+        'status': 'success',
+        'changes_made': changes_made,
+        'positions_updated': positions_updated,
+        'positions_added': positions_added,
+        'positions_removed': positions_removed,
+        'rebuilt_positions': {symbol: {k: v for k, v in pos.items() if k != 'transactions'} 
+                             for symbol, pos in rebuilt_positions.items() if pos['shares'] > 0},
+        'transaction_log': rebuild_log,
+        'rebuild_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+def debug_cash_positions():
+    """
+    Get detailed information about cash positions for debugging purposes.
+    
+    Returns:
+        dict: Debug information about cash positions
+    """
+    try:
+        # Get raw cash positions data
+        query = "SELECT * FROM cash_positions;"
+        positions = execute_query(query, fetchall=True)
+        
+        # Get recent cash-related transactions
+        tx_query = """
+        SELECT * FROM transactions 
+        ORDER BY transaction_date DESC, recorded_at DESC
+        LIMIT 10;
+        """
+        recent_transactions = execute_query(tx_query, fetchall=True)
+        
+        # Get recent cash flows
+        flow_query = """
+        SELECT * FROM cash_flows 
+        ORDER BY flow_date DESC, recorded_at DESC
+        LIMIT 10;
+        """
+        recent_flows = execute_query(flow_query, fetchall=True)
+        
+        # Get recent currency exchanges
+        exchange_query = """
+        SELECT * FROM currency_exchanges 
+        ORDER BY exchange_date DESC, recorded_at DESC
+        LIMIT 10;
+        """
+        recent_exchanges = execute_query(exchange_query, fetchall=True)
+        
+        # Format the data for easier viewing
+        formatted_positions = []
+        if positions:
+            for pos in positions:
+                formatted_positions.append({
+                    'id': pos['id'],
+                    'currency': pos['currency'],
+                    'balance': float(pos['balance']),
+                    'last_updated': pos['last_updated'].strftime("%Y-%m-%d %H:%M:%S") if pos.get('last_updated') else None
+                })
+        
+        formatted_transactions = []
+        if recent_transactions:
+            for tx in recent_transactions:
+                formatted_transactions.append({
+                    'id': tx['id'],
+                    'type': tx['type'],
+                    'symbol': tx['symbol'],
+                    'shares': float(tx['shares']),
+                    'price': float(tx['price']),
+                    'amount': float(tx['amount']),
+                    'date': tx['transaction_date'].strftime("%Y-%m-%d") if tx.get('transaction_date') else None,
+                })
+        
+        formatted_flows = []
+        if recent_flows:
+            for flow in recent_flows:
+                formatted_flows.append({
+                    'id': flow['id'],
+                    'type': flow['flow_type'],
+                    'amount': float(flow['amount']),
+                    'currency': flow['currency'],
+                    'date': flow['flow_date'].strftime("%Y-%m-%d") if flow.get('flow_date') else None,
+                })
+        
+        formatted_exchanges = []
+        if recent_exchanges:
+            for ex in recent_exchanges:
+                formatted_exchanges.append({
+                    'id': ex['id'],
+                    'from_currency': ex['from_currency'],
+                    'from_amount': float(ex['from_amount']),
+                    'to_currency': ex['to_currency'], 
+                    'to_amount': float(ex['to_amount']),
+                    'rate': float(ex['rate']),
+                    'date': ex['exchange_date'].strftime("%Y-%m-%d") if ex.get('exchange_date') else None,
+                })
+        
+        return {
+            'cash_positions': formatted_positions,
+            'recent_transactions': formatted_transactions,
+            'recent_cash_flows': formatted_flows,
+            'recent_exchanges': formatted_exchanges,
+            'debug_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+    except Exception as e:
+        logger.error(f"Error in debug_cash_positions: {e}")
+        import traceback
+        traceback.print_exc()
+        return {'error': str(e)}
+    
+def debug_book_value():
+    """
+    Get detailed information about book value calculations for debugging purposes.
+    
+    Returns:
+        dict: Debug information about book values and transactions
+    """
+    try:
+        # Get portfolio data
+        portfolio = load_portfolio()
+        
+        # Get transaction history
+        transactions = load_transactions()
+        
+        # Calculate expected book values based on transactions
+        expected_book_values = {}
+        
+        for tx_id, tx in transactions.items():
+            symbol = tx['symbol'].upper().strip()
+            tx_type = tx['type'].lower()
+            shares = float(tx['shares'])
+            price = float(tx['price'])
+            
+            if symbol not in expected_book_values:
+                expected_book_values[symbol] = {
+                    'shares': 0,
+                    'book_value': 0,
+                    'transactions': []
+                }
+            
+            if tx_type == 'buy':
+                # Add to position
+                expected_book_values[symbol]['shares'] += shares
+                expected_book_values[symbol]['book_value'] += shares * price
+                expected_book_values[symbol]['transactions'].append({
+                    'date': tx['date'],
+                    'type': tx_type,
+                    'shares': shares,
+                    'price': price,
+                    'amount': shares * price,
+                    'running_shares': expected_book_values[symbol]['shares'],
+                    'running_book_value': expected_book_values[symbol]['book_value']
+                })
+            elif tx_type == 'sell':
+                # Calculate proportion of book value being sold
+                if expected_book_values[symbol]['shares'] > 0:
+                    proportion_sold = shares / expected_book_values[symbol]['shares']
+                    book_value_sold = expected_book_values[symbol]['book_value'] * proportion_sold
+                    expected_book_values[symbol]['shares'] -= shares
+                    expected_book_values[symbol]['book_value'] -= book_value_sold
+                    
+                    # If shares become very small or negative, reset to 0 to avoid floating point issues
+                    if expected_book_values[symbol]['shares'] <= 0.000001:
+                        expected_book_values[symbol]['shares'] = 0
+                        expected_book_values[symbol]['book_value'] = 0
+                        
+                    expected_book_values[symbol]['transactions'].append({
+                        'date': tx['date'],
+                        'type': tx_type,
+                        'shares': shares,
+                        'price': price,
+                        'amount': shares * price,
+                        'book_value_sold': book_value_sold,
+                        'running_shares': expected_book_values[symbol]['shares'],
+                        'running_book_value': expected_book_values[symbol]['book_value']
+                    })
+            elif tx_type == 'drip':
+                # Add shares but no additional book value for DRIP
+                expected_book_values[symbol]['shares'] += shares
+                expected_book_values[symbol]['transactions'].append({
+                    'date': tx['date'],
+                    'type': tx_type,
+                    'shares': shares,
+                    'price': price,
+                    'amount': shares * price,
+                    'running_shares': expected_book_values[symbol]['shares'],
+                    'running_book_value': expected_book_values[symbol]['book_value']
+                })
+                
+        # Compare with current portfolio
+        for symbol, expected in expected_book_values.items():
+            # Skip symbols with zero shares
+            if expected['shares'] <= 0.000001:
+                continue
+                
+            # Calculate expected average cost
+            expected_avg_cost = expected['book_value'] / expected['shares'] if expected['shares'] > 0 else 0
+            
+            # Find in portfolio
+            actual_in_portfolio = False
+            actual_shares = 0
+            actual_avg_cost = 0
+            actual_book_value = 0
+            
+            for inv_id, details in portfolio.items():
+                if details['symbol'].upper().strip() == symbol:
+                    actual_in_portfolio = True
+                    actual_shares = float(details['shares'])
+                    actual_avg_cost = float(details['purchase_price'])
+                    actual_book_value = actual_shares * actual_avg_cost
+                    break
+            
+            # Set comparison results
+            expected['in_portfolio'] = actual_in_portfolio
+            expected['actual_shares'] = actual_shares
+            expected['actual_avg_cost'] = actual_avg_cost
+            expected['actual_book_value'] = actual_book_value
+            expected['expected_avg_cost'] = expected_avg_cost
+            expected['shares_diff'] = actual_shares - expected['shares']
+            expected['book_value_diff'] = actual_book_value - expected['book_value']
+            expected['avg_cost_diff'] = actual_avg_cost - expected_avg_cost
+            
+            # Calculate percentage differences
+            if expected['shares'] > 0:
+                expected['shares_diff_pct'] = (actual_shares / expected['shares'] - 1) * 100
+            else:
+                expected['shares_diff_pct'] = 0
+                
+            if expected['book_value'] > 0:
+                expected['book_value_diff_pct'] = (actual_book_value / expected['book_value'] - 1) * 100
+            else:
+                expected['book_value_diff_pct'] = 0
+                
+            if expected_avg_cost > 0:
+                expected['avg_cost_diff_pct'] = (actual_avg_cost / expected_avg_cost - 1) * 100
+            else:
+                expected['avg_cost_diff_pct'] = 0
+                
+            # Classify the discrepancy
+            if abs(expected['book_value_diff']) < 0.01 and abs(expected['shares_diff']) < 0.0001:
+                expected['status'] = 'ok'
+            elif abs(expected['book_value_diff_pct']) < 1 and abs(expected['shares_diff_pct']) < 1:
+                expected['status'] = 'minor_discrepancy'
+            else:
+                expected['status'] = 'major_discrepancy'
+        
+        # Find investments in portfolio but not in transaction history
+        extra_investments = []
+        for inv_id, details in portfolio.items():
+            symbol = details['symbol'].upper().strip()
+            if symbol not in expected_book_values or expected_book_values[symbol]['shares'] <= 0:
+                extra_investments.append({
+                    'id': inv_id,
+                    'symbol': symbol,
+                    'shares': float(details['shares']),
+                    'purchase_price': float(details['purchase_price']),
+                    'book_value': float(details['shares']) * float(details['purchase_price']),
+                    'status': 'no_transactions'
+                })
+        
+        return {
+            'book_values': expected_book_values,
+            'extra_investments': extra_investments,
+            'debug_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+    except Exception as e:
+        logger.error(f"Error in debug_book_value: {e}")
+        import traceback
+        traceback.print_exc()
+        return {'error': str(e)}

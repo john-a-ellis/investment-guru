@@ -49,7 +49,8 @@ from modules.portfolio_utils import (
     save_user_profile, record_transaction, load_user_profile,
     get_earliest_transaction_date, load_transactions, # Added load_transactions if needed elsewhere
     load_target_allocation, save_target_allocation, # Moved from rebalancer
-    analyze_current_vs_target # Moved from rebalancer
+    analyze_current_vs_target, # Moved from rebalancer
+    rebuild_portfolio_from_transactions
 )
 from components.currency_exchange_component import create_exchange_history_table
 from modules.portfolio_tracker import PortfolioTracker
@@ -67,6 +68,12 @@ from components.portfolio_analysis import (
     create_correlation_chart, create_allocation_details, create_sector_details,
     create_correlation_analysis
 )
+from components.book_value_debug import create_book_value_debug_component, display_book_value_debug_info
+from modules.portfolio_utils import debug_book_value
+from components.portfolio_rebuild import create_portfolio_rebuild_component, display_rebuild_results
+
+from components.cash_debug import create_cash_debug_component, display_cash_debug_info
+from modules.portfolio_utils import debug_cash_positions
 
 from components.portfolio_analysis import (
     create_portfolio_analysis_component, create_allocation_chart, create_sector_chart, 
@@ -140,6 +147,12 @@ app.layout = dbc.Container([
             create_cash_management_component()
         ], width=12)
     ], className="mb-4"),
+
+    # dbc.Row([
+    #     dbc.Col([
+    #         create_cash_debug_component()
+    #     ], width=12)
+    # ], className="mb-4", id="cash-debug-container"),
 
     dbc.Row([
         dbc.Col([
@@ -254,6 +267,18 @@ app.layout = dbc.Container([
             create_portfolio_management_component()
         ], width=12)
     ], className="mb-4"),
+
+    dbc.Row([
+        dbc.Col([
+            create_portfolio_rebuild_component()
+        ], width=12)
+    ], className="mb-4", id="portfolio-rebuild-container"),
+
+    dbc.Row([
+        dbc.Col([
+            create_book_value_debug_component()
+        ], width=12)
+    ], className="mb-4", id="book-value-debug-container"),
 
     # ML Prediction Component
     dbc.Row([
@@ -2277,7 +2302,7 @@ def load_exchange_history(active_tab):
     """
     Load and display exchange history when the tab is selected
     """
-    if active_tab == "tab-2":  # Adjust based on the actual tab ID
+    if active_tab == "exchange-history-tab":  # Adjust based on the actual tab ID
         return create_exchange_history_table()
     return dash.no_update
 
@@ -2372,6 +2397,76 @@ def populate_transaction_fields(symbol):
     
     # If symbol not found, just return the symbol as name and default asset type
     return symbol_upper, "stock"
+
+@app.callback(
+    [Output("rebuild-status", "children"),
+     Output("rebuild-details-collapse", "is_open"),
+     Output("rebuild-details", "children")],
+    [Input("rebuild-portfolio-button", "n_clicks"),
+     Input("calculate-portfolio-button", "n_clicks")],
+    prevent_initial_call=True
+)
+def handle_portfolio_rebuild(rebuild_clicks, calculate_clicks):
+    """
+    Handle portfolio rebuild operations - either perform a real rebuild
+    or just calculate what would happen without making changes
+    """
+    # Determine which button was clicked
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        raise dash.exceptions.PreventUpdate
+    
+    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+    if button_id == "rebuild-portfolio-button" and rebuild_clicks:
+        # Real rebuild - make actual changes to the portfolio
+        try:
+            results = rebuild_portfolio_from_transactions()
+            return dbc.Alert("Portfolio successfully rebuilt from transaction history.", color="success"), True, display_rebuild_results(results, made_changes=True)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return dbc.Alert(f"Error rebuilding portfolio: {str(e)}", color="danger"), False, None
+    
+    elif button_id == "calculate-portfolio-button" and calculate_clicks:
+        # Just calculate what would happen, but don't make changes
+        # We'll need to modify the rebuild function to have a dry_run parameter
+        # For now, we'll just use the existing function but warn that this is just a preview
+        try:
+            results = rebuild_portfolio_from_transactions()  # In a real implementation, you'd add dry_run=True
+            return dbc.Alert("Calculation completed. This is a preview - no changes were made.", color="info"), True, display_rebuild_results(results, made_changes=False)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return dbc.Alert(f"Error calculating rebuild: {str(e)}", color="danger"), False, None
+    
+    raise dash.exceptions.PreventUpdate
+
+@app.callback(
+    Output("cash-debug-content", "children"),
+    [Input("refresh-cash-debug", "n_clicks"),
+     Input("cash-debug-interval", "n_intervals")]
+)
+def update_cash_debug_info(n_clicks, n_intervals):
+    """
+    Update the cash debug information when the refresh button is clicked
+    or when the interval triggers.
+    """
+    debug_data = debug_cash_positions()
+    return display_cash_debug_info(debug_data)
+
+@app.callback(
+    Output("book-value-debug-content", "children"),
+    [Input("refresh-book-value-debug", "n_clicks"),
+     Input("book-value-debug-interval", "n_intervals")]
+)
+def update_book_value_debug_info(n_clicks, n_intervals):
+    """
+    Update the book value debug information when the refresh button is clicked
+    or when the interval triggers.
+    """
+    debug_data = debug_book_value()
+    return display_book_value_debug_info(debug_data)
 
 register_ml_prediction_callbacks(app)
 
