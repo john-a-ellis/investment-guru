@@ -7,67 +7,115 @@ import pandas as pd
 def create_currency_exchange_component():
     """
     Creates a component for managing currency exchange for cross-border transactions.
-    Handles CAD-to-USD exchanges for buying U.S. assets and tracking exchange impact.
+    Handles both CAD-to-USD and USD-to-CAD exchanges.
     """
     return dbc.Card([
         dbc.CardHeader("Currency Exchange Manager"),
         dbc.CardBody([
             dbc.Tabs([
                 dbc.Tab([
-                    # CAD to USD Exchange Form
-                    html.H5("Convert CAD to USD for U.S. Asset Purchases", className="mt-2 mb-3"),
-                    dbc.Form([
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Label("CAD Amount"),
-                                dbc.Input(id="cad-amount-input", type="number", placeholder="CAD Amount", step="0.01")
-                            ], width=3),
-                            dbc.Col([
-                                dbc.Label("Current Exchange Rate"),
-                                dbc.InputGroup([
-                                    dbc.InputGroupText("1 USD ="),
-                                    dbc.Input(id="exchange-rate-input", type="number", placeholder="CAD Rate", step="0.0001", 
-                                              value=1.35)
-                                ])
-                            ], width=3),
-                            dbc.Col([
-                                dbc.Label("Date"),
-                                dbc.Input(id="exchange-date-input", type="date", value=datetime.now().strftime("%Y-%m-%d"))
-                            ], width=3),
-                            dbc.Col([
-                                dbc.Label("Description"),
-                                dbc.Input(id="exchange-description-input", placeholder="Optional description")
-                            ], width=3),
-                        ]),
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Label("Resulting USD"),
-                                html.Div(id="resulting-usd-display", className="border p-2 bg-light")
-                            ], width=3),
-                            dbc.Col([
-                                dbc.Button("Refresh Rate", id="refresh-exchange-rate-button", color="info", className="me-2"),
-                                dbc.Button("Execute Exchange", id="execute-exchange-button", color="success")
-                            ], width=3, className="mt-3"),
-                            dbc.Col(width=6)
-                        ], className="mt-3"),
-                        html.Div(id="exchange-feedback", className="mt-3")
-                    ])
-                ], label="CAD to USD Exchange"),
-                
-                dbc.Tab([
-                    # Exchange History & Impact Analysis
-                    html.H5("Exchange Rate Impact Analysis", className="mt-2 mb-3"),
+                    # Add direction selection at the top
+                    html.H5("Currency Exchange", className="mt-2 mb-3"),
                     dbc.Row([
                         dbc.Col([
-                            dbc.Button("Analyze FX Impact", id="analyze-fx-impact-button", color="primary"),
-                        ], width=3),
-                        dbc.Col([
-                            html.Div(id="fx-impact-summary", className="mt-3")
-                        ], width=9)
+                            dbc.Label("Exchange Direction"),
+                            dbc.Select(
+                                id="exchange-direction-select",
+                                options=[
+                                    {"label": "CAD to USD", "value": "cad_to_usd"},
+                                    {"label": "USD to CAD", "value": "usd_to_cad"}
+                                ],
+                                value="cad_to_usd"
+                            )
+                        ], width=4)
+                    ], className="mb-3"),
+                    
+                    # Show/hide based on direction
+                    html.Div(id="cad-to-usd-form", children=[
+                        dbc.Form([
+                            dbc.Row([
+                                dbc.Col([
+                                    dbc.Label("CAD Amount"),
+                                    dbc.Input(id="cad-amount-input", type="number", placeholder="CAD Amount", step="0.01")
+                                ], width=3),
+                                dbc.Col([
+                                    dbc.Label("Current Exchange Rate"),
+                                    dbc.InputGroup([
+                                        dbc.InputGroupText("1 USD ="),
+                                        dbc.Input(id="exchange-rate-input", type="number", placeholder="CAD Rate", step="0.0001", 
+                                                  value=1.35)
+                                    ])
+                                ], width=3),
+                                dbc.Col([
+                                    dbc.Label("Date"),
+                                    dbc.Input(id="exchange-date-input", type="date", value=datetime.now().strftime("%Y-%m-%d"))
+                                ], width=3),
+                                dbc.Col([
+                                    dbc.Label("Description"),
+                                    dbc.Input(id="exchange-description-input", placeholder="Optional description")
+                                ], width=3),
+                            ]),
+                            dbc.Row([
+                                dbc.Col([
+                                    dbc.Label("Resulting USD"),
+                                    html.Div(id="resulting-usd-display", className="border p-2 bg-light")
+                                ], width=3),
+                                dbc.Col([
+                                    dbc.Button("Refresh Rate", id="refresh-exchange-rate-button", color="info", className="me-2 mt-3"),
+                                    dbc.Button("Execute Exchange", id="execute-exchange-button", color="success", className="mt-3")
+                                ], width=3),
+                                dbc.Col(width=6)
+                            ], className="mt-3")
+                        ])
                     ]),
-                    html.H5("Exchange History", className="mt-4 mb-3"),
+                    
+                    # USD to CAD form (initially hidden)
+                    html.Div(id="usd-to-cad-form", style={"display": "none"}, children=[
+                        dbc.Form([
+                            dbc.Row([
+                                dbc.Col([
+                                    dbc.Label("USD Amount"),
+                                    dbc.Input(id="usd-amount-input", type="number", placeholder="USD Amount", step="0.01")
+                                ], width=3),
+                                dbc.Col([
+                                    dbc.Label("Current Exchange Rate"),
+                                    dbc.InputGroup([
+                                        dbc.InputGroupText("1 USD ="),
+                                        dbc.Input(id="usd-to-cad-rate-input", type="number", placeholder="CAD Rate", step="0.0001", 
+                                                  value=1.35)
+                                    ])
+                                ], width=3),
+                                dbc.Col([
+                                    dbc.Label("Date"),
+                                    dbc.Input(id="usd-exchange-date-input", type="date", value=datetime.now().strftime("%Y-%m-%d"))
+                                ], width=3),
+                                dbc.Col([
+                                    dbc.Label("Description"),
+                                    dbc.Input(id="usd-exchange-description-input", placeholder="Optional description")
+                                ], width=3),
+                            ]),
+                            dbc.Row([
+                                dbc.Col([
+                                    dbc.Label("Resulting CAD"),
+                                    html.Div(id="resulting-cad-display", className="border p-2 bg-light")
+                                ], width=3),
+                                dbc.Col([
+                                    dbc.Button("Refresh Rate", id="refresh-usd-rate-button", color="info", className="me-2 mt-3"),
+                                    dbc.Button("Execute Exchange", id="execute-usd-exchange-button", color="success", className="mt-3")
+                                ], width=3),
+                                dbc.Col(width=6)
+                            ], className="mt-3")
+                        ])
+                    ]),
+                    
+                    html.Div(id="exchange-feedback", className="mt-3")
+                ], label="Currency Exchange"),
+                
+                # Keep existing tabs
+                dbc.Tab([
+                    # Exchange History & Impact Analysis
                     html.Div(id="exchange-history-table")
-                ], label="Exchange History & Impact")
+                ], label="Exchange History & Impact", tab_id="exchange-history-tab"),
             ], id="exchange-tabs")
         ])
     ])

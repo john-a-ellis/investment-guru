@@ -32,7 +32,7 @@ from modules.dividend_utils import (
     get_dividend_yield,
     get_dividend_summary_by_symbol
 )
-from components.currency_exchange_component import create_currency_exchange_component
+from components.currency_exchange_component import create_currency_exchange_component, create_exchange_history_table
 from modules.help_system import get_help_content_html, get_available_topics
 from components.help_display import create_help_display_component
 from components.cash_management import create_cash_management_component, create_cash_flow_table
@@ -274,6 +274,18 @@ app.layout = dbc.Container([
 ])
 
 # Callbacks
+@app.callback(
+    [Output("cad-to-usd-form", "style"),
+     Output("usd-to-cad-form", "style")],
+    Input("exchange-direction-select", "value")
+)
+def toggle_exchange_direction(direction):
+    """Toggle between CAD to USD and USD to CAD forms"""
+    if direction == "cad_to_usd":
+        return {"display": "block"}, {"display": "none"}
+    else:
+        return {"display": "none"}, {"display": "block"}
+
 # Callback to toggle DRIP row visibility
 @app.callback(
     Output("dividend-drip-row", "style"),
@@ -2075,24 +2087,48 @@ def record_deposit(n_clicks, amount, currency, date, description):
         )
     
 @app.callback(
-    Output("resulting-usd-display", "children"),
+    Output("resulting-cad-display", "children"),  # Changed to CAD display
+    [Input("usd-amount-input", "value"),  # Change to USD amount input
+     Input("usd-to-cad-rate-input", "value"),  # Change to USD to CAD rate
+     Input("refresh-usd-rate-button", "n_clicks")],  # Changed to refresh USD rate button
+    prevent_initial_call=True
+)
+def update_cad_display(usd_amount, exchange_rate, refresh_clicks):
+    """
+    Update the displayed CAD amount based on USD amount and exchange rate
+    """
+    # If refresh button clicked, get the latest rate from currency_service
+    ctx_triggered = ctx.triggered_id
+    if ctx_triggered == "refresh-usd-rate-button" and refresh_clicks:
+        from modules.currency_service import currency_service
+        current_rate = currency_service.get_exchange_rate("USD", "CAD")
+        exchange_rate = current_rate
+        
+    if usd_amount and exchange_rate and exchange_rate > 0:
+        cad_amount = usd_amount * exchange_rate  # USD to CAD
+        return f"${cad_amount:.2f} CAD"
+    return "—"
+
+@app.callback(
+    Output("resulting-usd-display", "children"), 
     [Input("cad-amount-input", "value"),
      Input("exchange-rate-input", "value"),
-     Input("refresh-exchange-rate-button", "n_clicks")]
+     Input("refresh-exchange-rate-button", "n_clicks")],
+    prevent_initial_call=True
 )
 def update_usd_display(cad_amount, exchange_rate, refresh_clicks):
     """
     Update the displayed USD amount based on CAD amount and exchange rate
     """
-    # If refresh button clicked, get the latest rate
+    # If refresh button clicked, get the latest rate from currency_service
     ctx_triggered = ctx.triggered_id
     if ctx_triggered == "refresh-exchange-rate-button" and refresh_clicks:
-        from modules.portfolio_utils import get_usd_to_cad_rate
-        current_rate = get_usd_to_cad_rate()
-        exchange_rate = 1 / current_rate if current_rate > 0 else 0
+        from modules.currency_service import currency_service
+        current_rate = currency_service.get_exchange_rate("USD", "CAD")
+        exchange_rate = current_rate
 
     if cad_amount and exchange_rate and exchange_rate > 0:
-        usd_amount = cad_amount / exchange_rate
+        usd_amount = cad_amount / exchange_rate  # CAD to USD
         return f"${usd_amount:.2f} USD"
     return "—"
 
@@ -2100,8 +2136,7 @@ def update_usd_display(cad_amount, exchange_rate, refresh_clicks):
     [Output("exchange-feedback", "children"),
      Output("exchange-history-table", "children", allow_duplicate=True),
      Output("cad-amount-input", "value"),
-     Output("exchange-description-input", "value"),
-     Output("exchange-rate-input", "value", allow_duplicate=True)],
+     Output("exchange-description-input", "value")],
     Input("execute-exchange-button", "n_clicks"),
     [State("cad-amount-input", "value"),
      State("exchange-rate-input", "value"),
@@ -2109,7 +2144,7 @@ def update_usd_display(cad_amount, exchange_rate, refresh_clicks):
      State("exchange-description-input", "value")],
     prevent_initial_call=True
 )
-def execute_currency_exchange(n_clicks, cad_amount, exchange_rate, date, description):
+def execute_cad_to_usd_exchange(n_clicks, cad_amount, exchange_rate, date, description):
     """
     Record a currency exchange from CAD to USD
     """
@@ -2139,10 +2174,60 @@ def execute_currency_exchange(n_clicks, cad_amount, exchange_rate, date, descrip
             dbc.Alert("Failed to record currency exchange", color="danger"),
             dash.no_update,
             dash.no_update,
+            # dash.no_update,
+            dash.no_update
+        )
+
+@app.callback(
+    [Output("exchange-feedback", "children", allow_duplicate=True),
+     Output("exchange-history-table", "children", allow_duplicate=True),
+     Output("usd-amount-input", "value"),
+     Output("usd-exchange-description-input", "value")],
+    Input("execute-usd-exchange-button", "n_clicks"),
+    [State("usd-amount-input", "value"),
+     State("usd-to-cad-rate-input", "value"),
+     State("usd-exchange-date-input", "value"),
+     State("usd-exchange-description-input", "value")],
+    prevent_initial_call=True
+)
+def execute_usd_to_cad_exchange(n_clicks, usd_amount, exchange_rate, date, description):
+    """
+    Record a USD to CAD exchange using the currency_service
+    """
+    from modules.portfolio_utils import record_currency_exchange
+    from components.currency_exchange_component import create_exchange_history_table
+    
+    if n_clicks is None or not usd_amount or not exchange_rate:
+        raise dash.exceptions.PreventUpdate
+    
+    # Calculate resulting CAD amount
+    cad_amount = float(usd_amount) * float(exchange_rate)
+    
+    # Record the exchange
+    success = record_currency_exchange(
+        from_currency="USD", 
+        from_amount=float(usd_amount), 
+        to_currency="CAD", 
+        to_amount=cad_amount, 
+        date=date, 
+        description=description
+    )
+    
+    if success:
+        return (
+            dbc.Alert(f"Successfully converted ${usd_amount:.2f} USD to ${cad_amount:.2f} CAD at rate {exchange_rate:.4f}", color="success"),
+            create_exchange_history_table(),
+            None,
+            ""
+        )
+    else:
+        return (
+            dbc.Alert("Failed to record currency exchange", color="danger"),
+            dash.no_update,
             dash.no_update,
             dash.no_update
         )
-    
+
 @app.callback(
     [Output("withdrawal-feedback", "children"),
      Output("cash-flow-history-table", "children", allow_duplicate=True),
