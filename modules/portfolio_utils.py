@@ -523,6 +523,12 @@ def _update_portfolio_after_transaction(transaction_type, symbol, price, shares,
         asset_name (str, optional): Name of the asset.
         asset_type (str, optional): Type of asset (default: "stock").
     """
+    import logging
+    from datetime import datetime
+    from modules.db_utils import execute_query
+    
+    logger = logging.getLogger(__name__)
+    
     # Convert inputs to proper types to prevent calculation errors
     price_float = float(price)
     shares_float = float(shares)
@@ -633,7 +639,7 @@ def _update_portfolio_after_transaction(transaction_type, symbol, price, shares,
                 params = params[:-2] + (asset_name,) + params[-2:]
             
             # Execute the update
-            execute_query(update_query, params, commit=True)
+            result = execute_query(update_query, params, commit=True)
             
             # If there were multiple investments for this symbol, delete the others
             if len(existing_investments) > 1:
@@ -649,6 +655,7 @@ def _update_portfolio_after_transaction(transaction_type, symbol, price, shares,
             logger.info(f"Adding new investment {symbol} after {transaction_type}")
             # Use provided asset_name and asset_type, or default
             name_to_use = asset_name if asset_name else symbol
+            from modules.portfolio_utils import add_investment
             add_investment(symbol, shares_float, price_float, date, asset_type=asset_type, name=name_to_use)
     
     elif transaction_type == "sell":
@@ -682,7 +689,8 @@ def _update_portfolio_after_transaction(transaction_type, symbol, price, shares,
                 # Delete all existing investments for this symbol
                 for inv in existing_investments:
                     delete_query = "DELETE FROM portfolio WHERE id = %s;"
-                    execute_query(delete_query, (inv['id'],), commit=True)
+                    result = execute_query(delete_query, (inv['id'],), commit=True)
+                    logger.info(f"Deleted position {inv['id']} for {symbol} (all shares sold)")
                 
                 return True
             
@@ -725,7 +733,7 @@ def _update_portfolio_after_transaction(transaction_type, symbol, price, shares,
             )
             
             # Execute the update
-            execute_query(update_query, params, commit=True)
+            result = execute_query(update_query, params, commit=True)
             
             # If there were multiple investments for this symbol, delete the others
             if len(existing_investments) > 1:
@@ -739,8 +747,6 @@ def _update_portfolio_after_transaction(transaction_type, symbol, price, shares,
         else:
             logger.warning(f"Cannot sell {symbol} because it is not in the portfolio")
             return False
-    
-    return True
 
 
 

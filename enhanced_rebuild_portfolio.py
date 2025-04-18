@@ -3,7 +3,7 @@ from modules.portfolio_utils import load_portfolio, get_cash_positions, load_tra
 from modules.dividend_utils import load_dividends
 from modules.data_provider import data_provider
 
-def enhanced_rebuild_portfolio():
+def enhanced_rebuild_portfolio(dry_run=False):
     """
     Enhanced rebuilding of the entire portfolio from transaction history,
     including cash positions, dividends, and currency exchanges.
@@ -15,6 +15,9 @@ def enhanced_rebuild_portfolio():
     4. Updates both portfolio and cash_positions tables in the database
     5. Returns a comprehensive report of changes made
     
+    Args:
+        dry_run (bool): If True, calculate changes but don't apply them to the database
+    
     Returns:
         dict: Detailed report of the rebuild process
     """
@@ -22,44 +25,64 @@ def enhanced_rebuild_portfolio():
     from datetime import datetime, timedelta
     import uuid
     from modules.db_utils import execute_query
+    from modules.portfolio_utils import load_portfolio, get_cash_positions, load_transactions, load_cash_flows, load_currency_exchanges, load_tracked_assets
+    from modules.dividend_utils import load_dividends
+    from modules.data_provider import data_provider
     
     logger = logging.getLogger(__name__)
     logger.info("Starting enhanced portfolio rebuild from transaction history")
+    logger.info(f"Dry run mode: {dry_run}")
     
-    # Step 1: Load all history (chronologically sorted)
+    # Step 1: Load all history 
     # ------------------------------------------------
     
     # Load all transactions
     all_transactions = load_transactions()
+    logger.info(f"Loaded {len(all_transactions)} transactions")
     
     # Load all cash flows (deposits/withdrawals)
     all_cash_flows = load_cash_flows()
+    logger.info(f"Loaded {len(all_cash_flows)} cash flows")
     
     # Load all dividends
     all_dividends = load_dividends()
+    logger.info(f"Loaded {len(all_dividends)} dividends")
     
     # Load all currency exchanges
     all_currency_exchanges = load_currency_exchanges()
+    logger.info(f"Loaded {len(all_currency_exchanges)} currency exchanges")
     
     # Step 2: Combine and sort all financial events chronologically
     # -------------------------------------------------------------
     financial_events = []
     
-    # Add transactions
+    # Add transactions - add exact amount to improve precision
     for tx_id, tx in all_transactions.items():
         try:
             tx_date = datetime.strptime(tx['date'], '%Y-%m-%d')
+            
+            # Get currency (important for accuracy)
+            symbol = tx['symbol'].upper().strip()
+            tx_type = tx['type'].lower()
+            
+            # Determine currency based on symbol if not explicitly provided
+            currency = tx.get('currency')
+            if not currency:
+                # Default logic - Canadian stocks end with .TO, .V or use CAD in name
+                is_canadian = symbol.endswith((".TO", ".V")) or "-CAD" in symbol
+                currency = "CAD" if is_canadian else "USD"
+            
             financial_events.append({
                 'date': tx_date,
                 'type': 'transaction',
-                'subtype': tx['type'].lower(),  # 'buy', 'sell', 'drip'
-                'symbol': tx['symbol'].upper().strip(),
+                'subtype': tx_type,  # 'buy', 'sell', 'drip'
+                'symbol': symbol,
                 'shares': float(tx['shares']),
                 'price': float(tx['price']),
                 'amount': float(tx['amount']),
                 'notes': tx.get('notes', ''),
                 'id': tx_id,
-                'currency': tx.get('currency', 'USD')  # Default to USD if not specified
+                'currency': currency
             })
         except Exception as e:
             logger.error(f"Error processing transaction {tx_id}: {e}")
@@ -121,6 +144,7 @@ def enhanced_rebuild_portfolio():
     
     # Sort all events chronologically
     financial_events.sort(key=lambda x: x['date'])
+    logger.info(f"Sorted {len(financial_events)} total financial events chronologically")
     
     # Step 3: Initialize portfolio and cash tracking
     # ---------------------------------------------
@@ -132,13 +156,24 @@ def enhanced_rebuild_portfolio():
     }
     rebuild_log = []        # Log all actions for reporting
     
+    # Log summary counts by type/subtype
+    event_type_counts = {}
+    for event in financial_events:
+        event_type = event['type']
+        event_subtype = event.get('subtype', 'n/a')
+        key = f"{event_type}:{event_subtype}"
+        event_type_counts[key] = event_type_counts.get(key, 0) + 1
+    
+    for key, count in event_type_counts.items():
+        logger.info(f"Event type {key}: {count} events")
+    
     # Step 4: Process all events chronologically to rebuild portfolio
     # --------------------------------------------------------------
     for event in financial_events:
         event_date = event['date']
         event_type = event['type']
         
-        # Log this event
+        # Log this event (important data for diagnosing issues)
         rebuild_log.append({
             'date': event_date.strftime('%Y-%m-%d'),
             'type': event_type,
@@ -153,8 +188,8 @@ def enhanced_rebuild_portfolio():
             tx_type = event['subtype']
             shares = event['shares']
             price = event['price']
-            amount = event['amount']
-            currency = event.get('currency', 'USD')  # Default to USD
+            amount = shares * price  # Calculate precise amount
+            currency = event['currency']
             
             # Initialize position if it doesn't exist
             if symbol not in rebuilt_positions:
@@ -181,11 +216,15 @@ def enhanced_rebuild_portfolio():
                 position['currency'] = currency  # Update currency
                 
                 # Update cash position (deduct amount)
+                if currency not in cash_positions:
+                    cash_positions[currency] = 0.0
                 cash_positions[currency] -= amount
                 
                 # Update position date if earlier
                 if not position['last_date'] or event_date < position['last_date']:
                     position['last_date'] = event_date
+                
+                logger.info(f"BUY: {shares} shares of {symbol} at ${price} ({currency}) - Total: ${amount}. Cash: ${cash_positions[currency]}")
                 
             elif tx_type == 'sell':
                 # For sell: remove shares, reduce book value proportionally, increase cash
@@ -208,6 +247,8 @@ def enhanced_rebuild_portfolio():
                 position['book_value'] -= book_value_sold
                 
                 # Update cash position (add sale amount)
+                if currency not in cash_positions:
+                    cash_positions[currency] = 0.0
                 cash_positions[currency] += amount
                 
                 # If shares become very small, set exactly to zero to avoid float precision issues
@@ -215,10 +256,13 @@ def enhanced_rebuild_portfolio():
                     position['shares'] = 0.0
                     position['book_value'] = 0.0
                 
+                logger.info(f"SELL: {shares} shares of {symbol} at ${price} ({currency}) - Total: ${amount}. Cash: ${cash_positions[currency]}")
+                
             elif tx_type == 'drip':
                 # For DRIP: add shares but don't change book value (reinvested dividends)
                 # No cash impact since dividends are automatically reinvested
                 position['shares'] += shares
+                logger.info(f"DRIP: {shares} shares of {symbol} at ${price} ({currency}) - Total: ${amount}. No cash impact.")
                 
             # Record transaction in position history
             position['transactions'].append({
@@ -227,6 +271,7 @@ def enhanced_rebuild_portfolio():
                 'shares': shares,
                 'price': price,
                 'amount': amount,
+                'currency': currency,
                 'running_shares': position['shares'],
                 'running_book_value': position['book_value']
             })
@@ -244,8 +289,10 @@ def enhanced_rebuild_portfolio():
             # Add or subtract from cash based on flow type
             if flow_type == 'deposit':
                 cash_positions[currency] += amount
+                logger.info(f"DEPOSIT: {currency} {amount}. New balance: {cash_positions[currency]}")
             elif flow_type == 'withdrawal':
                 cash_positions[currency] -= amount
+                logger.info(f"WITHDRAWAL: {currency} {amount}. New balance: {cash_positions[currency]}")
         
         elif event_type == 'dividend':
             # Handle dividend payments
@@ -261,6 +308,9 @@ def enhanced_rebuild_portfolio():
                     cash_positions[currency] = 0.0
                 
                 cash_positions[currency] += total_amount
+                logger.info(f"DIVIDEND: {symbol} paid {currency} {total_amount}. New balance: {cash_positions[currency]}")
+            else:
+                logger.info(f"DRIP DIVIDEND: {symbol} dividend of {currency} {total_amount} reinvested. No cash impact.")
             
             # Note: DRIP shares are handled by transaction events of type 'drip'
         
@@ -280,6 +330,9 @@ def enhanced_rebuild_portfolio():
             # Update cash positions (subtract from source, add to target)
             cash_positions[from_currency] -= from_amount
             cash_positions[to_currency] += to_amount
+            
+            logger.info(f"FX: {from_currency} {from_amount} -> {to_currency} {to_amount}. " +
+                       f"New balances: {from_currency}: {cash_positions[from_currency]}, {to_currency}: {cash_positions[to_currency]}")
         
         # Record cash positions after this event
         rebuild_log[-1]['cash_after'] = cash_positions.copy()
@@ -326,11 +379,11 @@ def enhanced_rebuild_portfolio():
         else:
             # Try to get price from data provider
             try:
-                from modules.data_provider import data_provider
                 quote = data_provider.get_current_quote(symbol)
                 if quote and 'price' in quote:
                     current_price = float(quote['price'])
-            except:
+            except Exception as e:
+                logger.warning(f"Error getting price for {symbol}: {e}")
                 # Fallback to last transaction price
                 if position['transactions']:
                     current_price = position['transactions'][-1]['price']
@@ -418,10 +471,16 @@ def enhanced_rebuild_portfolio():
     positions_updated = 0
     cash_updated = 0
     
-    # Function parameter - set to True to make actual changes
-    apply_changes = True
+    # Log the summary of changes to be made
+    logger.info(f"Changes to be made: {len(positions_to_update)} positions to update, " +
+               f"{len(positions_to_add)} positions to add, {len(positions_to_remove)} positions to remove, " +
+               f"{len(cash_to_update)} cash positions to update")
     
-    if apply_changes:
+    for currency, details in cash_to_update.items():
+        logger.info(f"Cash {currency}: Current={details['current']}, Calculated={details['calculated']}, " +
+                   f"Difference={details['difference']}")
+    
+    if not dry_run:
         # Remove positions
         for inv_id in positions_to_remove:
             remove_query = "DELETE FROM portfolio WHERE id = %s;"
@@ -560,9 +619,21 @@ def enhanced_rebuild_portfolio():
     
     # Step 8: Return comprehensive report
     # ----------------------------------
+    # Filter event log to only include the most relevant data for debugging
+    filtered_event_log = []
+    for entry in rebuild_log:
+        # Include cash position entries and those affecting USD
+        if entry['type'] == 'transaction' and entry['details'].get('currency') == 'USD':
+            filtered_event_log.append(entry)
+        elif entry['type'] in ['cash_flow', 'dividend', 'currency_exchange']:
+            if ('currency' in entry['details'] and entry['details']['currency'] == 'USD') or \
+               ('from_currency' in entry['details'] and entry['details']['from_currency'] == 'USD') or \
+               ('to_currency' in entry['details'] and entry['details']['to_currency'] == 'USD'):
+                filtered_event_log.append(entry)
+    
     return {
         'status': 'success',
-        'changes_applied': apply_changes,
+        'changes_applied': not dry_run,
         'changes_made': changes_made,
         'positions_updated': positions_updated,
         'positions_added': positions_added,
@@ -573,7 +644,9 @@ def enhanced_rebuild_portfolio():
         'cash_positions': cash_positions,
         'cash_discrepancies': cash_to_update,
         'event_log': rebuild_log,
-        'rebuild_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        'usd_events': filtered_event_log,  # Add specific USD events for debugging
+        'rebuild_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        'event_counts': event_type_counts
     }
 
 
