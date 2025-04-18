@@ -71,6 +71,7 @@ from components.portfolio_analysis import (
 from components.book_value_debug import create_book_value_debug_component, display_book_value_debug_info
 from modules.portfolio_utils import debug_book_value
 from components.portfolio_rebuild import create_portfolio_rebuild_component, display_rebuild_results
+from enhanced_rebuild_portfolio import enhanced_rebuild_portfolio
 
 from components.cash_debug import create_cash_debug_component, display_cash_debug_info
 from modules.portfolio_utils import debug_cash_positions
@@ -2398,6 +2399,7 @@ def populate_transaction_fields(symbol):
     # If symbol not found, just return the symbol as name and default asset type
     return symbol_upper, "stock"
 
+# Add/modify the callback for the portfolio rebuild functionality:
 @app.callback(
     [Output("rebuild-status", "children"),
      Output("rebuild-details-collapse", "is_open"),
@@ -2419,10 +2421,14 @@ def handle_portfolio_rebuild(rebuild_clicks, calculate_clicks):
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
     
     if button_id == "rebuild-portfolio-button" and rebuild_clicks:
-        # Real rebuild - make actual changes to the portfolio
+        # Real rebuild - make actual changes to the portfolio and cash positions
         try:
-            results = rebuild_portfolio_from_transactions()
-            return dbc.Alert("Portfolio successfully rebuilt from transaction history.", color="success"), True, display_rebuild_results(results, made_changes=True)
+            # We now use our enhanced rebuild function which handles cash positions
+            results = enhanced_rebuild_portfolio()
+            return dbc.Alert(
+                "Portfolio and cash positions successfully rebuilt from transaction history.", 
+                color="success"
+            ), True, display_rebuild_results(results, made_changes=True)
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -2430,17 +2436,33 @@ def handle_portfolio_rebuild(rebuild_clicks, calculate_clicks):
     
     elif button_id == "calculate-portfolio-button" and calculate_clicks:
         # Just calculate what would happen, but don't make changes
-        # We'll need to modify the rebuild function to have a dry_run parameter
-        # For now, we'll just use the existing function but warn that this is just a preview
         try:
-            results = rebuild_portfolio_from_transactions()  # In a real implementation, you'd add dry_run=True
-            return dbc.Alert("Calculation completed. This is a preview - no changes were made.", color="info"), True, display_rebuild_results(results, made_changes=False)
+            # TODO: Modify the enhanced_rebuild_portfolio function to accept a dry_run parameter
+            # For now, we'll just use the existing function but warn that this is just a preview
+            results = enhanced_rebuild_portfolio()  # In a real implementation, you'd add dry_run=True
+            return dbc.Alert(
+                "Calculation completed. This is a preview - no changes were made.", 
+                color="info"
+            ), True, display_rebuild_results(results, made_changes=False)
         except Exception as e:
             import traceback
             traceback.print_exc()
             return dbc.Alert(f"Error calculating rebuild: {str(e)}", color="danger"), False, None
     
     raise dash.exceptions.PreventUpdate
+
+@app.callback(
+    [Output("event-log-collapse", "is_open"),
+     Output("toggle-event-log", "children")],
+    [Input("toggle-event-log", "n_clicks")],
+    [State("event-log-collapse", "is_open")],
+    prevent_initial_call=True
+)
+def toggle_event_log(n_clicks, is_open):
+    """Toggle the visibility of the event processing log"""
+    if n_clicks:
+        return not is_open, "Hide Processing Log" if not is_open else "Show Processing Log"
+    return is_open, "Show Processing Log"
 
 @app.callback(
     Output("cash-debug-content", "children"),

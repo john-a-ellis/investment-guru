@@ -1,168 +1,254 @@
 # components/portfolio_rebuild.py
-from dash import html, dcc
 import dash_bootstrap_components as dbc
+from dash import html, dcc
 from datetime import datetime
 
 def create_portfolio_rebuild_component():
     """
-    Creates a component for rebuilding portfolio from transaction history
+    Creates a component for rebuilding the portfolio from transaction history
+    with enhanced cash position reconciliation.
     """
     return dbc.Card([
-        dbc.CardHeader("Portfolio Rebuild Utility"),
+        dbc.CardHeader("Portfolio Reconciliation & Rebuild"),
         dbc.CardBody([
-            html.P("This utility will rebuild your entire portfolio from transaction history. "
-                  "It will recalculate share counts and book values based on the actual "
-                  "sequence of transactions, fixing any discrepancies in the current portfolio data."),
-            
-            dbc.Alert(
-                "Warning: This operation will modify your portfolio data. "
-                "Consider backing up your database before proceeding.",
-                color="warning",
-                className="mb-3"
-            ),
-            
-            dbc.Button(
-                "Rebuild Portfolio from Transactions", 
-                id="rebuild-portfolio-button",
-                color="danger",
-                className="me-2"
-            ),
-            
-            dbc.Button(
-                "Just Show Calculation (No Changes)", 
-                id="calculate-portfolio-button",
-                color="secondary",
-                outline=True
-            ),
-            
-            html.Div(id="rebuild-status", className="mt-3"),
-            
-            dbc.Collapse(
-                dbc.Card(
-                    dbc.CardBody(
-                        html.Div(id="rebuild-details")
+            html.P([
+                "This tool rebuilds your portfolio positions and cash balances based on all historical: ",
+                html.Ul([
+                    html.Li("Security transactions (buys/sells)"),
+                    html.Li("Dividend payments and reinvestments"),
+                    html.Li("Cash deposits and withdrawals"),
+                    html.Li("Currency exchanges")
+                ])
+            ]),
+            dbc.Row([
+                dbc.Col([
+                    dbc.Button(
+                        "Calculate Discrepancies", 
+                        id="calculate-portfolio-button", 
+                        color="info", 
+                        className="me-2"
+                    ),
+                    dbc.Button(
+                        "Rebuild Portfolio", 
+                        id="rebuild-portfolio-button", 
+                        color="danger",
+                        className="ms-2"
                     )
-                ),
-                id="rebuild-details-collapse",
-                is_open=False
-            )
+                ], width=12, className="mb-3")
+            ]),
+            dbc.Alert(
+                "This will recalculate both investment positions and cash balances based on all recorded transactions. "
+                "The rebuild operation will overwrite current positions and cash balances.",
+                color="warning"
+            ),
+            dbc.Alert(id="rebuild-status"),
+            dbc.Collapse([
+                html.H5("Rebuild Details", className="mt-3"),
+                html.Div(id="rebuild-details")
+            ], id="rebuild-details-collapse", is_open=False)
         ])
     ])
 
 def display_rebuild_results(results, made_changes=True):
     """
-    Display the results of a portfolio rebuild operation
+    Create a detailed display of rebuild results, including cash position changes.
     
     Args:
-        results (dict): Results from rebuild_portfolio_from_transactions
-        made_changes (bool): Whether changes were actually made to the database
-        
+        results (dict): Results from the enhanced_rebuild_portfolio function
+        made_changes (bool): Whether actual changes were made to the database
+    
     Returns:
-        Component: Dash component with rebuild results
+        Component: Dash component with detailed results
     """
-    if not results:
-        return html.P("No results to display.")
+    action_text = "made" if made_changes else "would make"
     
-    if 'error' in results:
-        return dbc.Alert(f"Error during rebuild: {results['error']}", color="danger")
-    
-    # Create summary information
-    operation_text = "Rebuild" if made_changes else "Calculation only"
-    
-    summary = dbc.Alert([
-        html.H4(f"Portfolio {operation_text} Completed", className="alert-heading"),
-        html.P([
-            f"Changes {'made' if made_changes else 'identified'}: ",
-            html.Strong(f"{results['changes_made']}")
-        ]),
-        html.Hr(),
-        html.P([
-            f"Positions updated: {results['positions_updated']}, ",
-            f"Positions added: {results['positions_added']}, ",
-            f"Positions removed: {results['positions_removed']}"
-        ]),
-        html.P(f"Operation completed at: {results['rebuild_time']}", className="mb-0")
-    ], color="success" if made_changes else "info")
-    
-    # Create table of rebuilt positions
-    position_rows = []
-    for symbol, pos in results.get('rebuilt_positions', {}).items():
-        avg_cost = pos['book_value'] / pos['shares'] if pos['shares'] > 0 else 0
-        position_rows.append(html.Tr([
-            html.Td(symbol),
-            html.Td(f"{pos['shares']:.4f}"),
-            html.Td(f"${avg_cost:.4f}"),
-            html.Td(f"${pos['book_value']:.2f}"),
-            html.Td(pos.get('currency', 'USD')),
-            html.Td(pos.get('asset_type', 'stock'))
-        ]))
-    
-    positions_table = dbc.Table([
-        html.Thead(
-            html.Tr([
-                html.Th("Symbol"),
-                html.Th("Shares"),
-                html.Th("Avg Cost"),
-                html.Th("Book Value"),
-                html.Th("Currency"),
-                html.Th("Asset Type")
+    # Create summary card
+    summary_card = dbc.Card([
+        dbc.CardBody([
+            html.H5("Summary of Changes", className="card-title"),
+            html.P([
+                f"The rebuild {action_text} the following changes:",
+                html.Ul([
+                    html.Li(f"Positions Added: {results['positions_added']}"),
+                    html.Li(f"Positions Updated: {results['positions_updated']}"),
+                    html.Li(f"Positions Removed: {results['positions_removed']}"),
+                    html.Li(f"Cash Balances Updated: {results['cash_updated']}")
+                ])
             ])
-        ),
-        html.Tbody(position_rows)
-    ], bordered=True, striped=True, size="sm", className="mb-4")
+        ])
+    ], className="mb-3")
     
-    # Create transaction log display
-    log_rows = []
-    for entry in results.get('transaction_log', [])[:50]:  # Limit to first 50 entries to avoid huge displays
-        if 'error' in entry:
-            action_style = {"color": "red", "font-weight": "bold"}
-            action_text = f"{entry['action']}: {entry['error']}"
-        else:
-            action_style = {}
-            action_text = entry['action']
+    # Create cash positions card
+    cash_rows = []
+    for currency, balance in results['cash_positions'].items():
+        if currency in results.get('cash_discrepancies', {}):
+            discrepancy = results['cash_discrepancies'][currency]
+            difference = discrepancy['difference']
+            color = "text-success" if abs(difference) < 0.01 else "text-danger"
             
-            if entry['action'] == 'buy':
-                action_style = {"color": "green"}
-            elif entry['action'] == 'sell':
-                action_style = {"color": "red"}
-            elif entry['action'] == 'drip':
-                action_style = {"color": "blue"}
+            cash_rows.append(
+                html.Tr([
+                    html.Td(currency),
+                    html.Td(f"${discrepancy['current']:.2f}"),
+                    html.Td(f"${discrepancy['calculated']:.2f}"),
+                    html.Td(f"${difference:.2f}", className=color)
+                ])
+            )
+        else:
+            cash_rows.append(
+                html.Tr([
+                    html.Td(currency),
+                    html.Td("N/A"),
+                    html.Td(f"${balance:.2f}"),
+                    html.Td("No change", className="text-muted")
+                ])
+            )
+    
+    cash_card = dbc.Card([
+        dbc.CardHeader("Cash Position Changes"),
+        dbc.CardBody([
+            dbc.Table([
+                html.Thead(
+                    html.Tr([
+                        html.Th("Currency"),
+                        html.Th("Current Balance"),
+                        html.Th("Calculated Balance"),
+                        html.Th("Difference")
+                    ])
+                ),
+                html.Tbody(cash_rows)
+            ], bordered=True, hover=True, striped=True)
+        ])
+    ], className="mb-3")
+    
+    # Create position changes card
+    position_data = []  # We'll store the data first, then create rows
+    for symbol, position in results['rebuilt_positions'].items():
+        # Format shares and book value
+        shares = position.get('shares', 0)
+        book_value = position.get('book_value', 0)
         
-        log_rows.append(html.Tr([
-            html.Td(entry['date']),
-            html.Td(entry['symbol']),
-            html.Td(action_text, style=action_style),
-            html.Td(f"{entry.get('shares_change', 0):.4f}"),
-            html.Td(f"${entry.get('book_value_change', 0):.2f}"),
-            html.Td(f"{entry.get('new_shares', 0):.4f}"),
-            html.Td(f"${entry.get('new_book_value', 0):.2f}")
-        ]))
+        position_data.append({
+            'symbol': symbol,
+            'currency': position.get('currency', 'USD'),
+            'shares': shares,
+            'book_value': book_value,
+            'avg_cost': book_value / shares if shares > 0 else 0
+        })
     
-    transaction_log = dbc.Table([
-        html.Thead(
+    # Sort by symbol before creating the rows
+    position_data.sort(key=lambda x: x['symbol'])
+    
+    # Now create the rows in sorted order
+    position_rows = []
+    for data in position_data:
+        position_rows.append(
             html.Tr([
-                html.Th("Date"),
-                html.Th("Symbol"),
-                html.Th("Action"),
-                html.Th("Shares Change"),
-                html.Th("Book Value Change"),
-                html.Th("New Shares"),
-                html.Th("New Book Value")
+                html.Td(data['symbol']),
+                html.Td(data['currency']),
+                html.Td(f"{data['shares']:.4f}"),
+                html.Td(f"${data['book_value']:.2f}"),
+                html.Td(f"${data['avg_cost']:.4f}" if data['shares'] > 0 else "N/A")
             ])
-        ),
-        html.Tbody(log_rows)
-    ], bordered=True, striped=True, size="sm", className="mb-4")
+        )
     
-    # Show note if log was truncated
-    log_note = None
-    if len(results.get('transaction_log', [])) > 50:
-        log_note = html.P(f"Note: Displaying first 50 of {len(results['transaction_log'])} log entries.", className="text-muted")
+    position_card = dbc.Card([
+        dbc.CardHeader("Investment Position Changes"),
+        dbc.CardBody([
+            dbc.Table([
+                html.Thead(
+                    html.Tr([
+                        html.Th("Symbol"),
+                        html.Th("Currency"),
+                        html.Th("Shares"),
+                        html.Th("Book Value"),
+                        html.Th("Avg. Cost")
+                    ])
+                ),
+                html.Tbody(position_rows)
+            ], bordered=True, hover=True, striped=True, responsive=True)
+        ])
+    ])
+    
+    # Create a collapsible event log for advanced users
+    event_log_items = []
+    for event in results.get('event_log', [])[:30]:  # Limit to first 30 events to avoid massive display
+        event_date = event.get('date', 'Unknown')
+        event_type = event.get('type', 'Unknown')
+        event_details = event.get('details', {})
+        
+        if event_type == 'transaction':
+            subtype = event_details.get('subtype', 'Unknown')
+            symbol = event_details.get('symbol', 'Unknown')
+            shares = event_details.get('shares', 0)
+            price = event_details.get('price', 0)
+            
+            description = f"{subtype.capitalize()} {shares} shares of {symbol} at ${price:.2f}"
+        elif event_type == 'cash_flow':
+            subtype = event_details.get('subtype', 'Unknown')
+            amount = event_details.get('amount', 0)
+            currency = event_details.get('currency', 'Unknown')
+            
+            description = f"{subtype.capitalize()} of {currency} {amount:.2f}"
+        elif event_type == 'dividend':
+            symbol = event_details.get('symbol', 'Unknown')
+            amount = event_details.get('total_amount', 0)
+            currency = event_details.get('currency', 'Unknown')
+            is_drip = event_details.get('is_drip', False)
+            
+            description = f"Dividend from {symbol}: {currency} {amount:.2f}" + (" (DRIP)" if is_drip else "")
+        elif event_type == 'currency_exchange':
+            from_currency = event_details.get('from_currency', 'Unknown')
+            from_amount = event_details.get('from_amount', 0)
+            to_currency = event_details.get('to_currency', 'Unknown')
+            to_amount = event_details.get('to_amount', 0)
+            
+            description = f"Exchange: {from_amount:.2f} {from_currency} → {to_amount:.2f} {to_currency}"
+        
+        event_log_items.append(
+            dbc.ListGroupItem([
+                html.Div([
+                    html.Strong(f"{event_date} - {event_type.capitalize()}"),
+                    html.Span(description, className="ms-2")
+                ]),
+                html.Small([
+                    "Cash After: ",
+                    ", ".join([f"{curr}: ${bal:.2f}" for curr, bal in event.get('cash_after', {}).items()])
+                ], className="text-muted d-block")
+            ])
+        )
+    
+    event_log = dbc.Card([
+        dbc.CardHeader([
+            html.H5(
+                "Event Processing Log ", 
+                className="d-inline"
+            ),
+            dbc.Badge(f"{len(results.get('event_log', []))} Events", color="info", className="ms-2")
+        ]),
+        dbc.CardBody([
+            html.P("This shows how each financial event was processed during the rebuild (limited to first 30 events):"),
+            dbc.ListGroup(event_log_items, className="mb-3"),
+            html.Div(
+                "Note: Full event log is available in the server logs if needed for troubleshooting.",
+                className="text-muted small"
+            )
+        ])
+    ], className="mt-3")
     
     return html.Div([
-        summary,
-        html.H5("Rebuilt Positions"),
-        positions_table,
-        html.H5("Transaction Processing Log"),
-        log_note,
-        transaction_log
+        summary_card,
+        cash_card,
+        position_card,
+        dbc.Collapse(
+            event_log,
+            id="event-log-collapse",
+            is_open=False
+        ),
+        dbc.Button(
+            "Show Processing Log",
+            id="toggle-event-log",
+            color="secondary",
+            className="mt-2"
+        )
     ])
