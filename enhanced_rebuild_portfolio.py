@@ -3,6 +3,28 @@ from modules.portfolio_utils import load_portfolio, get_cash_positions, load_tra
 from modules.dividend_utils import load_dividends
 from modules.data_provider import data_provider
 
+def safe_float(value, default=0.0):
+    """
+    Safely convert a value to float, handling None, empty strings, and other conversion errors.
+    
+    Args:
+        value: The value to convert
+        default: Default value if conversion fails
+        
+    Returns:
+        float: The converted value or default
+    """
+    if value is None:
+        return default
+    
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+# Then modify the beginning of the transaction processing section:
+
+
 def enhanced_rebuild_portfolio(dry_run=False):
     """
     Enhanced rebuilding of the entire portfolio from transaction history,
@@ -184,12 +206,25 @@ def enhanced_rebuild_portfolio(dry_run=False):
         # Process based on event type
         if event_type == 'transaction':
             # Handle buy/sell/drip transactions
-            symbol = event['symbol']
-            tx_type = event['subtype']
-            shares = event['shares']
-            price = event['price']
-            amount = shares * price  # Calculate precise amount
-            currency = event['currency']
+            symbol = event['symbol'].upper().strip()
+            tx_type = event['subtype'].lower()  # 'buy', 'sell', 'drip'
+            shares_float = safe_float(event['shares'])
+            price_float = safe_float(event['price'])
+            amount = safe_float(event['amount'])
+            
+            # Double-check amount calculation for accuracy
+            calculated_amount = shares_float * price_float
+            if abs(amount - calculated_amount) > 0.01:
+                # If the provided amount differs significantly from calculated, log and use calculated
+                logger.warning(f"Amount discrepancy for {symbol} {tx_type}: provided={amount}, calculated={calculated_amount}. Using calculated.")
+                amount = calculated_amount
+                
+            currency = event.get('currency', '')
+            
+            # If currency is missing, determine from symbol
+            if not currency:
+                is_canadian = symbol.endswith(".TO") or symbol.endswith(".V") or "-CAD" in symbol
+                currency = "CAD" if is_canadian else "USD"
             
             # Initialize position if it doesn't exist
             if symbol not in rebuilt_positions:
@@ -211,9 +246,10 @@ def enhanced_rebuild_portfolio(dry_run=False):
                 prev_shares = position['shares']
                 prev_book_value = position['book_value']
                 
-                position['shares'] += shares
+                position['shares'] += shares_float
                 position['book_value'] += amount
                 position['currency'] = currency  # Update currency
+
                 
                 # Update cash position (deduct amount)
                 if currency not in cash_positions:
@@ -226,38 +262,44 @@ def enhanced_rebuild_portfolio(dry_run=False):
                 
                 logger.info(f"BUY: {shares} shares of {symbol} at ${price} ({currency}) - Total: ${amount}. Cash: ${cash_positions[currency]}")
                 
-            elif tx_type == 'sell':
-                # For sell: remove shares, reduce book value proportionally, increase cash
-                if position['shares'] <= 0:
-                    logger.warning(f"Cannot sell {shares} shares of {symbol} on {event_date} - position shows zero shares")
+            elif tx_type == "sell":
+                # Handle sell transactions
+                if symbol not in rebuilt_positions or rebuilt_positions[symbol]['shares'] <= 0:
+                    logger.warning(f"Cannot sell {symbol} on {event_date} - no shares available")
                     rebuild_log[-1]['error'] = 'Attempting to sell from zero position'
                     continue
+                        
+                # Calculate new totals after the sell
+                current_shares = rebuilt_positions[symbol]['shares']
                 
-                if shares > position['shares']:
-                    logger.warning(f"Cannot sell {shares} shares of {symbol} on {event_date} - only {position['shares']} shares available")
+                if shares_float > current_shares:
+                    logger.warning(f"Cannot sell {shares_float} shares of {symbol} on {event_date} - only {current_shares} shares available")
                     rebuild_log[-1]['error'] = 'Selling more shares than owned'
                     continue
                 
-                # Calculate proportion of position being sold
-                proportion_sold = shares / position['shares']
-                book_value_sold = position['book_value'] * proportion_sold
+                # Calculate proportion of book value being sold
+                proportion_sold = shares_float / current_shares
+                book_value_sold = rebuilt_positions[symbol]['book_value'] * proportion_sold
+                new_total_shares = current_shares - shares_float
+                new_total_book_value = rebuilt_positions[symbol]['book_value'] - book_value_sold
+                        
+                # Update the position
+                rebuilt_positions[symbol]['shares'] = new_total_shares
+                rebuilt_positions[symbol]['book_value'] = new_total_book_value
                 
-                # Update position
-                position['shares'] -= shares
-                position['book_value'] -= book_value_sold
+                # If shares become very close to zero, explicitly set to exactly zero
+                # This ensures positions will be properly removed later
+                if new_total_shares <= 0.000001:  # Use small threshold for float comparison
+                    logger.info(f"Setting {symbol} shares and book value to exactly zero (full position sold)")
+                    rebuilt_positions[symbol]['shares'] = 0.0
+                    rebuilt_positions[symbol]['book_value'] = 0.0
                 
                 # Update cash position (add sale amount)
                 if currency not in cash_positions:
                     cash_positions[currency] = 0.0
                 cash_positions[currency] += amount
                 
-                # If shares become very small, set exactly to zero to avoid float precision issues
-                if abs(position['shares']) < 0.000001:
-                    position['shares'] = 0.0
-                    position['book_value'] = 0.0
-                
-                logger.info(f"SELL: {shares} shares of {symbol} at ${price} ({currency}) - Total: ${amount}. Cash: ${cash_positions[currency]}")
-                
+                logger.info(f"SELL: {shares_float} shares of {symbol} at ${price_float} ({currency}) - Total: ${amount}. Cash: ${cash_positions[currency]}")
             elif tx_type == 'drip':
                 # For DRIP: add shares but don't change book value (reinvested dividends)
                 # No cash impact since dividends are automatically reinvested
@@ -343,113 +385,118 @@ def enhanced_rebuild_portfolio(dry_run=False):
             } for symbol, position in rebuilt_positions.items() if position['shares'] > 0
         }
     
-    # Step 5: Get current portfolio and cash positions for comparison
-    # -------------------------------------------------------------
-    current_portfolio = load_portfolio()
-    current_cash = get_cash_positions()
-    
-    # Step 6: Calculate changes needed to update the portfolio and cash positions
-    # --------------------------------------------------------------------------
-    positions_to_update = []  # existing positions to update
-    positions_to_add = []     # new positions to add
-    positions_to_remove = []  # current positions to remove
-    cash_to_update = {}       # cash positions to update
-    
-    # Remove positions with zero shares
-    for symbol in list(rebuilt_positions.keys()):
-        if rebuilt_positions[symbol]['shares'] <= 0:
-            del rebuilt_positions[symbol]
-    
-    # Compare rebuilt positions with current positions
-    for symbol, position in rebuilt_positions.items():
-        if position['shares'] <= 0:
-            continue  # Skip positions with no shares
-        
-        # Look for this symbol in current portfolio
-        existing_id = None
-        for inv_id, details in current_portfolio.items():
-            if details['symbol'].upper() == symbol:
-                existing_id = inv_id
-                break
-        
-        # Get current price for the symbol (reuse existing or look up)
-        current_price = 0
-        if existing_id:
-            current_price = float(current_portfolio[existing_id].get('current_price', 0))
-        else:
-            # Try to get price from data provider
-            try:
-                quote = data_provider.get_current_quote(symbol)
-                if quote and 'price' in quote:
-                    current_price = float(quote['price'])
-            except Exception as e:
-                logger.warning(f"Error getting price for {symbol}: {e}")
-                # Fallback to last transaction price
-                if position['transactions']:
-                    current_price = position['transactions'][-1]['price']
-        
-        # Calculate current value and gain/loss
-        current_value = position['shares'] * current_price
-        gain_loss = current_value - position['book_value']
-        gain_loss_percent = ((current_value / position['book_value']) - 1) * 100 if position['book_value'] > 0 else 0
-        
-        # Lookup asset information if needed
-        if not position.get('asset_type'):
+        # Step 5: Get current portfolio and cash positions for comparison
+        # -------------------------------------------------------------
+        current_portfolio = load_portfolio()
+        current_cash = get_cash_positions()
+
+        # Step 6: Calculate changes needed to update the portfolio and cash positions
+        # --------------------------------------------------------------------------
+        positions_to_update = []  # existing positions to update
+        positions_to_add = []     # new positions to add
+        positions_to_remove = []  # current positions to remove
+        cash_to_update = {}       # cash positions to update
+
+        # --- Important! Only process positions with positive shares ---
+        # Remove positions with zero shares before computing any changes
+        for symbol in list(rebuilt_positions.keys()):
+            if rebuilt_positions[symbol]['shares'] <= 0:
+                logger.info(f"Removing {symbol} from rebuilt_positions because it has zero or negative shares")
+                del rebuilt_positions[symbol]
+
+        # Compare rebuilt positions with current positions
+        for symbol, position in rebuilt_positions.items():
+            # Skip positions with zero or negative shares
+            # This is a double-check to ensure we're not adding positions with zero shares
+            if position['shares'] <= 0:
+                logger.info(f"Skipping {symbol} - it has {position['shares']} shares (should have been removed already)")
+                continue
+            
+            # Look for this symbol in current portfolio
+            existing_id = None
+            for inv_id, details in current_portfolio.items():
+                if details['symbol'].upper() == symbol:
+                    existing_id = inv_id
+                    break
+            
+            # Get current price for the symbol (reuse existing or look up)
+            current_price = 0
             if existing_id:
-                position['asset_type'] = current_portfolio[existing_id].get('asset_type', 'stock')
+                current_price = float(current_portfolio[existing_id].get('current_price', 0))
             else:
-                # Try looking up in tracked assets
-                tracked_assets = load_tracked_assets()
-                if symbol in tracked_assets:
-                    position['asset_type'] = tracked_assets[symbol].get('type', 'stock')
-                    position['name'] = tracked_assets[symbol].get('name', symbol)
+                # Try to get price from data provider
+                try:
+                    quote = data_provider.get_current_quote(symbol)
+                    if quote and 'price' in quote:
+                        current_price = float(quote['price'])
+                except Exception as e:
+                    logger.warning(f"Error getting price for {symbol}: {e}")
+                    # Fallback to last transaction price
+                    if position['transactions']:
+                        current_price = position['transactions'][-1]['price']
+            
+            # Calculate current value and gain/loss
+            current_value = position['shares'] * current_price
+            gain_loss = current_value - position['book_value']
+            gain_loss_percent = ((current_value / position['book_value']) - 1) * 100 if position['book_value'] > 0 else 0
+            
+            # Lookup asset information if needed
+            if not position.get('asset_type'):
+                if existing_id:
+                    position['asset_type'] = current_portfolio[existing_id].get('asset_type', 'stock')
                 else:
-                    position['asset_type'] = 'stock'
-        
-        if not position.get('name'):
+                    # Try looking up in tracked assets
+                    tracked_assets = load_tracked_assets()
+                    if symbol in tracked_assets:
+                        position['asset_type'] = tracked_assets[symbol].get('type', 'stock')
+                        position['name'] = tracked_assets[symbol].get('name', symbol)
+                    else:
+                        position['asset_type'] = 'stock'
+            
+            if not position.get('name'):
+                if existing_id:
+                    position['name'] = current_portfolio[existing_id].get('name', symbol)
+                else:
+                    position['name'] = symbol
+            
+            # If position exists, update it
             if existing_id:
-                position['name'] = current_portfolio[existing_id].get('name', symbol)
+                positions_to_update.append({
+                    'id': existing_id,
+                    'shares': position['shares'],
+                    'purchase_price': position['book_value'] / position['shares'] if position['shares'] > 0 else 0,
+                    'current_price': current_price,
+                    'current_value': current_value,
+                    'gain_loss': gain_loss,
+                    'gain_loss_percent': gain_loss_percent,
+                    'purchase_date': position['last_date'].strftime('%Y-%m-%d') if position['last_date'] else None,
+                    'asset_type': position['asset_type'],
+                    'currency': position['currency'],
+                    'name': position['name'],
+                    'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                })
             else:
-                position['name'] = symbol
-        
-        # If position exists, update it
-        if existing_id:
-            positions_to_update.append({
-                'id': existing_id,
-                'shares': position['shares'],
-                'purchase_price': position['book_value'] / position['shares'] if position['shares'] > 0 else 0,
-                'current_price': current_price,
-                'current_value': current_value,
-                'gain_loss': gain_loss,
-                'gain_loss_percent': gain_loss_percent,
-                'purchase_date': position['last_date'].strftime('%Y-%m-%d') if position['last_date'] else None,
-                'asset_type': position['asset_type'],
-                'currency': position['currency'],
-                'name': position['name'],
-                'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            })
-        else:
-            # Add new position
-            positions_to_add.append({
-                'symbol': symbol,
-                'shares': position['shares'],
-                'purchase_price': position['book_value'] / position['shares'] if position['shares'] > 0 else 0,
-                'current_price': current_price,
-                'current_value': current_value,
-                'gain_loss': gain_loss,
-                'gain_loss_percent': gain_loss_percent,
-                'purchase_date': position['last_date'].strftime('%Y-%m-%d') if position['last_date'] else None,
-                'asset_type': position['asset_type'],
-                'currency': position['currency'],
-                'name': position['name'],
-                'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            })
-    
-    # Find positions to remove (in current portfolio but not in rebuilt)
-    rebuilt_symbols = set(rebuilt_positions.keys())
-    for inv_id, details in current_portfolio.items():
-        if details['symbol'].upper() not in rebuilt_symbols:
-            positions_to_remove.append(inv_id)
+                # Add new position
+                positions_to_add.append({
+                    'symbol': symbol,
+                    'shares': position['shares'],
+                    'purchase_price': position['book_value'] / position['shares'] if position['shares'] > 0 else 0,
+                    'current_price': current_price,
+                    'current_value': current_value,
+                    'gain_loss': gain_loss,
+                    'gain_loss_percent': gain_loss_percent,
+                    'purchase_date': position['last_date'].strftime('%Y-%m-%d') if position['last_date'] else None,
+                    'asset_type': position['asset_type'],
+                    'currency': position['currency'],
+                    'name': position['name'],
+                    'last_updated': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                })
+
+        # Find positions to remove (in current portfolio but not in rebuilt)
+        rebuilt_symbols = set(rebuilt_positions.keys())
+        for inv_id, details in current_portfolio.items():
+            if details['symbol'].upper() not in rebuilt_symbols:
+                positions_to_remove.append(inv_id)
     
     # Prepare cash updates
     for currency, balance in cash_positions.items():
