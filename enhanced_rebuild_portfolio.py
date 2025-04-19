@@ -77,7 +77,11 @@ def enhanced_rebuild_portfolio(dry_run=False):
     # Step 2: Combine and sort all financial events chronologically
     # -------------------------------------------------------------
     financial_events = []
-    
+    logger.info("TRANSACTION SORTING DEBUG: Checking NVDA transactions before sorting:")
+    nvda_transactions = [e for e in financial_events if e['type'] == 'transaction' and e['symbol'] == 'NVDA']
+    for i, tx in enumerate(nvda_transactions):
+        logger.info(f"NVDA TX {i}: Date={tx['date']}, Type={tx['subtype']}, Shares={tx['shares']}")
+
     # Add transactions - add exact amount to improve precision
     for tx_id, tx in all_transactions.items():
         try:
@@ -167,7 +171,10 @@ def enhanced_rebuild_portfolio(dry_run=False):
     # Sort all events chronologically
     financial_events.sort(key=lambda x: x['date'])
     logger.info(f"Sorted {len(financial_events)} total financial events chronologically")
-    
+    logger.info("TRANSACTION SORTING DEBUG: Checking NVDA transactions after sorting:")
+    nvda_transactions = [e for e in financial_events if e['type'] == 'transaction' and e['symbol'] == 'NVDA']
+    for i, tx in enumerate(nvda_transactions):
+        logger.info(f"NVDA TX {i}: Date={tx['date']}, Type={tx['subtype']}, Shares={tx['shares']}")
     # Step 3: Initialize portfolio and cash tracking
     # ---------------------------------------------
     rebuilt_positions = {}  # Track investment positions
@@ -188,6 +195,12 @@ def enhanced_rebuild_portfolio(dry_run=False):
     
     for key, count in event_type_counts.items():
         logger.info(f"Event type {key}: {count} events")
+
+    total_bought = sum(tx['shares'] for tx in nvda_transactions if tx['subtype'] == 'buy')
+    total_sold = sum(tx['shares'] for tx in nvda_transactions if tx['subtype'] == 'sell')
+    logger.info(f"NVDA SHARES SUMMARY: Total bought={total_bought}, Total sold={total_sold}, Difference={total_bought - total_sold}")
+    if abs(total_bought - total_sold) < 0.000001:
+        logger.info("NVDA SHARES SUMMARY: All shares should be sold!")
     
     # Step 4: Process all events chronologically to rebuild portfolio
     # --------------------------------------------------------------
@@ -425,7 +438,7 @@ def enhanced_rebuild_portfolio(dry_run=False):
             logger.info(f"NVDA POSITION FILTERING DEBUG: NVDA still exists after filtering with {rebuilt_positions['NVDA']['shares']} shares")
         else:
             logger.info("NVDA POSITION FILTERING DEBUG: NVDA successfully removed during filtering")
-            
+
         # Step 5: Get current portfolio and cash positions for comparison
         # -------------------------------------------------------------
         current_portfolio = load_portfolio()
