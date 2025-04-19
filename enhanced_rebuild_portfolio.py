@@ -260,7 +260,7 @@ def enhanced_rebuild_portfolio(dry_run=False):
                 if not position['last_date'] or event_date < position['last_date']:
                     position['last_date'] = event_date
                 
-                logger.info(f"BUY: {shares} shares of {symbol} at ${price} ({currency}) - Total: ${amount}. Cash: ${cash_positions[currency]}")
+                logger.info(f"BUY: {shares_float} shares of {symbol} at ${price_float} ({currency}) - Total: ${amount}. Cash: ${cash_positions[currency]}")
                 
             elif tx_type == "sell":
                 # Handle sell transactions
@@ -282,7 +282,17 @@ def enhanced_rebuild_portfolio(dry_run=False):
                 book_value_sold = rebuilt_positions[symbol]['book_value'] * proportion_sold
                 new_total_shares = current_shares - shares_float
                 new_total_book_value = rebuilt_positions[symbol]['book_value'] - book_value_sold
-                        
+                if symbol == "NVDA":
+                    logger.info(f"NVDA SELL DEBUG: Current shares before sell: {current_shares}")
+                    logger.info(f"NVDA SELL DEBUG: Shares being sold: {shares_float}")
+                    logger.info(f"NVDA SELL DEBUG: New total shares after sell: {new_total_shares}")
+                    logger.info(f"NVDA SELL DEBUG: Floating point check: {new_total_shares <= 0.000001}")
+                    logger.info(f"NVDA SELL DEBUG: Exact value check: {new_total_shares}")
+                
+                # Add extra precision check
+                if abs(new_total_shares) < 0.00001:
+                    logger.info(f"NVDA SELL DEBUG: Position should be zeroed out. Value is very close to zero: {new_total_shares}")
+        
                 # Update the position
                 rebuilt_positions[symbol]['shares'] = new_total_shares
                 rebuilt_positions[symbol]['book_value'] = new_total_book_value
@@ -291,8 +301,10 @@ def enhanced_rebuild_portfolio(dry_run=False):
                 # This ensures positions will be properly removed later
                 if new_total_shares <= 0.000001:  # Use small threshold for float comparison
                     logger.info(f"Setting {symbol} shares and book value to exactly zero (full position sold)")
+                    logger.info(f"Before zeroing: shares={rebuilt_positions[symbol]['shares']}, book_value={rebuilt_positions[symbol]['book_value']}")
                     rebuilt_positions[symbol]['shares'] = 0.0
                     rebuilt_positions[symbol]['book_value'] = 0.0
+                    logger.info(f"After zeroing: shares={rebuilt_positions[symbol]['shares']}, book_value={rebuilt_positions[symbol]['book_value']}")
                 
                 # Update cash position (add sale amount)
                 if currency not in cash_positions:
@@ -310,8 +322,8 @@ def enhanced_rebuild_portfolio(dry_run=False):
             position['transactions'].append({
                 'date': event_date,
                 'type': tx_type,
-                'shares': shares,
-                'price': price,
+                'shares': shares_float,
+                'price': price_float,
                 'amount': amount,
                 'currency': currency,
                 'running_shares': position['shares'],
@@ -384,7 +396,36 @@ def enhanced_rebuild_portfolio(dry_run=False):
                 'book_value': position['book_value']
             } for symbol, position in rebuilt_positions.items() if position['shares'] > 0
         }
-    
+    # Print all positions with their shares
+        logger.info("POSITION FILTERING DEBUG: All positions after transaction processing:")
+        for sym, pos in rebuilt_positions.items():
+            logger.info(f"Position {sym}: shares={pos['shares']}, book_value={pos['book_value']}")
+
+        # Enhanced position filtering with more detailed logging
+        logger.info("POSITION FILTERING DEBUG: Starting position filtering")
+        for symbol in list(rebuilt_positions.keys()):
+            pos_shares = rebuilt_positions[symbol]['shares']
+            if symbol == "NVDA":
+                logger.info(f"NVDA POSITION FILTERING DEBUG: Found NVDA with {pos_shares} shares")
+                logger.info(f"NVDA POSITION FILTERING DEBUG: Checks: <= 0? {pos_shares <= 0}, <= 0.000001? {pos_shares <= 0.000001}")
+                
+            if pos_shares <= 0:
+                logger.info(f"Removing {symbol} from rebuilt_positions because it has zero or negative shares: {pos_shares}")
+                del rebuilt_positions[symbol]
+            elif pos_shares <= 0.000001:
+                logger.info(f"Removing {symbol} from rebuilt_positions because shares {pos_shares} is below threshold 0.000001")
+                del rebuilt_positions[symbol]
+
+        logger.info("POSITION FILTERING DEBUG: Positions after filtering:")
+        for sym, pos in rebuilt_positions.items():
+            logger.info(f"Position {sym}: shares={pos['shares']}, book_value={pos['book_value']}")
+
+        # Check specifically for NVDA
+        if "NVDA" in rebuilt_positions:
+            logger.info(f"NVDA POSITION FILTERING DEBUG: NVDA still exists after filtering with {rebuilt_positions['NVDA']['shares']} shares")
+        else:
+            logger.info("NVDA POSITION FILTERING DEBUG: NVDA successfully removed during filtering")
+            
         # Step 5: Get current portfolio and cash positions for comparison
         # -------------------------------------------------------------
         current_portfolio = load_portfolio()
