@@ -199,7 +199,7 @@ def enhanced_rebuild_portfolio(dry_run=False):
     total_bought = sum(tx['shares'] for tx in nvda_transactions if tx['subtype'] == 'buy')
     total_sold = sum(tx['shares'] for tx in nvda_transactions if tx['subtype'] == 'sell')
     logger.info(f"NVDA SHARES SUMMARY: Total bought={total_bought}, Total sold={total_sold}, Difference={total_bought - total_sold}")
-    if abs(total_bought - total_sold) < 0.000001:
+    if abs(total_bought - total_sold) < 0.001:
         logger.info("NVDA SHARES SUMMARY: All shares should be sold!")
     
     # Step 4: Process all events chronologically to rebuild portfolio
@@ -303,7 +303,7 @@ def enhanced_rebuild_portfolio(dry_run=False):
                     logger.info(f"NVDA SELL DEBUG: Exact value check: {new_total_shares}")
                 
                 # Add extra precision check
-                if abs(new_total_shares) < 0.00001:
+                if abs(new_total_shares) < 0.001:
                     logger.info(f"NVDA SELL DEBUG: Position should be zeroed out. Value is very close to zero: {new_total_shares}")
         
                 # Update the position
@@ -312,7 +312,7 @@ def enhanced_rebuild_portfolio(dry_run=False):
                 
                 # If shares become very close to zero, explicitly set to exactly zero
                 # This ensures positions will be properly removed later
-                if new_total_shares <= 0.000001:  # Use small threshold for float comparison
+                if new_total_shares <= 0.001:  # Use small threshold for float comparison
                     logger.info(f"Setting {symbol} shares and book value to exactly zero (full position sold)")
                     logger.info(f"Before zeroing: shares={rebuilt_positions[symbol]['shares']}, book_value={rebuilt_positions[symbol]['book_value']}")
                     rebuilt_positions[symbol]['shares'] = 0.0
@@ -425,7 +425,7 @@ def enhanced_rebuild_portfolio(dry_run=False):
             if pos_shares <= 0:
                 logger.info(f"Removing {symbol} from rebuilt_positions because it has zero or negative shares: {pos_shares}")
                 del rebuilt_positions[symbol]
-            elif pos_shares <= 0.000001:
+            elif pos_shares <= 0.001:
                 logger.info(f"Removing {symbol} from rebuilt_positions because shares {pos_shares} is below threshold 0.000001")
                 del rebuilt_positions[symbol]
 
