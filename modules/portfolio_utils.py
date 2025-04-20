@@ -2794,6 +2794,10 @@ def debug_cash_positions():
         traceback.print_exc()
         return {'error': str(e)}
     
+# This artifact contains fixes to the Book Value Debugging component
+
+# --- PART 1: Update to debug_book_value function in modules/portfolio_utils.py ---
+
 def debug_book_value():
     """
     Get detailed information about book value calculations for debugging purposes.
@@ -2811,7 +2815,13 @@ def debug_book_value():
         # Calculate expected book values based on transactions
         expected_book_values = {}
         
-        for tx_id, tx in transactions.items():
+        # Sort transactions chronologically for accurate calculation
+        sorted_transactions = sorted(
+            transactions.values(), 
+            key=lambda tx: datetime.strptime(tx['date'], '%Y-%m-%d')
+        )
+        
+        for tx in sorted_transactions:
             symbol = tx['symbol'].upper().strip()
             tx_type = tx['type'].lower()
             shares = float(tx['shares'])
@@ -2906,29 +2916,36 @@ def debug_book_value():
             expected['book_value_diff'] = actual_book_value - expected['book_value']
             expected['avg_cost_diff'] = actual_avg_cost - expected_avg_cost
             
-            # Calculate percentage differences
+            # Calculate percentage differences with absolute values for fair comparison
+            # This fixes the "Major Discrepancy" issue by comparing absolute values
             if expected['shares'] > 0:
-                expected['shares_diff_pct'] = (actual_shares / expected['shares'] - 1) * 100
+                expected['shares_diff_pct'] = (abs(actual_shares) / abs(expected['shares']) - 1) * 100
             else:
                 expected['shares_diff_pct'] = 0
                 
-            if expected['book_value'] > 0:
-                expected['book_value_diff_pct'] = (actual_book_value / expected['book_value'] - 1) * 100
+            if abs(expected['book_value']) > 0.01:  # Avoid division by very small values
+                expected['book_value_diff_pct'] = (abs(actual_book_value) / abs(expected['book_value']) - 1) * 100
             else:
                 expected['book_value_diff_pct'] = 0
                 
             if expected_avg_cost > 0:
-                expected['avg_cost_diff_pct'] = (actual_avg_cost / expected_avg_cost - 1) * 100
+                expected['avg_cost_diff_pct'] = (abs(actual_avg_cost) / abs(expected_avg_cost) - 1) * 100
             else:
                 expected['avg_cost_diff_pct'] = 0
                 
-            # Classify the discrepancy
+            # Classify the discrepancy with improved tolerance
             if abs(expected['book_value_diff']) < 0.01 and abs(expected['shares_diff']) < 0.0001:
                 expected['status'] = 'ok'
             elif abs(expected['book_value_diff_pct']) < 1 and abs(expected['shares_diff_pct']) < 1:
                 expected['status'] = 'minor_discrepancy'
             else:
-                expected['status'] = 'major_discrepancy'
+                # Additional check for float precision issues
+                if (abs(expected['book_value_diff']) < 0.1 and 
+                    abs(expected['shares_diff']) < 0.01 and
+                    abs(expected['book_value']) < 1.0):
+                    expected['status'] = 'minor_discrepancy'
+                else:
+                    expected['status'] = 'major_discrepancy'
         
         # Find investments in portfolio but not in transaction history
         extra_investments = []
@@ -2954,3 +2971,161 @@ def debug_book_value():
         import traceback
         traceback.print_exc()
         return {'error': str(e)}
+
+
+# --- PART 2: Update to display_book_value_debug_info function in components/book_value_debug.py ---
+
+def display_book_value_debug_info(debug_data):
+    """
+    Display the book value debug information in a readable format
+    
+    Args:
+        debug_data (dict): Debug data from debug_book_value
+        
+    Returns:
+        Component: Dash component with debug info
+    """
+    if 'error' in debug_data:
+        return dbc.Alert(f"Error retrieving debug data: {debug_data['error']}", color="danger")
+    
+    # Create tables of book value discrepancies
+    discrepancy_rows = []
+    ok_count = 0
+    minor_count = 0
+    major_count = 0
+    
+    for symbol, data in debug_data['book_values'].items():
+        # Skip positions with zero shares
+        if data['shares'] <= 0.000001:
+            continue
+            
+        status = data.get('status', '')
+        if status == 'ok':
+            ok_count += 1
+        elif status == 'minor_discrepancy':
+            minor_count += 1
+        elif status == 'major_discrepancy':
+            major_count += 1
+            
+        # Only include non-ok status in the table
+        if status != 'ok':
+            # Format differences to show both absolute and percentage differences
+            shares_diff_str = f"{data['shares_diff']:.4f} ({data['shares_diff_pct']:.2f}%)"
+            book_diff_str = f"${data['book_value_diff']:.2f} ({data['book_value_diff_pct']:.2f}%)"
+            avg_cost_diff_str = f"${data['avg_cost_diff']:.4f} ({data['avg_cost_diff_pct']:.2f}%)"
+            
+            # Create a row with improved formatting
+            discrepancy_rows.append(html.Tr([
+                html.Td(symbol),
+                html.Td(status.replace('_', ' ').title(), 
+                        style={'color': 'orange' if status == 'minor_discrepancy' else 'red'}),
+                html.Td(f"{data['shares']:.4f}"),
+                html.Td(f"{data['actual_shares']:.4f}"),
+                html.Td(shares_diff_str, style={'background': '#ffeeee' if abs(data['shares_diff']) > 0.001 else ''}),
+                html.Td(f"${data['book_value']:.2f}"),
+                html.Td(f"${data['actual_book_value']:.2f}"),
+                html.Td(book_diff_str, style={'background': '#ffeeee' if abs(data['book_value_diff']) > 0.10 else ''}),
+                html.Td(f"${data['expected_avg_cost']:.4f}"),
+                html.Td(f"${data['actual_avg_cost']:.4f}"),
+                html.Td(avg_cost_diff_str, style={'background': '#ffeeee' if abs(data['avg_cost_diff']) > 0.001 else ''})
+            ]))
+    
+    # Add rows for extra investments (in portfolio but not in transaction history)
+    for inv in debug_data.get('extra_investments', []):
+        discrepancy_rows.append(html.Tr([
+            html.Td(inv['symbol']),
+            html.Td("No Transactions", style={'color': 'red'}),
+            html.Td("0.0000"),
+            html.Td(f"{inv['shares']:.4f}"),
+            html.Td(f"{inv['shares']:.4f}", style={'background': '#ffeeee'}),
+            html.Td("$0.00"),
+            html.Td(f"${inv['book_value']:.2f}"),
+            html.Td(f"${inv['book_value']:.2f}", style={'background': '#ffeeee'}),
+            html.Td("$0.0000"),
+            html.Td(f"${inv['purchase_price']:.4f}"),
+            html.Td(f"${inv['purchase_price']:.4f}", style={'background': '#ffeeee'})
+        ]))
+    
+    # Calculate total numbers
+    total_positions = ok_count + minor_count + major_count
+    
+    # Create summary cards
+    summary_cards = dbc.Row([
+        dbc.Col([
+            dbc.Card([
+                dbc.CardBody([
+                    html.H4(f"{ok_count}", className="text-success text-center"),
+                    html.P("Positions Correct", className="text-center")
+                ])
+            ])
+        ], width=4),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardBody([
+                    html.H4(f"{minor_count}", className="text-warning text-center"),
+                    html.P("Minor Discrepancies", className="text-center")
+                ])
+            ])
+        ], width=4),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardBody([
+                    html.H4(f"{major_count}", className="text-danger text-center"),
+                    html.P("Major Discrepancies", className="text-center")
+                ])
+            ])
+        ], width=4)
+    ])
+    
+    # Create discrepancy table
+    discrepancy_table = dbc.Table([
+        html.Thead(
+            html.Tr([
+                html.Th("Symbol"),
+                html.Th("Status"),
+                html.Th("Expected Shares"),
+                html.Th("Actual Shares"),
+                html.Th("Shares Diff"),
+                html.Th("Expected Book Value"),
+                html.Th("Actual Book Value"),
+                html.Th("Book Value Diff"),
+                html.Th("Expected Avg Cost"),
+                html.Th("Actual Avg Cost"),
+                html.Th("Avg Cost Diff")
+            ])
+        ),
+        html.Tbody(discrepancy_rows)
+    ], bordered=True, striped=True, size="sm")
+    
+    # Create explanation of statuses
+    status_explainer = dbc.Card([
+        dbc.CardHeader("Status Explanation"),
+        dbc.CardBody([
+            html.P([
+                html.Strong("OK: "), 
+                "Book values match transaction history exactly"
+            ]),
+            html.P([
+                html.Strong("Minor Discrepancy: "), 
+                "Differences less than 1% (likely due to rounding or floating point precision)"
+            ]),
+            html.P([
+                html.Strong("Major Discrepancy: "), 
+                "Differences greater than 1% (potential calculation issue or missing transactions)"
+            ]),
+            html.P([
+                html.Strong("No Transactions: "), 
+                "Position exists in portfolio but has no corresponding transaction history"
+            ])
+        ])
+    ], className="mb-3")
+    
+    return html.Div([
+        html.H4("Book Value Debug Information"),
+        html.P(f"Last updated: {debug_data.get('debug_time', 'Unknown')}"),
+        summary_cards,
+        html.Hr(),
+        status_explainer,
+        html.H5("Discrepancies"),
+        discrepancy_table if discrepancy_rows else dbc.Alert("No discrepancies found. All positions match transaction history.", color="success"),
+    ])

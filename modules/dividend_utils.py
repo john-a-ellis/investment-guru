@@ -4,7 +4,7 @@ Utility functions for tracking and analyzing dividend income.
 Handles recording, retrieving, and analyzing dividend payments.
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
 from modules.db_utils import execute_query
 from modules.portfolio_utils import load_portfolio, update_portfolio_data, get_usd_to_cad_rate
@@ -263,13 +263,13 @@ def get_dividend_yield(symbol=None, period="1y"):
     end_date = datetime.now()
     
     if period == "1m":
-        start_date = (end_date - datetime.timedelta(days=30)).strftime("%Y-%m-%d")
+        start_date = (end_date - timedelta(days=30)).strftime("%Y-%m-%d")
     elif period == "3m":
-        start_date = (end_date - datetime.timedelta(days=90)).strftime("%Y-%m-%d")
+        start_date = (end_date - timedelta(days=90)).strftime("%Y-%m-%d")
     elif period == "6m":
-        start_date = (end_date - datetime.timedelta(days=180)).strftime("%Y-%m-%d")
+        start_date = (end_date - timedelta(days=180)).strftime("%Y-%m-%d")
     elif period == "1y":
-        start_date = (end_date - datetime.timedelta(days=365)).strftime("%Y-%m-%d")
+        start_date = (end_date - timedelta(days=365)).strftime("%Y-%m-%d")
     else:  # "all" - no start date filter
         start_date = None
     
